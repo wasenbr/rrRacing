@@ -38,6 +38,21 @@ describe('veículo', () => {
     expect(v.z).toBeGreaterThan(10);
   });
 
+  it('esterço forte em alta velocidade derrapa; devagar não', () => {
+    const slip = (speed: number) => {
+      const v = createVehicleState(spec, 0, 4, 0);
+      v.vz = speed;
+      let max = 0;
+      for (let i = 0; i < 20; i++) {
+        stepVehicle(v, spec, { ...emptyInput(), throttle: 1, steer: 1 }, track, DT);
+        max = Math.max(max, v.drift);
+      }
+      return max;
+    };
+    expect(slip(spec.maxSpeed * 0.95)).toBeGreaterThan(0.5);
+    expect(slip(spec.maxSpeed * 0.3)).toBe(0);
+  });
+
   it('nunca atravessa o guard-rail', () => {
     const v = createVehicleState(spec, 0, 4, 0);
     const input = { ...emptyInput(), throttle: 1, steer: -1 };
@@ -49,6 +64,8 @@ describe('veículo', () => {
   });
 
   it('decola no salto', () => {
+    // pista própria com salto na primeira reta (o relevo das pistas originais é gerado por regras)
+    const track = new Track({ id: 'salto', name: 'salto', planet: 'x', theme: 'chem6', laps: 1, layout: 'F S S J S S S R S S S S S S S R S S S S S S S R S S S S S S S R' });
     const v = createVehicleState(spec, 0, 4, 0);
     const input = { ...emptyInput(), throttle: 1 };
     let maxAir = 0;
@@ -57,6 +74,32 @@ describe('veículo', () => {
       maxAir = Math.max(maxAir, v.airTime);
     }
     expect(maxAir).toBeGreaterThan(0.3);
+  });
+
+  it('vão (G): sem chão invisível; quem chega rápido pousa no sólido, o lento cai', () => {
+    for (const layout of ['F S S J G S S S R S S S S S S S R S S S S S S S R S S S S S S S R', 'F S S J G J G S S R S S S S S S R S S S S S S S R S S S S S S R']) {
+      const tr = new Track({ id: 'vao', name: 'vao', planet: 'x', theme: 'chem6', laps: 1, layout });
+      for (const sp of [17, 25, 30, 35, 40, 45, 50, 58]) {
+        const sSpec = { ...spec, maxSpeed: 70, accel: 0, drag: 0 };
+        const v = createVehicleState(sSpec, 0, 4, 0);
+        v.vz = sp;
+        let landedOnVoid = false;
+        let landings = 0;
+        for (let i = 0; i < 60 * 7 && !v.fell; i++) {
+          stepVehicle(v, sSpec, { ...emptyInput(), throttle: 1 }, tr, DT);
+          if (v.landingImpact > 0) {
+            landings++;
+            if (tr.pieces[v.pieceIndex].code === 'G') landedOnVoid = true;
+          }
+        }
+        expect(landedOnVoid, `${layout.slice(0, 13)} ${sp}`).toBe(false);
+        if (sp < 20) expect(v.fell, `${sp} deveria cair`).toBe(true);
+        else {
+          expect(v.fell, `${layout.slice(0, 13)} ${sp} caiu`).toBe(false);
+          expect(landings, `${sp}`).toBeGreaterThan(0);
+        }
+      }
+    }
   });
 
   it('completa voltas seguindo a linha central', () => {

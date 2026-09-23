@@ -1,0 +1,362 @@
+[
+ {
+  "planet": "chem6",
+  "race": 1,
+  "arrow": [
+   -1,
+   0
+  ],
+  "layout": "F S R S S S S S S R S S S S S S R S S S S S S R S S S S",
+  "tiles": 28
+ },
+ {
+  "planet": "chem6",
+  "race": 2,
+  "arrow": [
+   0,
+   -1
+  ],
+  "layout": "F R S S L S S R S S S R S S S S S S R S S S S S S R S S",
+  "tiles": 28
+ },
+ {
+  "planet": "chem6",
+  "race": 3,
+  "arrow": [
+   -1,
+   0
+  ],
+  "layout": "F R S S X S S L S S L S S L S S X S S R S S R S",
+  "tiles": 24
+ },
+ {
+  "planet": "chem6",
+  "race": 4,
+  "arrow": [
+   -1,
+   0
+  ],
+  "layout": "F S S S S R S S S S S S R S R S S S L S S S S R S S R S",
+  "tiles": 28
+ },
+ {
+  "planet": "drakonis",
+  "race": 1,
+  "arrow": [
+   -1,
+   0
+  ],
+  "layout": "F S R S S S S S S R S S S S R S S L S R S S S R S S S S",
+  "tiles": 28
+ },
+ {
+  "planet": "drakonis",
+  "race": 2,
+  "arrow": [
+   0,
+   -1
+  ],
+  "layout": "F R S L S L S S S S S L S S L S R S S S L S S S L S S L S R",
+  "tiles": 30
+ },
+ {
+  "planet": "drakonis",
+  "race": 3,
+  "arrow": [
+   -1,
+   0
+  ],
+  "layout": "F R S S S R S S S S S S R S S S S S S R S S S R S S L S",
+  "tiles": 28
+ },
+ {
+  "planet": "drakonis",
+  "race": 4,
+  "arrow": [
+   -1,
+   0
+  ],
+  "layout": "F S R S S R S L S R S S R S S S S X S L S L S L S X S S",
+  "tiles": 28
+ },
+ {
+  "planet": "drakonis",
+  "race": 5,
+  "arrow": [
+   0,
+   -1
+  ],
+  "layout": "F S S R L R S S S S S R S S S S S R L R S S S S S R S S",
+  "tiles": 28
+ },
+ {
+  "planet": "bogmire",
+  "race": 1,
+  "arrow": [
+   -1,
+   0
+  ],
+  "layout": "F S S R S S S S S S R S S R S S R L S L S S L S S S S R S R S S S S S S R S S S",
+  "tiles": 40
+ },
+ {
+  "planet": "bogmire",
+  "race": 2,
+  "arrow": [
+   0,
+   1
+  ],
+  "layout": "F L S S S S R S S S R S S S R S L S S R S S S S R S R S",
+  "tiles": 28
+ },
+ {
+  "planet": "bogmire",
+  "race": 3,
+  "arrow": [
+   -1,
+   0
+  ],
+  "layout": "F S S L S S L S R S S S L S S S L R L S S S L S R S L S",
+  "tiles": 28
+ },
+ {
+  "planet": "bogmire",
+  "race": 4,
+  "arrow": [
+   0,
+   -1
+  ],
+  "layout": "F X S S S R S R S S S X S S L S L S S L S X S X S S L S S L S S L S",
+  "tiles": 34
+ },
+ {
+  "planet": "bogmire",
+  "race": 5,
+  "arrow": [
+   -1,
+   0
+  ],
+  "layout": "F R S S X S L S X S R S R S R S X S L S X S S R S S R S",
+  "tiles": 28
+ },
+ {
+  "planet": "bogmire",
+  "race": 6,
+  "arrow": [
+   -1,
+   0
+  ],
+  "layout": "F S R S S S S S R S R S S S L S X S S L S S S S L S S L S S S S X S R S",
+  "tiles": 36
+ },
+ {
+  "planet": "newmojave",
+  "race": 1,
+  "arrow": [
+   -1,
+   0
+  ],
+  "layout": "F L S S R S R S S S S R S L S R S S S S R S R S S L S X S S L S L S S L S X",
+  "tiles": 38
+ },
+ {
+  "planet": "newmojave",
+  "race": 2,
+  "arrow": [
+   1,
+   0
+  ],
+  "layout": "F L R S S L S S S S S L S S S L S S R S L R L S S L S S",
+  "tiles": 28
+ },
+ {
+  "planet": "newmojave",
+  "race": 3,
+  "arrow": [
+   0,
+   -1
+  ],
+  "layout": "F S L S S S S S S L S S S S S S L S S J G S S L S L S S S S R S R S S S S L",
+  "tiles": 38
+ },
+ {
+  "planet": "newmojave",
+  "race": 4,
+  "arrow": [
+   1,
+   0
+  ],
+  "layout": "F L S S S S S S L S L S S S R S X S S R S S S R S S R S S S X S S L S S",
+  "tiles": 36
+ },
+ {
+  "planet": "newmojave",
+  "race": 5,
+  "arrow": [
+   -1,
+   0
+  ],
+  "layout": "F L S R S S R S S S S S S R S R S S L S L S S R S S R S R L S S R S",
+  "tiles": 34
+ },
+ {
+  "planet": "newmojave",
+  "race": 6,
+  "arrow": [
+   -1,
+   0
+  ],
+  "layout": "F R S L S R S S R S L S R S S R S L S R S S R S L S R S",
+  "tiles": 28
+ },
+ {
+  "planet": "newmojave",
+  "race": 7,
+  "arrow": [
+   1,
+   0
+  ],
+  "layout": "F L S S S S L S R S L S S S S L S L S S R S S X S R S S R S R S S X S R S L",
+  "tiles": 38
+ },
+ {
+  "planet": "nho",
+  "race": 1,
+  "arrow": [
+   -1,
+   0
+  ],
+  "layout": "F L R S R S R L S S S R S S S L R S R S R L S S S R S S",
+  "tiles": 28
+ },
+ {
+  "planet": "nho",
+  "race": 2,
+  "arrow": [
+   -1,
+   0
+  ],
+  "layout": "F S X S L S L S L S X S S X S L S L S L S X S S X S L S L S L S X S S X S L S L S L S X",
+  "tiles": 44
+ },
+ {
+  "planet": "nho",
+  "race": 3,
+  "arrow": [
+   -1,
+   0
+  ],
+  "layout": "F R S L S L S J G J G S L S L S R S S R S L S L S S S S S S L S L S R S",
+  "tiles": 36
+ },
+ {
+  "planet": "nho",
+  "race": 4,
+  "arrow": [
+   -1,
+   0
+  ],
+  "layout": "F L R S S R S S S S S S R S S R S L S L S R S R S S R L S S R S",
+  "tiles": 32
+ },
+ {
+  "planet": "nho",
+  "race": 5,
+  "arrow": [
+   -1,
+   0
+  ],
+  "layout": "F S L S L S J G S R S R S S S S S S R S S S S S S R S J G J G S R S S R S S",
+  "tiles": 38
+ },
+ {
+  "planet": "nho",
+  "race": 6,
+  "arrow": [
+   -1,
+   0
+  ],
+  "layout": "F R S S S S S R L R J G S R S S X S R L S L S S L S S S L S X S L R L S S R",
+  "tiles": 38
+ },
+ {
+  "planet": "nho",
+  "race": 7,
+  "arrow": [
+   1,
+   0
+  ],
+  "layout": "F R S S R S L S R S S S S R S R S S L S S L S S R S R S J G S R S L",
+  "tiles": 34
+ },
+ {
+  "planet": "inferno",
+  "race": 1,
+  "arrow": [
+   0,
+   -1
+  ],
+  "layout": "F L S L S S S J G S L S L S S R S X S S R S S R S S R S S X S X S R S S R S R S S X S R",
+  "tiles": 44
+ },
+ {
+  "planet": "inferno",
+  "race": 2,
+  "arrow": [
+   -1,
+   0
+  ],
+  "layout": "F S R S S R L R S L S S R S S S R S J G S S R S S L R S",
+  "tiles": 28
+ },
+ {
+  "planet": "inferno",
+  "race": 3,
+  "arrow": [
+   0,
+   -1
+  ],
+  "layout": "F L S S S S L S S X S L S S L S L S S X S L S S S L S S J G S S L S S S S S",
+  "tiles": 38
+ },
+ {
+  "planet": "inferno",
+  "race": 4,
+  "arrow": [
+   1,
+   0
+  ],
+  "layout": "F R S S S S S S R S S S S S S R S S S S S S R S R S L S L S R S",
+  "tiles": 32
+ },
+ {
+  "planet": "inferno",
+  "race": 5,
+  "arrow": [
+   0,
+   -1
+  ],
+  "layout": "F R S S L S S R S S S R S S S S S S R S S S S S S R S S",
+  "tiles": 28
+ },
+ {
+  "planet": "inferno",
+  "race": 6,
+  "arrow": [
+   0,
+   -1
+  ],
+  "layout": "F S S S S S L S S S S S S L S S J G S S L S L S S S S R S S R S S S S L S L",
+  "tiles": 38
+ },
+ {
+  "planet": "inferno",
+  "race": 7,
+  "arrow": [
+   -1,
+   0
+  ],
+  "layout": "F S S R S S S S S S R S J G S R S X S S R S R S S R S X S R S J G S R S S S",
+  "tiles": 38
+ }
+]

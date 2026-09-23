@@ -3,21 +3,67 @@ import { emptyInput, type ControlInput } from './input';
 import { clamp, createRng, forwardX, forwardZ, leftX, leftZ, wrapAngle } from './math';
 import { createProgress, updateProgress, type RacerProgress } from './race';
 import type { Track } from './track';
-import { CAR_SCALE, createVehicleState, forwardSpeed, stepVehicle, type VehicleSpec, type VehicleState } from './vehicle';
+import { CAR_SCALE, createVehicleState, forwardSpeed, stepVehicle, type Assist, type FrontWeapon, type RearWeapon, type VehicleSpec, type VehicleState } from './vehicle';
 
 /** Parâmetros das armas (dano em pontos de blindagem). */
 export const WEAPONS = {
-  laser: { speed: 95, life: 0.7, damage: 11, knock: 3, hop: 0 },
-  missile: { speed: 60, life: 2.4, damage: 30, knock: 9, hop: 7, turnRate: 1.8 },
-  mine: { damage: 32, hop: 9, radius: 1.7, armTime: 0.6, life: 45 },
-  oil: { radius: 2.4, life: 25, spinTime: 1.0 },
+  /** VK Plasma Rifles: bola de plasma rápida, reta, dano médio */
+  laser: { speed: 85, life: 0.8, damage: 14, knock: 3, hop: 0, turnRate: 0 },
+  /** Rogue Missiles: a arma mais forte — teleguiado suave para a frente, joga o alvo para cima */
+  missile: { speed: 58, life: 2.4, damage: 34, knock: 9, hop: 7, turnRate: 2.2 },
+  /** Sundog Beams: lento, persegue o alvo em qualquer direção (até para trás), pouco dano; some na mureta */
+  sundog: { speed: 42, life: 2.2, damage: 12, knock: 2, hop: 0, turnRate: 2.5 },
+  /** Bear Claw Mines */
+  mine: { damage: 32, hop: 9, radius: 1.6, armTime: 0.6, life: 40 },
+  /** KO Scatterpack: leque de minas pequenas atrás do carro */
+  scatter: { count: 5, spread: 2.4, damage: 13, hop: 6, radius: 1.1, armTime: 0.35, life: 25 },
+  // óleo (BF's Slipsauce): mancha pequena e desviável; dura 45 s (dá para cair no próprio óleo na
+  // volta seguinte) e cada carro tem no máximo OIL_PER_CAR manchas. Esteiras e aerodeslizador são imunes.
+  oil: { radius: 1.35, life: 45, spinTime: 0.8, minSpeed: 12 },
+  /** poças fixas por planeta (original): gosma verde freia muito (Drakonis), poça azul/óleo preto
+   *  fazem derrapar (Bogmire/New Mojave), neve freia (Nho), lava queima a blindagem (Inferno) */
   slime: { radius: 2.3, drag: 2.6 },
+  puddle: { radius: 2.3, drag: 0.4, slip: 0.5 },
+  snow: { radius: 2.4, drag: 1.8 },
+  lava: { radius: 2.2, drag: 0.8, dps: 18 },
 } as const;
+
+/** Manchas de óleo ativas por carro: a mais antiga some quando o carro solta outra. */
+export const OIL_PER_CAR = 2;
+
+/** Poça fixa usada em cada planeta (quantidade em `TrackDef.slime`). */
+const PLANET_HAZARD: Record<string, 'slime' | 'puddle' | 'snow' | 'lava'> = {
+  chem6: 'puddle', drakonis: 'slime', bogmire: 'puddle', newmojave: 'puddle', nho: 'snow', inferno: 'lava',
+};
+/** batida carro-carro: dano nos dois (original) a partir desta velocidade relativa (m/s) */
+const BUMP_DAMAGE_START = 7;
+const BUMP_DAMAGE_PER_MS = 0.9;
+
+export type Difficulty = 'easy' | 'normal' | 'hard';
+export const DIFFICULTIES: Difficulty[] = ['easy', 'normal', 'hard'];
+export const DIFFICULTY_LABEL: Record<Difficulty, string> = { easy: 'Fácil', normal: 'Normal', hard: 'Difícil' };
+/**
+ * Ajustes por dificuldade. `damageToHuman` multiplica o dano que o jogador sofre;
+ * `skill`/`aggression` somam/multiplicam o perfil da CPU; `rubber` controla o "elástico"
+ * (quanto a CPU alivia quando está na frente e acelera quando está atrás).
+ */
+export const DIFFICULTY: Record<Difficulty, { damageToHuman: number; skill: number; aggression: number; aheadSlow: number; behindBoost: number; rivalUpgrade: number }> = {
+  // elástico leve de propósito (a crítica do original reclamou de rubber-band exagerado)
+  easy: { damageToHuman: 0.7, skill: -0.14, aggression: 0.6, aheadSlow: 0.9, behindBoost: 1.02, rivalUpgrade: -1 },
+  normal: { damageToHuman: 1, skill: 0, aggression: 1, aheadSlow: 0.95, behindBoost: 1.04, rivalUpgrade: 0 },
+  hard: { damageToHuman: 1.25, skill: 0.07, aggression: 1.2, aheadSlow: 1, behindBoost: 1.05, rivalUpgrade: 1 },
+};
 
 export const PRIZES = [20000, 12000, 6000, 2000];
 export const PICKUP_MONEY = 1000;
 export const PICKUP_ARMOR = 40;
+/** dinheiro por destruir um rival (recompensa o combate, como os bônus do original) */
+/** "attack bonus": golpe final num rival (original: $1.000) */
+export const KILL_BOUNTY = 1000;
+/** "lapping bonus": abrir uma volta sobre um rival */
+export const LAP_BONUS = 5000;
 const RESPAWN_TIME = 2.5;
+const FALL_RESPAWN = 1.6;
 const INVULN_TIME = 2;
 const CAR_RADIUS = 1.25 * CAR_SCALE;
 
@@ -47,17 +93,21 @@ export interface Racer extends RacerEntry {
   spinTotal: number;
   /** proteção após rodar no óleo, para não rodar de novo na mesma mancha */
   oilGrace: number;
+  /** derrapando numa poça (perde aderência enquanto > 0) */
+  slipTime: number;
   prevFire: boolean;
   prevDrop: boolean;
   cooldown: number;
   place: number;
   finishPlace: number;
   lastInput: ControlInput;
+  /** quantas voltas de vantagem já foram premiadas sobre cada rival (id -> voltas) */
+  lapsOver: Record<number, number>;
 }
 
 export interface Projectile {
   id: number;
-  kind: 'laser' | 'missile';
+  kind: FrontWeapon;
   owner: number;
   x: number;
   y: number;
@@ -70,7 +120,7 @@ export interface Projectile {
 
 export interface Hazard {
   id: number;
-  kind: 'mine' | 'oil' | 'slime';
+  kind: 'mine' | 'oil' | 'scatter' | 'slime' | 'puddle' | 'snow' | 'lava';
   owner: number;
   x: number;
   y: number;
@@ -89,12 +139,16 @@ export interface Pickup {
 }
 
 export type WorldEvent =
-  | { type: 'fire'; racer: number; kind: 'laser' | 'missile'; x: number; y: number; z: number }
-  | { type: 'drop'; racer: number; kind: 'mine' | 'oil' }
-  | { type: 'hit'; target: number; by: number; kind: 'laser' | 'missile' | 'mine'; x: number; y: number; z: number }
-  | { type: 'impact'; x: number; y: number; z: number; kind: 'laser' | 'missile' }
+  | { type: 'fire'; racer: number; kind: FrontWeapon; x: number; y: number; z: number }
+  | { type: 'drop'; racer: number; kind: RearWeapon }
+  | { type: 'hit'; target: number; by: number; kind: FrontWeapon | 'mine' | 'scatter'; x: number; y: number; z: number }
+  | { type: 'impact'; x: number; y: number; z: number; kind: FrontWeapon }
+  | { type: 'assist'; racer: number; kind: Assist }
+  | { type: 'fall'; racer: number; x: number; y: number; z: number }
+  | { type: 'lapped'; racer: number; victim: number; bonus: number }
+  | { type: 'burn'; racer: number }
   | { type: 'spin'; racer: number }
-  | { type: 'explode'; racer: number; by: number; x: number; y: number; z: number }
+  | { type: 'explode'; racer: number; by: number; x: number; y: number; z: number; bounty: number }
   | { type: 'respawn'; racer: number }
   | { type: 'pickup'; racer: number; kind: 'money' | 'armor'; x: number; y: number; z: number }
   | { type: 'lap'; racer: number; lap: number }
@@ -117,6 +171,7 @@ export interface World {
   nextId: number;
   /** prêmio em dinheiro por colocação */
   prizes: number[];
+  difficulty: Difficulty;
 }
 
 /** Posições do grid: duas filas logo depois da linha, os primeiros da lista largam na frente. */
@@ -128,7 +183,7 @@ function gridSlot(track: Track, slot: number): { x: number; z: number; heading: 
   return { x: p.x + leftX(p.heading) * side * lat, z: p.z + leftZ(p.heading) * side * lat, heading: p.heading, h: p.h };
 }
 
-export function createWorld(track: Track, entries: RacerEntry[], laps: number, seed = 1, prizes: number[] = PRIZES): World {
+export function createWorld(track: Track, entries: RacerEntry[], laps: number, seed = 1, prizes: number[] = PRIZES, difficulty: Difficulty = 'normal'): World {
   const racers: Racer[] = entries.map((e, i) => {
     const g = gridSlot(track, i);
     const car = createVehicleState(e.spec, g.x, g.z, g.heading, g.h);
@@ -149,12 +204,14 @@ export function createWorld(track: Track, entries: RacerEntry[], laps: number, s
       spinTime: 0,
       spinTotal: 1,
       oilGrace: 0,
+      slipTime: 0,
       prevFire: false,
       prevDrop: false,
       cooldown: 0,
       place: i + 1,
       finishPlace: 0,
       lastInput: emptyInput(),
+      lapsOver: {},
     };
   });
 
@@ -185,7 +242,7 @@ export function createWorld(track: Track, entries: RacerEntry[], laps: number, s
     const p = spots[Math.floor(((i + 0.5) * spots.length) / count)];
     const side = i % 2 === 0 ? 1 : -1;
     const pt = track.pointAtDist(p.startDist + p.length / 2);
-    hazards.push({ id: id++, kind: 'slime', owner: -1, x: pt.x + leftX(pt.heading) * side * track.halfWidth * 0.4, y: pt.h, z: pt.z + leftZ(pt.heading) * side * track.halfWidth * 0.4, age: 0 });
+    hazards.push({ id: id++, kind: PLANET_HAZARD[track.def.theme] ?? 'slime', owner: -1, x: pt.x + leftX(pt.heading) * side * track.halfWidth * 0.4, y: pt.h, z: pt.z + leftZ(pt.heading) * side * track.halfWidth * 0.4, age: 0 });
   }
 
   const world: World = {
@@ -202,6 +259,7 @@ export function createWorld(track: Track, entries: RacerEntry[], laps: number, s
     rng: createRng(seed),
     nextId: 1,
     prizes,
+    difficulty,
   };
   updatePlaces(world);
   return world;
@@ -222,24 +280,39 @@ function updatePlaces(world: World): void {
   order.forEach((r, i) => (r.place = i + 1));
 }
 
-function damage(world: World, target: Racer, by: number, amount: number): void {
+function damage(world: World, target: Racer, by: number, amount: number, bountyOk = true): void {
   if (!target.alive || target.invuln > 0) return;
-  target.armor -= amount;
+  target.armor -= target.ai ? amount : amount * DIFFICULTY[world.difficulty].damageToHuman;
   if (target.armor <= 0) {
     target.armor = 0;
     target.alive = false;
     target.respawnTimer = RESPAWN_TIME;
     target.car.vx = target.car.vz = 0;
     const killer = world.racers[by];
-    if (killer && by !== target.id) killer.kills++;
-    world.events.push({ type: 'explode', racer: target.id, by, x: target.car.x, y: target.car.y, z: target.car.z });
+    let bounty = 0;
+    if (killer && by !== target.id) {
+      killer.kills++;
+      // pelo FAQ do original, matar com Bear Claw Mines não dá "attack bonus"
+      bounty = bountyOk ? KILL_BOUNTY : 0;
+      killer.money += bounty;
+    }
+    world.events.push({ type: 'explode', racer: target.id, by, x: target.car.x, y: target.car.y, z: target.car.z, bounty });
   }
 }
 
 function respawn(world: World, r: Racer): void {
   const track = world.track;
   // volta um pouco na pista, no centro, virado para frente
-  const p = track.pointAtDist(r.progress.lastDist - 6);
+  let p = track.pointAtDist(r.progress.lastDist - 6);
+  // nunca renasce sobre um vão (G) nem na rampa que leva a ele: parado ali, cairia de novo.
+  // Passa para depois do vão (a demora do resgate já é a punição).
+  const n = track.pieces.length;
+  // (partindo do zero, não dá para embalar e saltar o vão se ele estiver nas próximas 2 casas)
+  const nearGap = (i: number) => [0, 1, 2].some((k) => track.pieces[(i + k) % n].code === 'G');
+  for (let guard = 0; guard < 8 && nearGap(p.pieceIndex); guard++) {
+    const pc = track.pieces[p.pieceIndex];
+    p = track.pointAtDist(pc.startDist + pc.length + 4);
+  }
   const car = r.car;
   car.x = p.x;
   car.z = p.z;
@@ -266,7 +339,9 @@ function fire(world: World, r: Racer): void {
   const x = car.x + fx * 2.8 * CAR_SCALE;
   const z = car.z + fz * 2.8 * CAR_SCALE;
   const y = car.y + 1.0;
-  world.projectiles.push({ id: world.nextId++, kind, owner: r.id, x, y, z, heading: car.heading, speed: w.speed + base, life: w.life, pieceIndex: car.pieceIndex });
+  // o sundog não herda a velocidade do carro (é lento e persegue)
+  const speed = w.speed + (kind === 'sundog' ? base * 0.3 : base);
+  world.projectiles.push({ id: world.nextId++, kind, owner: r.id, x, y, z, heading: car.heading, speed, life: w.life, pieceIndex: car.pieceIndex });
   world.events.push({ type: 'fire', racer: r.id, kind, x, y, z });
 }
 
@@ -274,10 +349,29 @@ function drop(world: World, r: Racer): void {
   const car = r.car;
   const kind = r.spec.rear;
   const back = (kind === 'oil' ? 3.8 : 3.2) * CAR_SCALE;
-  const x = car.x - forwardX(car.heading) * back;
-  const z = car.z - forwardZ(car.heading) * back;
-  const q = world.track.query(x, z, car.pieceIndex);
-  world.hazards.push({ id: world.nextId++, kind, owner: r.id, x, y: q.height, z, age: 0 });
+  const fx = forwardX(car.heading);
+  const fz = forwardZ(car.heading);
+  const put = (lat: number, extra: number) => {
+    const x = car.x - fx * (back + extra) + leftX(car.heading) * lat;
+    const z = car.z - fz * (back + extra) + leftZ(car.heading) * lat;
+    const q = world.track.query(x, z, car.pieceIndex);
+    if (Math.abs(q.lateral) > world.track.halfWidth - 0.3) return;
+    world.hazards.push({ id: world.nextId++, kind, owner: r.id, x, y: q.height, z, age: 0 });
+  };
+  if (kind === 'scatter') {
+    // leque de minas pequenas cobrindo a pista atrás do carro
+    const n = WEAPONS.scatter.count;
+    for (let i = 0; i < n; i++) put((i - (n - 1) / 2) * WEAPONS.scatter.spread, Math.abs(i - (n - 1) / 2) * 0.8);
+  } else {
+    if (kind === 'oil') {
+      const mine = world.hazards.filter((h) => h.kind === 'oil' && h.owner === r.id);
+      if (mine.length >= OIL_PER_CAR) {
+        const oldest = mine.reduce((a, b) => (b.age > a.age ? b : a));
+        world.hazards = world.hazards.filter((h) => h !== oldest);
+      }
+    }
+    put(0, 0);
+  }
   world.events.push({ type: 'drop', racer: r.id, kind });
 }
 
@@ -286,25 +380,27 @@ function stepProjectiles(world: World, dt: number): void {
   const alive: Projectile[] = [];
   for (const p of world.projectiles) {
     p.life -= dt;
-    if (p.kind === 'missile') {
-      // teleguiado suave: mira no carro mais próximo à frente, dentro de um cone
+    if (p.kind === 'missile' || p.kind === 'sundog') {
+      // míssil: teleguiado suave num cone à frente; sundog: persegue o mais próximo em qualquer direção
+      const cone = p.kind === 'missile' ? 0.6 : Math.PI;
       let best: Racer | null = null;
-      let bestD = 45;
+      let bestD = p.kind === 'missile' ? 45 : 60;
       for (const r of world.racers) {
         if (r.id === p.owner || !r.alive) continue;
         const dx = r.car.x - p.x;
         const dz = r.car.z - p.z;
         const d = Math.hypot(dx, dz);
         const ang = Math.abs(wrapAngle(Math.atan2(dx, dz) - p.heading));
-        if (d < bestD && ang < 0.6) {
+        if (d < bestD && ang <= cone) {
           best = r;
           bestD = d;
         }
       }
       if (best) {
+        const turn = WEAPONS[p.kind].turnRate;
         const want = Math.atan2(best.car.x - p.x, best.car.z - p.z);
         const diff = wrapAngle(want - p.heading);
-        p.heading += clamp(diff, -WEAPONS.missile.turnRate * dt, WEAPONS.missile.turnRate * dt);
+        p.heading += clamp(diff, -turn * dt, turn * dt);
       }
     }
     p.x += forwardX(p.heading) * p.speed * dt;
@@ -348,32 +444,41 @@ function stepHazards(world: World, dt: number): void {
   for (const h of world.hazards) {
     h.age += dt;
     let dead = false;
-    if (h.kind === 'mine') {
-      if (h.age > WEAPONS.mine.life) dead = true;
-      else if (h.age > WEAPONS.mine.armTime) {
+    if (h.kind === 'mine' || h.kind === 'scatter') {
+      const w = WEAPONS[h.kind];
+      if (h.age > w.life) dead = true;
+      else if (h.age > w.armTime) {
         for (const r of world.racers) {
           if (!r.alive || !r.car.grounded) continue;
-          if (Math.hypot(r.car.x - h.x, r.car.z - h.z) < WEAPONS.mine.radius) {
+          if (Math.hypot(r.car.x - h.x, r.car.z - h.z) < w.radius) {
             if (r.invuln <= 0) {
               r.car.grounded = false;
-              r.car.vy = WEAPONS.mine.hop;
-              r.car.vx *= 0.5;
-              r.car.vz *= 0.5;
+              r.car.vy = w.hop;
+              r.car.vx *= 0.55;
+              r.car.vz *= 0.55;
             }
-            world.events.push({ type: 'hit', target: r.id, by: h.owner, kind: 'mine', x: h.x, y: h.y, z: h.z });
-            damage(world, r, h.owner, WEAPONS.mine.damage);
+            world.events.push({ type: 'hit', target: r.id, by: h.owner, kind: h.kind, x: h.x, y: h.y, z: h.z });
+            damage(world, r, h.owner, w.damage, h.kind !== 'mine');
             dead = true;
             break;
           }
         }
       }
-    } else if (h.kind === 'slime') {
+    } else if (h.kind === 'slime' || h.kind === 'puddle' || h.kind === 'snow' || h.kind === 'lava') {
+      const w = WEAPONS[h.kind];
       for (const r of world.racers) {
         if (!r.alive || !r.car.grounded) continue;
-        if (Math.hypot(r.car.x - h.x, r.car.z - h.z) < WEAPONS.slime.radius) {
-          const k = Math.exp(-WEAPONS.slime.drag * dt);
+        // o aerodeslizador ignora poças que só fazem derrapar
+        if (h.kind === 'puddle' && r.spec.traction === 'hover') continue;
+        if (Math.hypot(r.car.x - h.x, r.car.z - h.z) < w.radius) {
+          const k = Math.exp(-w.drag * dt);
           r.car.vx *= k;
           r.car.vz *= k;
+          if (h.kind === 'puddle') r.slipTime = WEAPONS.puddle.slip;
+          if (h.kind === 'lava' && r.invuln <= 0) {
+            damage(world, r, -1, WEAPONS.lava.dps * dt);
+            if (world.rng() < dt * 4) world.events.push({ type: 'burn', racer: r.id });
+          }
         }
       }
     } else {
@@ -381,7 +486,8 @@ function stepHazards(world: World, dt: number): void {
       else {
         for (const r of world.racers) {
           if (!r.alive || !r.car.grounded || r.spinTime > 0 || r.oilGrace > 0 || (r.id === h.owner && h.age < 1.5)) continue;
-          if (Math.hypot(r.car.x - h.x, r.car.z - h.z) < WEAPONS.oil.radius && forwardSpeed(r.car) > 8) {
+          if (r.spec.traction === 'treads' || r.spec.traction === 'hover') continue; // imunes ao óleo (original)
+          if (Math.hypot(r.car.x - h.x, r.car.z - h.z) < WEAPONS.oil.radius && forwardSpeed(r.car) > WEAPONS.oil.minSpeed) {
             r.spinTime = WEAPONS.oil.spinTime * (1 - (r.spec.spinResist ?? 0));
             r.spinTotal = r.spinTime;
             r.oilGrace = r.spinTime + 1.2;
@@ -440,12 +546,25 @@ function collideCars(world: World): void {
       b.car.z += nz * pen * (ma / (ma + mb));
       const rel = (b.car.vx - a.car.vx) * nx + (b.car.vz - a.car.vz) * nz;
       if (rel < 0) {
-        const j = (-(1 + 0.35) * rel) / (1 / ma + 1 / mb);
+        const j = (-(1 + 0.5) * rel) / (1 / ma + 1 / mb);
         a.car.vx -= (j / ma) * nx;
         a.car.vz -= (j / ma) * nz;
         b.car.vx += (j / mb) * nx;
         b.car.vz += (j / mb) * nz;
+        // pancada lateral faz o carro girar um pouco (quanto mais leve, mais gira)
+        const yaw = (c: VehicleState, sign: number, m: number) => {
+          const side = (forwardX(c.heading) * nz - forwardZ(c.heading) * nx) * sign;
+          c.heading += clamp((side * j) / m, -6, 6) * 0.012;
+        };
+        yaw(a.car, 1, ma);
+        yaw(b.car, -1, mb);
         if (-rel > 3) world.events.push({ type: 'bump', a: a.id, b: b.id, strength: -rel });
+        // batida forte fere os dois carros (original); o mais pesado sofre menos
+        if (-rel > BUMP_DAMAGE_START && world.started) {
+          const dmg = (-rel - BUMP_DAMAGE_START) * BUMP_DAMAGE_PER_MS;
+          damage(world, a, b.id, dmg * (mb / (ma + mb)) * 2, false);
+          damage(world, b, a.id, dmg * (ma / (ma + mb)) * 2, false);
+        }
       }
     }
 }
@@ -476,6 +595,10 @@ export function stepWorld(world: World, humanInputs: Record<number, ControlInput
     else input = humanInputs[r.id] ?? emptyInput();
 
     let spec = r.spec;
+    if (r.slipTime > 0) {
+      r.slipTime = Math.max(0, r.slipTime - dt);
+      spec = { ...spec, grip: spec.grip * (spec.traction === 'treads' ? 0.5 : 0.25) };
+    }
     if (r.spinTime > 0) {
       // derrapando no óleo: perde aderência e gira
       r.spinTime -= dt;
@@ -485,6 +608,15 @@ export function stepWorld(world: World, humanInputs: Record<number, ControlInput
     }
     r.lastInput = input;
     stepVehicle(r.car, spec, input, world.track, dt);
+    if (r.car.assistFired) world.events.push({ type: 'assist', racer: r.id, kind: r.spec.assist });
+    if (r.car.fell) {
+      // caiu por cima da mureta: some e reaparece na pista (sem dano, só perde tempo)
+      r.car.fell = false;
+      r.alive = false;
+      r.respawnTimer = FALL_RESPAWN;
+      world.events.push({ type: 'fall', racer: r.id, x: r.car.x, y: r.car.y, z: r.car.z });
+      continue;
+    }
 
     if (world.started) {
       if (input.fire && !r.prevFire && r.frontCharges > 0 && r.cooldown <= 0) {
@@ -520,4 +652,29 @@ export function stepWorld(world: World, humanInputs: Record<number, ControlInput
   stepHazards(world, dt);
   stepPickups(world, dt);
   updatePlaces(world);
+  if (world.started) checkLapping(world);
+}
+
+/**
+ * "Lapping bonus" (original: $5.000): o 1º colocado que abre uma volta sobre o último.
+ * Premia uma vez por volta de vantagem.
+ */
+function checkLapping(world: World): void {
+  const T = world.track.totalLength;
+  const running = world.racers.filter((r) => !r.finishPlace);
+  if (running.length < 2) return;
+  const a = world.racers.find((r) => r.place === 1);
+  const last = [...running].sort((x, y) => y.place - x.place)[0];
+  if (!a || a.finishPlace || last.id === a.id) return;
+  const da = raceDistance(world, a);
+  for (const b of [last]) {
+    {
+      const laps = Math.floor((da - raceDistance(world, b)) / T);
+      if (laps > (a.lapsOver[b.id] ?? 0)) {
+        a.lapsOver[b.id] = laps;
+        a.money += LAP_BONUS;
+        world.events.push({ type: 'lapped', racer: a.id, victim: b.id, bonus: LAP_BONUS });
+      }
+    }
+  }
 }

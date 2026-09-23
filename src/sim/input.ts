@@ -11,6 +11,8 @@ export interface ControlInput {
   fire: boolean;
   drop: boolean;
   nitro: boolean;
+  /** curva fechada (L/R do original): vira muito mais, perde velocidade e solta a traseira */
+  sharp?: boolean;
 }
 
 export function emptyInput(): ControlInput {

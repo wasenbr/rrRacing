@@ -1,7 +1,7 @@
 import { emptyInput, type ControlInput } from './input';
 import { clamp, wrapAngle } from './math';
 import { forwardSpeed } from './vehicle';
-import { raceDistance, type Racer, type World } from './world';
+import { DIFFICULTY, raceDistance, type Racer, type World } from './world';
 
 /** Personalidade de um piloto da CPU. */
 export interface AiProfile {
@@ -47,7 +47,9 @@ function alongDelta(world: World, from: number, to: number): number {
 export function computeAiInput(world: World, r: Racer, dt: number): ControlInput {
   const track = world.track;
   const car = r.car;
-  const ai = r.ai!;
+  const diff = DIFFICULTY[world.difficulty];
+  // a dificuldade ajusta o perfil da CPU sem mudar o perfil salvo
+  const ai = { ...r.ai!, skill: clamp(r.ai!.skill + diff.skill, 0.3, 0.99), aggression: clamp(r.ai!.aggression * diff.aggression, 0, 1) };
   const st = r.aiState;
   const input = emptyInput();
   const speed = forwardSpeed(car);
@@ -88,35 +90,77 @@ export function computeAiInput(world: World, r: Racer, dt: number): ControlInput
     let lane = ai.lane;
     st.wantFire = false;
     st.wantDrop = false;
+    let threatBehind = false;
+    let blocked = false;
+    let hop = false;
+    const front = r.spec.front;
+    const range = front === 'missile' ? 45 : front === 'sundog' ? 40 : 30;
 
     for (const o of world.racers) {
       if (o.id === r.id || !o.alive) continue;
       const oc = trackCoords(world, o.car.x, o.car.z, o.car.pieceIndex);
       const ahead = alongDelta(world, me.dist, oc.dist);
-      // desvia de quem está logo à frente, na mesma faixa
-      if (ahead > 0 && ahead < 14 && Math.abs(oc.lateral - lane) < 2.2) lane = oc.lateral > 0 ? oc.lateral - 3 : oc.lateral + 3;
+      // desvia de quem está logo à frente, na mesma faixa (ultrapassagem pelo lado mais livre)
+      if (ahead > 0 && ahead < 14 && Math.abs(oc.lateral - lane) < 2.4) {
+        blocked = true;
+        lane = oc.lateral > 0 ? oc.lateral - 3 : oc.lateral + 3;
+        // colado atrás e sem espaço: os jatos de pulo passam por cima
+        if (ahead < 6 && Math.abs(oc.lateral - me.lateral) < 1.8 && speed > 12) hop = true;
+      }
+      // pilotos agressivos "fecham a porta" em quem vem colado atrás...
+      if (ahead < -2 && ahead > -12) {
+        threatBehind = true;
+        if (!blocked && ai.aggression > 0.55 && world.rng() < ai.aggression * 0.5) lane = lane * 0.4 + oc.lateral * 0.6;
+      }
+      // ...e jogam o carro em cima de quem está emparelhado
+      if (Math.abs(ahead) < 3.5 && Math.abs(oc.lateral - me.lateral) < 3.6 && ai.aggression > 0.6 && world.rng() < ai.aggression * 0.6) {
+        lane = me.lateral + Math.sign(oc.lateral - me.lateral) * 2;
+      }
       // atira em quem está na mira
-      if (r.frontCharges > 0 && ahead > 3 && ahead < (r.spec.front === 'missile' ? 45 : 30)) {
+      if (r.frontCharges > 0 && ahead > 3 && ahead < range) {
         const ang = Math.abs(wrapAngle(Math.atan2(o.car.x - car.x, o.car.z - car.z) - car.heading));
-        const cone = r.spec.front === 'missile' ? 0.45 : 0.12;
+        // como no original, a CPU só atira no que está em linha reta à frente (o sundog persegue sozinho)
+        const cone = front === 'missile' ? 0.22 : front === 'sundog' ? 1.2 : 0.12;
         if (ang < cone && world.rng() < 0.35 + ai.aggression * 0.6) st.wantFire = true;
       }
+      // o sundog persegue para qualquer lado: também vale contra quem vem colado atrás
+      if (front === 'sundog' && r.frontCharges > 0 && ahead < -3 && ahead > -25 && world.rng() < ai.aggression * 0.3) st.wantFire = true;
       // solta mina/óleo em quem vem colado atrás
-      if (r.rearCharges > 0 && ahead < -3 && ahead > -16 && Math.abs(oc.lateral - me.lateral) < 3) {
+      // (óleo só com o perseguidor bem alinhado e perto: mancha solta a esmo só enche a pista)
+      const oil = r.spec.rear === 'oil';
+      const spread = r.spec.rear === 'scatter' ? 6 : oil ? 1.5 : 3;
+      if (r.rearCharges > 0 && ahead < -3 && ahead > (oil ? -10 : -16) && Math.abs(oc.lateral - me.lateral) < spread) {
         if (world.rng() < 0.2 + ai.aggression * 0.5) st.wantDrop = true;
       }
     }
-    // desvia de minas e óleo
+    // desvia de minas e óleo (pilotos melhores enxergam mais longe); considera a faixa atual e a desejada
+    const see = 16 + ai.skill * 16;
     for (const h of world.hazards) {
+      if (h.kind === 'slime' && ai.skill < 0.5) continue;
       const hc = trackCoords(world, h.x, h.z, car.pieceIndex);
       const ahead = alongDelta(world, me.dist, hc.dist);
-      if (ahead > 0 && ahead < 22 && Math.abs(hc.lateral - lane) < 2.6) lane = hc.lateral > 0 ? hc.lateral - 3.2 : hc.lateral + 3.2;
+      if (h.kind === 'oil' && r.spec.traction !== undefined && r.spec.traction !== 'wheels') continue; // imune
+      if (h.kind === 'puddle' && r.spec.traction === 'hover') continue;
+      const r0 = h.kind === 'oil' ? 2.3 : h.kind === 'scatter' ? 1.9 : h.kind === 'mine' ? 2.5 : 3;
+      // perigo logo à frente na faixa atual: pula por cima (só minas/óleo; poças fixas não valem o pulo)
+      if ((h.kind === 'mine' || h.kind === 'oil' || h.kind === 'scatter') && ahead > 2 && ahead < 4 + speed * 0.3 && Math.abs(hc.lateral - me.lateral) < r0 - 0.4) hop = true;
+      if (ahead > 0 && ahead < see && (Math.abs(hc.lateral - lane) < r0 || Math.abs(hc.lateral - me.lateral) < r0)) {
+        const left = hc.lateral + r0 + 0.6;
+        const right = hc.lateral - r0 - 0.6;
+        const lim = track.halfWidth - 1.6;
+        lane = Math.abs(left) > lim ? right : Math.abs(right) > lim ? left : Math.abs(left - me.lateral) < Math.abs(right - me.lateral) ? left : right;
+      }
     }
     st.lane = clamp(lane, -track.halfWidth + 1.6, track.halfWidth - 1.6);
 
     // nitro em reta, se não estiver na frente com folga
     const straight = Math.abs(wrapAngle(track.pointAtDist(me.dist + 40).heading - track.pointAtDist(me.dist).heading)) < 0.15;
-    st.wantNitro = straight && speed > r.spec.maxSpeed * 0.6 && r.place > 1 && world.rng() < 0.15 + ai.skill * 0.2;
+    // pulo só com trecho reto durante o voo e longe da mureta: pular perto de curva joga o carro para fora
+    const flight = 6 + speed * 1.1;
+    const straightJump = Math.abs(wrapAngle(track.pointAtDist(me.dist + flight).heading - track.pointAtDist(me.dist).heading)) < 0.12;
+    const safeLane = Math.abs(me.lateral) < track.halfWidth - 2.2;
+    if (r.spec.assist === 'jump') st.wantNitro = hop && straightJump && safeLane && world.rng() < 0.4 + ai.skill * 0.5;
+    else st.wantNitro = straight && speed > r.spec.maxSpeed * 0.6 && (r.place > 1 || threatBehind) && world.rng() < 0.15 + ai.skill * 0.2;
   }
 
   // Direção: mira num ponto à frente na faixa escolhida
@@ -138,7 +182,7 @@ export function computeAiInput(world: World, r: Racer, dt: number): ControlInput
   if (humans.length) {
     const lead = Math.max(...humans.map((h) => raceDistance(world, h)));
     const gap = raceDistance(world, r) - lead;
-    targetSpeed *= gap > 80 ? 0.9 : gap < -80 ? 1.08 : 1;
+    targetSpeed *= gap > 80 ? diff.aheadSlow : gap < -80 ? diff.behindBoost : 1;
   }
 
   if (speed < targetSpeed) input.throttle = 1;

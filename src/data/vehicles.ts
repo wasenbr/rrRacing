@@ -1,30 +1,39 @@
 import { CAR_SCALE, type VehicleSpec } from '../sim/vehicle';
 
 /**
- * Os 5 carros do original. Cada um tem uma arma frontal e uma traseira; as cargas
- * recarregam a cada volta, como no jogo de 1993. Valores serão ajustados com a loja/upgrades.
+ * Os 5 carros do original, com as armas de cada um (ver referencias/original.md).
+ * As cargas recarregam a cada volta, como no jogo de 1993 (máx. 7 com compras).
+ *
+ * Equilíbrio deste remake: estilos bem diferentes, mas todos competitivos (a volta solo de cada
+ * carro base fica perto das outras). A evolução vem das melhorias, não de um carro "obrigatório".
+ * - Dirt Devil: buggy — arranque forte e o melhor nas curvas; velocidade final baixa. Plasma, óleo, pulo.
+ * - Marauder: muscle car — rápido e bom de arranque, mas solto nas curvas. Plasma, óleo, pulo.
+ * - Air Blade: esportivo espinhoso — o melhor arranque, frágil. Mísseis, minas, turbo.
+ * - Battle Trak: esteiras — gruda no chão e aguenta tudo; arranque e final medianos. Mísseis, scatter, turbo.
+ * - Havac: aerodeslizador — a maior velocidade final, desliza nas curvas. Sundog, scatter, turbo.
  */
-const base = { halfWidth: 1.1 * CAR_SCALE, halfLength: 2.1 * CAR_SCALE, nitroCharges: 3, drag: 0.12, brake: 40, reverseMax: 11, mass: 1 };
+const base = { halfWidth: 1.1 * CAR_SCALE, halfLength: 2.1 * CAR_SCALE, drag: 0.12, brake: 44, reverseMax: 12, mass: 1 };
 
 export const VEHICLES: Record<string, VehicleSpec> = {
   dirtdevil: {
-    ...base, id: 'dirtdevil', name: 'Dirt Devil', maxSpeed: 32, accel: 20, steerRate: 2.5, grip: 7, nitroAccel: 22,
-    armor: 80, front: 'laser', frontCharges: 4, rear: 'oil', rearCharges: 2, mass: 0.9,
+    ...base, id: 'dirtdevil', name: 'Dirt Devil', maxSpeed: 41.5, accel: 37.5, steerRate: 3.35, grip: 12.5, nitroAccel: 0,
+    armor: 105, front: 'laser', frontCharges: 5, rear: 'oil', rearCharges: 2, assist: 'jump', nitroCharges: 2, mass: 0.95,
   },
   marauder: {
-    ...base, id: 'marauder', name: 'Marauder', maxSpeed: 36, accel: 23, steerRate: 2.7, grip: 9, nitroAccel: 26,
-    armor: 100, front: 'laser', frontCharges: 5, rear: 'mine', rearCharges: 2,
+    ...base, id: 'marauder', name: 'Marauder', maxSpeed: 43.5, accel: 36, steerRate: 3.1, grip: 10, nitroAccel: 0,
+    armor: 110, front: 'laser', frontCharges: 5, rear: 'oil', rearCharges: 2, assist: 'jump', nitroCharges: 2, mass: 1.05,
   },
   airblade: {
-    ...base, id: 'airblade', name: 'Air Blade', maxSpeed: 40, accel: 25, steerRate: 2.6, grip: 3.5, nitroAccel: 28,
-    armor: 90, front: 'missile', frontCharges: 3, rear: 'oil', rearCharges: 3, mass: 0.85,
+    ...base, id: 'airblade', name: 'Air Blade', maxSpeed: 42, accel: 39, steerRate: 3.2, grip: 8, nitroAccel: 28,
+    armor: 85, front: 'missile', frontCharges: 2, rear: 'mine', rearCharges: 2, assist: 'nitro', nitroCharges: 2, mass: 0.85,
   },
   battletrak: {
-    ...base, id: 'battletrak', name: 'Battle Trak', maxSpeed: 33, accel: 19, steerRate: 2.3, grip: 12, nitroAccel: 24,
-    armor: 140, front: 'missile', frontCharges: 3, rear: 'mine', rearCharges: 3, halfWidth: 1.25 * CAR_SCALE, mass: 1.5,
+    ...base, id: 'battletrak', name: 'Battle Trak', maxSpeed: 41.5, accel: 36, steerRate: 3.0, grip: 16, nitroAccel: 28,
+    armor: 140, front: 'missile', frontCharges: 2, rear: 'scatter', rearCharges: 1, assist: 'nitro', nitroCharges: 2, traction: 'treads',
+    halfWidth: 1.25 * CAR_SCALE, mass: 1.4, brake: 50,
   },
   havac: {
-    ...base, id: 'havac', name: 'Havac', maxSpeed: 42, accel: 27, steerRate: 2.8, grip: 9.5, nitroAccel: 30,
-    armor: 120, front: 'missile', frontCharges: 4, rear: 'mine', rearCharges: 3, mass: 1.1,
+    ...base, id: 'havac', name: 'Havac', maxSpeed: 45, accel: 33, steerRate: 2.9, grip: 6.5, nitroAccel: 30,
+    armor: 120, front: 'sundog', frontCharges: 3, rear: 'scatter', rearCharges: 2, assist: 'nitro', nitroCharges: 2, traction: 'hover', mass: 1.1, brake: 36,
   },
 };

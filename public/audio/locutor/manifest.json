@@ -1,0 +1,176 @@
+{
+  "voice": "Kokoro-82M am_michael",
+  "names": [
+    "olaf",
+    "ivan",
+    "hawk",
+    "kat",
+    "snake",
+    "jake",
+    "tarquinn",
+    "roadkill",
+    "butcher",
+    "slash",
+    "rage",
+    "grinder",
+    "viper",
+    "rip",
+    "shred"
+  ],
+  "lines": {
+    "start": [
+      "start_0.mp3",
+      "start_1.mp3",
+      "start_2.mp3"
+    ],
+    "lastLap": [
+      "lastLap_0.mp3",
+      "lastLap_1.mp3",
+      "lastLap_2.mp3"
+    ],
+    "ouch": [
+      "ouch_0.mp3",
+      "ouch_1.mp3",
+      "ouch_2.mp3"
+    ],
+    "wow": [
+      "wow_0.mp3",
+      "wow_1.mp3",
+      "wow_2.mp3"
+    ],
+    "holyToledo": [
+      "holyToledo_0.mp3",
+      "holyToledo_1.mp3",
+      "holyToledo_2.mp3"
+    ],
+    "jamsFirst": [
+      "jamsFirst_0.mp3",
+      "jamsFirst_1.mp3",
+      "jamsFirst_2.mp3"
+    ],
+    "fadesLast": [
+      "fadesLast_0.mp3",
+      "fadesLast_1.mp3"
+    ],
+    "dominating": [
+      "dominating_0.mp3",
+      "dominating_1.mp3",
+      "dominating_2.mp3"
+    ],
+    "finishFirst": [
+      "finishFirst_0.mp3",
+      "finishFirst_1.mp3"
+    ],
+    "finishSecond": [
+      "finishSecond_0.mp3",
+      "finishSecond_1.mp3"
+    ],
+    "finishThird": [
+      "finishThird_0.mp3",
+      "finishThird_1.mp3"
+    ],
+    "hotFury": [
+      "hotFury_0.mp3",
+      "hotFury_1.mp3",
+      "hotFury_2.mp3"
+    ],
+    "lightsUp": [
+      "lightsUp_0.mp3",
+      "lightsUp_1.mp3",
+      "lightsUp_2.mp3"
+    ],
+    "hammered": [
+      "hammered_0.mp3",
+      "hammered_1.mp3",
+      "hammered_2.mp3"
+    ],
+    "aboutToBlow": [
+      "aboutToBlow_0.mp3",
+      "aboutToBlow_1.mp3"
+    ],
+    "avoidMines": [
+      "avoidMines_0.mp3",
+      "avoidMines_1.mp3"
+    ],
+    "wipedOut": [
+      "wipedOut_0.mp3",
+      "wipedOut_1.mp3",
+      "wipedOut_2.mp3"
+    ],
+    "launches": [
+      "launches_0.mp3",
+      "launches_1.mp3",
+      "launches_2.mp3"
+    ],
+    "warp": [
+      "warp_0.mp3",
+      "warp_1.mp3"
+    ],
+    "powersUp": [
+      "powersUp_0.mp3",
+      "powersUp_1.mp3"
+    ],
+    "spinOut": [
+      "spinOut_0.mp3",
+      "spinOut_1.mp3",
+      "spinOut_2.mp3"
+    ],
+    "wrongWay": [
+      "wrongWay_0.mp3",
+      "wrongWay_1.mp3"
+    ],
+    "lost": [
+      "lost_0.mp3",
+      "lost_1.mp3"
+    ],
+    "powerOff": [
+      "powerOff_0.mp3",
+      "powerOff_1.mp3"
+    ],
+    "name:olaf": [
+      "name_olaf_0.mp3"
+    ],
+    "name:ivan": [
+      "name_ivan_0.mp3"
+    ],
+    "name:hawk": [
+      "name_hawk_0.mp3"
+    ],
+    "name:kat": [
+      "name_kat_0.mp3"
+    ],
+    "name:snake": [
+      "name_snake_0.mp3"
+    ],
+    "name:jake": [
+      "name_jake_0.mp3"
+    ],
+    "name:tarquinn": [
+      "name_tarquinn_0.mp3"
+    ],
+    "name:roadkill": [
+      "name_roadkill_0.mp3"
+    ],
+    "name:butcher": [
+      "name_butcher_0.mp3"
+    ],
+    "name:slash": [
+      "name_slash_0.mp3"
+    ],
+    "name:rage": [
+      "name_rage_0.mp3"
+    ],
+    "name:grinder": [
+      "name_grinder_0.mp3"
+    ],
+    "name:viper": [
+      "name_viper_0.mp3"
+    ],
+    "name:rip": [
+      "name_rip_0.mp3"
+    ],
+    "name:shred": [
+      "name_shred_0.mp3"
+    ]
+  }
+}

@@ -1,4 +1,8 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { Kit } from './kit';
+
+export { Kit } from './kit';
 
 /** Estado usado para animar o modelo a cada quadro. */
 export interface CarAnim {
@@ -25,79 +29,6 @@ export interface CarVisual {
   /** olhos do piloto, em coordenadas locais do carro (+z = frente) */
   eye: THREE.Vector3;
   animate(a: CarAnim): void;
-}
-
-/** Materiais e utilitários compartilhados pelos modelos. */
-export class Kit {
-  readonly paint: THREE.MeshPhysicalMaterial;
-  readonly paintDark: THREE.MeshPhysicalMaterial;
-  readonly trim = new THREE.MeshStandardMaterial({ color: 0x141418, metalness: 0.5, roughness: 0.55 });
-  readonly glass = new THREE.MeshPhysicalMaterial({ color: 0x0a0f16, metalness: 0.2, roughness: 0.05, clearcoat: 1, transparent: true, opacity: 0.88 });
-  readonly chrome = new THREE.MeshStandardMaterial({ color: 0xb8bdc4, metalness: 1, roughness: 0.35, envMapIntensity: 0.5 });
-  readonly gunMetal = new THREE.MeshStandardMaterial({ color: 0x3a3e44, metalness: 0.9, roughness: 0.35 });
-  readonly rubber = new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.92 });
-  readonly head = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xfff2c8, emissiveIntensity: 3 });
-  readonly tail = new THREE.MeshStandardMaterial({ color: 0x400000, emissive: 0xff1a10, emissiveIntensity: 2.5 });
-  readonly dash = new THREE.MeshStandardMaterial({ color: 0x0e0e12, roughness: 0.85 });
-  readonly flameMat = new THREE.MeshBasicMaterial({
-    color: new THREE.Color(0x5ac8ff).multiplyScalar(4),
-    transparent: true,
-    opacity: 0.85,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-  });
-
-  constructor(
-    color: number,
-    readonly shadows: boolean,
-    readonly body: THREE.Object3D,
-  ) {
-    this.paint = new THREE.MeshPhysicalMaterial({ color, metalness: 0.55, roughness: 0.32, clearcoat: 1, clearcoatRoughness: 0.08 });
-    this.paintDark = new THREE.MeshPhysicalMaterial({
-      color: new THREE.Color(color).multiplyScalar(0.45),
-      metalness: 0.6,
-      roughness: 0.4,
-      clearcoat: 0.6,
-    });
-  }
-
-  add<T extends THREE.BufferGeometry>(geo: T, mat: THREE.Material | THREE.Material[], x: number, y: number, z: number, parent: THREE.Object3D = this.body): THREE.Mesh<T> {
-    const m = new THREE.Mesh(geo, mat);
-    m.position.set(x, y, z);
-    m.castShadow = this.shadows;
-    m.receiveShadow = this.shadows;
-    parent.add(m);
-    return m;
-  }
-
-  /** Cilindro entre dois pontos (tubos de gaiola, suportes). */
-  tube(a: THREE.Vector3, b: THREE.Vector3, r: number, mat: THREE.Material, parent: THREE.Object3D = this.body): THREE.Mesh {
-    const len = a.distanceTo(b);
-    const m = this.add(new THREE.CylinderGeometry(r, r, len, 8), mat, (a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2, parent);
-    m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize());
-    return m;
-  }
-
-  /** Faróis e lanternas simétricos. */
-  lights(front: [number, number, number][], rear: [number, number, number][], size = 0.38): void {
-    for (const [x, y, z] of front) {
-      for (const sx of [-1, 1]) this.add(new THREE.BoxGeometry(size, 0.1, 0.06), this.head, sx * x, y, z).rotation.x = -0.5;
-    }
-    for (const [x, y, z] of rear) {
-      for (const sx of [-1, 1]) this.add(new THREE.BoxGeometry(size, 0.12, 0.05), this.tail, sx * x, y, z);
-    }
-  }
-
-  /** Chamas de nitro apontando para trás. */
-  flames(points: [number, number, number][], scale = 1): THREE.Mesh[] {
-    return points.map(([x, y, z]) => {
-      const f = this.add(new THREE.ConeGeometry(0.22 * scale, 1.4 * scale, 10, 1, true), this.flameMat, x, y, z);
-      f.rotation.x = -Math.PI / 2;
-      f.castShadow = false;
-      f.visible = false;
-      return f;
-    });
-  }
 }
 
 /**
@@ -149,7 +80,7 @@ export function wheel(kit: Kit, o: WheelOpts, x: number, y: number, z: number): 
       new THREE.Vector2(r * 0.88, hw),
       new THREE.Vector2(r * 0.58, hw),
     ],
-    24,
+    32,
   );
   tireGeo.rotateZ(Math.PI / 2);
   const pivot = new THREE.Group();
@@ -160,6 +91,9 @@ export function wheel(kit: Kit, o: WheelOpts, x: number, y: number, z: number): 
   spin.add(tire);
   const rim = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.6, r * 0.6, o.width * 0.8, 20).rotateZ(Math.PI / 2), kit.gunMetal);
   spin.add(rim);
+  // calota na cor do carro, dos dois lados
+  const hub = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.3, r * 0.34, o.width * 0.86, 14).rotateZ(Math.PI / 2), kit.paint);
+  spin.add(hub);
   const side = Math.sign(x) || 1;
   const n = o.spokes ?? 5;
   for (let k = 0; k < n; k++) {
@@ -169,60 +103,134 @@ export function wheel(kit: Kit, o: WheelOpts, x: number, y: number, z: number): 
     spin.add(spoke);
   }
   if (o.knobby) {
-    // cravos do pneu off-road
-    const knob = new THREE.BoxGeometry(o.width * 0.9, 0.08, 0.12);
-    for (let k = 0; k < 14; k++) {
-      const a = (k / 14) * Math.PI * 2;
-      const m = new THREE.Mesh(knob, kit.rubber);
-      m.position.set(0, Math.cos(a) * r, Math.sin(a) * r);
-      m.rotation.x = -a;
-      spin.add(m);
-    }
+    // cravos em V (chevron) do pneu off-road, numa única malha
+    spin.add(new THREE.Mesh(chevronTread(r, o.width), kit.rubber));
   }
   pivot.add(spin);
   kit.body.add(pivot);
   return { pivot, spin };
 }
 
-export interface CockpitOpts {
-  eye: THREE.Vector3;
-  /** meia-largura do habitáculo */
-  halfWidth: number;
-  /** altura do topo da moldura (null = sem teto, ex.: buggy aberto) */
-  roofY: number | null;
-  /** base do para-brisa (z) */
-  frontZ: number;
+const treadCache = new Map<string, THREE.BufferGeometry>();
+
+/** Banda de rodagem com cravos em V: cada cravo são dois braços inclinados que se encontram no meio. */
+export function chevronTread(r: number, width: number): THREE.BufferGeometry {
+  const key = `${r}:${width}`;
+  const hit = treadCache.get(key);
+  if (hit) return hit;
+  const n = Math.max(14, Math.round(r * 22));
+  const arm = width * 0.5;
+  const parts: THREE.BufferGeometry[] = [];
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    for (const side of [-1, 1]) {
+      // braço deitado sobre o topo do pneu (y = r), girado em torno do eixo radial, depois levado ao ângulo a
+      const g = new THREE.BoxGeometry(arm, 0.09, 0.11);
+      g.translate((side * arm) / 2, 0, 0);
+      g.rotateY(side * 0.5);
+      g.translate(0, r * 0.985, 0);
+      g.rotateX(a);
+      parts.push(g.toNonIndexed());
+    }
+  }
+  const merged = mergeGeometries(parts, false)!;
+  merged.computeVertexNormals();
+  treadCache.set(key, merged);
+  return merged;
 }
 
-/** Painel, volante, colunas e assoalho vistos de dentro. */
-export function cockpitRig(kit: Kit, o: CockpitOpts): { cockpit: THREE.Group; steeringWheel: THREE.Group } {
+/** Arma que aparece no capô na vista de cockpit (lembra o que o carro dispara). */
+export type HoodWeapon = 'plasma' | 'missiles' | 'sundog' | 'none';
+
+export interface CockpitOpts {
+  eye: THREE.Vector3;
+  /** meia-largura do capô visto de dentro */
+  halfWidth: number;
+  /** comprimento do capô à frente do painel */
+  hoodLength?: number;
+  weapon?: HoodWeapon;
+  /** material do capô (padrão: pintura do carro) */
+  hoodMat?: THREE.Material;
+}
+
+/**
+ * Vista de dentro, igual para todos os carros: o exterior inteiro some (ver `cabin`) e fica só
+ * um capô baixo na cor do carro, o painel e o volante. Nada acima da linha dos olhos: a pista
+ * fica sempre livre, qualquer que seja a forma do carro.
+ */
+export function cockpitRig(kit: Kit, o: CockpitOpts, parent: THREE.Object3D = kit.body): { cockpit: THREE.Group; steeringWheel: THREE.Group } {
   const cockpit = new THREE.Group();
   cockpit.visible = false;
-  kit.body.add(cockpit);
+  parent.add(cockpit);
   const e = o.eye;
-  const dashY = e.y - 0.3;
-  kit.add(new THREE.BoxGeometry(o.halfWidth * 2, 0.16, 0.5), kit.dash, 0, dashY, e.z + 0.85, cockpit).rotation.x = 0.15;
-  kit.add(new THREE.BoxGeometry(0.5, 0.12, 0.12), kit.dash, 0, dashY + 0.1, e.z + 0.65, cockpit);
-  const gaugeGeo = new THREE.CircleGeometry(0.045, 20);
-  kit.add(gaugeGeo, new THREE.MeshBasicMaterial({ color: 0x3aff7a }), -0.1, dashY + 0.11, e.z + 0.58, cockpit).rotation.y = Math.PI;
-  kit.add(gaugeGeo, new THREE.MeshBasicMaterial({ color: 0xff8a3a }), 0.1, dashY + 0.11, e.z + 0.58, cockpit).rotation.y = Math.PI;
+  const hw = o.halfWidth;
+  const L = o.hoodLength ?? 1.9;
+  const z0 = e.z + 0.5;
+  // capô: some para baixo à frente (ocupa só a faixa de baixo da tela)
+  const hood = new THREE.Shape();
+  hood.moveTo(0, e.y - 0.46);
+  hood.lineTo(L * 0.55, e.y - 0.56);
+  hood.quadraticCurveTo(L * 0.92, e.y - 0.66, L, e.y - 0.9);
+  hood.lineTo(L, e.y - 1.1);
+  hood.lineTo(0, e.y - 1.1);
+  hood.closePath();
+  const hoodGeo = sideProfile(hood, hw * 2, 0.08, 10);
+  hoodGeo.translate(0, 0, z0);
+  const hoodMesh = kit.add(hoodGeo, o.hoodMat ?? kit.paint, 0, 0, 0, cockpit);
+  hoodMesh.castShadow = false;
+  // faixa central escura no capô (referência de direção)
+  const stripe = kit.add(new THREE.BoxGeometry(0.22, 0.02, L * 0.5), kit.trim, 0, e.y - 0.49, z0 + L * 0.28, cockpit);
+  stripe.rotation.x = 0.1;
+  // painel: faixa baixa e fina, com dois mostradores acesos
+  kit.add(new THREE.BoxGeometry(hw * 2, 0.1, 0.28), kit.dash, 0, e.y - 0.43, e.z + 0.42, cockpit).rotation.x = 0.2;
+  const gaugeGeo = new THREE.CircleGeometry(0.04, 18);
+  kit.add(gaugeGeo, new THREE.MeshBasicMaterial({ color: 0x3aff7a }), -0.12, e.y - 0.37, e.z + 0.33, cockpit).rotation.set(-0.35, Math.PI, 0);
+  kit.add(gaugeGeo, new THREE.MeshBasicMaterial({ color: 0xff8a3a }), 0.12, e.y - 0.37, e.z + 0.33, cockpit).rotation.set(-0.35, Math.PI, 0);
+  // volante: só o arco de cima aparece, como num jogo de corrida
   const steeringWheel = new THREE.Group();
-  steeringWheel.position.set(0, dashY + 0.06, e.z + 0.45);
-  steeringWheel.rotation.x = -0.45;
+  steeringWheel.position.set(0, e.y - 0.36, e.z + 0.42);
+  steeringWheel.rotation.x = -0.5;
   cockpit.add(steeringWheel);
-  steeringWheel.add(new THREE.Mesh(new THREE.TorusGeometry(0.16, 0.022, 8, 28), kit.trim));
-  steeringWheel.add(new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.035, 0.02), kit.trim));
-  steeringWheel.add(new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.04, 12).rotateX(Math.PI / 2), kit.trim));
-  if (o.roofY !== null) {
+  steeringWheel.add(new THREE.Mesh(new THREE.TorusGeometry(0.15, 0.022, 8, 28), kit.trim));
+  steeringWheel.add(new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.035, 0.02), kit.trim));
+  const top = new THREE.Mesh(new THREE.TorusGeometry(0.15, 0.024, 8, 10, Math.PI * 0.35), kit.accent);
+  top.rotation.z = Math.PI * 0.325;
+  steeringWheel.add(top);
+  // arma no capô
+  const w = o.weapon ?? 'none';
+  const gy = e.y - 0.5;
+  if (w === 'plasma') {
     for (const sx of [-1, 1]) {
-      kit.tube(new THREE.Vector3(sx * (o.halfWidth + 0.1), dashY, o.frontZ), new THREE.Vector3(sx * o.halfWidth, o.roofY, e.z + 0.55), 0.03, kit.trim, cockpit);
+      const x = sx * hw * 0.62;
+      kit.add(new THREE.CylinderGeometry(0.05, 0.06, 0.9, 10).rotateX(Math.PI / 2), kit.gunMetal, x, gy, z0 + 0.75, cockpit);
+      kit.add(new THREE.BoxGeometry(0.18, 0.12, 0.35), kit.gunMetal, x, gy - 0.02, z0 + 0.25, cockpit);
+      kit.add(new THREE.CylinderGeometry(0.035, 0.035, 0.05, 10).rotateX(Math.PI / 2), kit.plasmaGlow, x, gy, z0 + 1.22, cockpit);
     }
-    kit.add(new THREE.BoxGeometry(o.halfWidth * 2 - 0.1, 0.06, 0.1), kit.trim, 0, o.roofY, e.z + 0.55, cockpit);
+  } else if (w === 'missiles') {
+    for (const sx of [-1, 1]) {
+      const x = sx * hw * 0.55;
+      kit.add(new THREE.BoxGeometry(0.3, 0.2, 0.8), kit.gunMetal, x, gy + 0.02, z0 + 0.7, cockpit);
+      kit.add(new THREE.BoxGeometry(0.31, 0.05, 0.12), kit.warn, x, gy + 0.1, z0 + 0.45, cockpit);
+      for (const dx of [-0.07, 0.07]) kit.add(new THREE.ConeGeometry(0.05, 0.16, 8).rotateX(Math.PI / 2), kit.tail, x + dx, gy + 0.02, z0 + 1.17, cockpit);
+    }
+  } else if (w === 'sundog') {
+    kit.add(new THREE.TorusGeometry(0.14, 0.03, 8, 20).rotateX(Math.PI / 2), kit.chrome, 0, gy - 0.1, z0 + 1.05, cockpit);
+    kit.add(new THREE.SphereGeometry(0.09, 14, 10), kit.sundogGlow, 0, gy - 0.05, z0 + 1.05, cockpit);
   }
-  for (const sx of [-1, 1]) kit.add(new THREE.BoxGeometry(0.12, 0.28, 1.9), kit.dash, sx * (o.halfWidth + 0.06), dashY + 0.06, e.z + 0.3, cockpit);
-  // assoalho um pouco acima da lataria (evita que a pintura apareça por dentro)
-  kit.add(new THREE.BoxGeometry(o.halfWidth * 2 + 0.2, 0.06, 1.8), kit.dash, 0, dashY + 0.07, e.z + 0.2, cockpit);
   return { cockpit, steeringWheel };
+}
+
+/**
+ * Esqueleto comum: `root` (posição/rotação do carro) > `body` (balanço da suspensão) >
+ * `ext` (todo o exterior, escondido na câmera de cockpit).
+ */
+export function carFrame(): { root: THREE.Group; body: THREE.Group; ext: THREE.Group } {
+  const root = new THREE.Group();
+  const body = new THREE.Group();
+  const ext = new THREE.Group();
+  root.add(body);
+  body.add(ext);
+  return { root, body, ext };
 }
 
 /** Textura de esteira (para o Battle Trak), com rolagem por offset. */

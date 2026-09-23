@@ -1,20 +1,36 @@
+import { QUALITY_LABELS, type QualityLevel, type QualityPref } from '../render/quality';
 import type { CameraMode } from '../render/cameras';
+import { carThumbnail, itemThumbnail, type ShopItem } from '../render/thumbnails';
 import {
-  DIVISIONS, POINTS, PROMOTE_POINTS, RACES_PER_SEASON, type CampaignState, type OpponentSetup, type PlanetDef, type RaceOutcome,
+  canAdvanceEarly, CAMPAIGN_PRIZES, carsForSale, DIVISIONS, PLANETS, POINTS, seasonInfo, START_MONEY, type CampaignState, type OpponentSetup, type PlanetDef,
+  type RaceOutcome,
 } from '../sim/campaign';
 import {
-  CAR_PRICES, CHARACTERS, CHARGE_KINDS, chargePrice, MAX_EXTRA_CHARGES, MAX_UPGRADE, tradeInValue, UPGRADE_HELP, UPGRADE_KINDS, UPGRADE_LABEL,
-  upgradePrice, type Character, type ChargeKind, type UpgradeKind,
+  armamentText, ATTRIBUTE_LABEL, CAR_PRICES, carAttributes, CHARACTERS, CHARGE_KINDS, chargePrice, chargeWeapon, MAX_UPGRADE, maxExtraCharges,
+  tradeInValue, UPGRADE_HELP, UPGRADE_KINDS, UPGRADE_LABEL, UPGRADE_NAMES, upgradeAvailable, upgradePrice, type CarAttributes, type Character,
+  type ChargeKind, type UpgradeKind,
 } from '../sim/garage';
 import type { Track, TrackDef } from '../sim/track';
-import type { VehicleSpec } from '../sim/vehicle';
+import { WEAPON_NAMES, type VehicleSpec } from '../sim/vehicle';
+import { DIFFICULTIES, DIFFICULTY_LABEL, type Difficulty } from '../sim/world';
+import type { SlotInfo } from '../core/storage';
 import { formatTime } from './hud';
-import { drawTrack, trackTransform } from './trackMap';
+import { setTiltSteering, tiltSteeringEnabled, tiltSupported } from '../input/controls';
+import { portraitSvg } from './portraits';
+import { trackThumbnail } from './trackThumb';
 
-export const WEAPON_LABEL = { laser: 'Laser', missile: 'Míssil', mine: 'Mina', oil: 'Óleo' } as const;
-const CHARGE_LABEL: Record<ChargeKind, string> = { front: 'Arma frontal', rear: 'Arma traseira', nitro: 'Nitro' };
+/** Nome curto das armas (HUD/menus), a partir dos nomes do original. */
+export const WEAPON_LABEL: Record<string, string> = Object.fromEntries(Object.entries(WEAPON_NAMES).map(([k, v]) => [k, v.short]));
+const weapon = (k: string) => WEAPON_LABEL[k] ?? k;
+const weaponFull = (k: string) => WEAPON_NAMES[k as keyof typeof WEAPON_NAMES]?.name ?? weapon(k);
+const CHARGE_LABEL: Record<ChargeKind, string> = { front: 'Arma frontal', rear: 'Arma traseira', nitro: 'Assistência' };
 export const COLORS = [0x2f7bff, 0xe02828, 0x2fc840, 0xf2c318, 0xb040e0, 0xf0f0f0];
 const CAMERAS: [CameraMode, string][] = [['iso', 'Vista aérea'], ['cockpit', 'Cockpit'], ['chase', 'Perseguição']];
+const DIFF_HELP: Record<Difficulty, string> = {
+  easy: 'Rivais mais lentos, você toma menos dano',
+  normal: 'Como no original',
+  hard: 'Rivais implacáveis e bem armados',
+};
 
 const money = (n: number) => `$${n.toLocaleString('pt-BR')}`;
 const hex = (c: number) => `#${c.toString(16).padStart(6, '0')}`;
@@ -24,13 +40,43 @@ export interface QuickOptions {
   trackId: string;
   vehicleId: string;
   color: number;
+  difficulty: Difficulty;
+}
+
+export interface NewCampaignOptions {
+  characterId: string;
+  color: number;
+  difficulty: Difficulty;
+  slot: number;
+}
+
+export interface OnlineOptions {
+  name: string;
+  vehicleId: string;
+  color: number;
+}
+
+/** Sala online como aparece na tela (host e convidados). */
+export interface LobbyView {
+  code: string;
+  link: string;
+  host: boolean;
+  players: { name: string; color: number; vehicleId: string; me: boolean }[];
+  max: number;
+  /** a corrida está rolando (quem entrou agora espera a próxima) */
+  racing: boolean;
 }
 
 export interface MenuActions {
   quickRace(o: QuickOptions): void;
-  newCampaign(characterId: string, color: number): void;
+  newCampaign(o: NewCampaignOptions): void;
   continueCampaign(): void;
   loadPassword(code: string): boolean;
+  listSlots(): SlotInfo[];
+  advanceEarly(): void;
+  loadSlot(slot: number): void;
+  saveSlot(slot: number): void;
+  deleteSlot(slot: number): void;
   campaignRace(): void;
   openShop(): void;
   buyCar(id: string): void;
@@ -51,6 +97,26 @@ export interface MenuActions {
   addMusic(files: File[]): void;
   clearMusic(): void;
   skipTrack(): void;
+  setAutoThrottle(on: boolean): void;
+  setQuality(q: QualityPref): void;
+  toggleFullscreen(): void;
+  install(): void;
+  quitGame(): void;
+  onlineCreate(o: OnlineOptions): void;
+  onlineJoin(o: OnlineOptions, code: string): void;
+  onlineStart(trackId: string, fillCpu: boolean): void;
+  onlineLeave(): void;
+  onlineLobby(): void;
+}
+
+/** Estado do "app" mostrado nos menus (tela cheia, instalação, toque). */
+export interface AppInfo {
+  touch: boolean;
+  fullscreen: boolean;
+  fullscreenSupported: boolean;
+  canInstall: boolean;
+  installed: boolean;
+  ios: boolean;
 }
 
 export interface AudioSettings {
@@ -60,6 +126,11 @@ export interface AudioSettings {
   musicVolume: number;
   bundled: number;
   user: number;
+  autoThrottle: boolean;
+  touch: boolean;
+  /** preferência de qualidade e o nível em uso agora */
+  quality: QualityPref;
+  qualityNow: QualityLevel;
 }
 
 export interface ResultRow {
@@ -71,6 +142,9 @@ export interface ResultRow {
   prize: number;
   money: number;
   me: boolean;
+  /** id/nome do piloto para o retrato (padrão: name) */
+  pilot?: string;
+  vehicleId?: string;
 }
 
 export interface HubData {
@@ -87,25 +161,123 @@ export interface CampaignReport {
   outcome: RaceOutcome;
   pointsEarned: number;
   points: number;
+  /** pontos necessários para subir na divisão em que a corrida foi disputada */
+  promote: number;
   label: string;
 }
 
-function stat(label: string, value: number): string {
-  return `<div class="stat"><span>${label}</span><i style="width:${Math.round(Math.min(1, value) * 100)}%"></i></div>`;
+/* ------------------------------------------------------------------ */
+/* Atributos dos carros: barras que mostram forças e fraquezas          */
+/* ------------------------------------------------------------------ */
+
+const ATTRS = Object.keys(ATTRIBUTE_LABEL) as (keyof CarAttributes)[];
+
+/**
+ * Barras segmentadas dos atributos (0..1, faixas fixas definidas na simulação em garage.ts),
+ * com a maior força e a maior fraqueza de cada carro marcadas.
+ */
+function statBars(v: VehicleSpec): string {
+  const a = carAttributes(v);
+  const vals = ATTRS.map((k) => a[k]);
+  const best = Math.max(...vals);
+  const worst = Math.min(...vals);
+  return `<div class="stats">${ATTRS.map((k, i) => {
+    const n = Math.max(1, Math.round(vals[i] * 10));
+    const tag = vals[i] === best ? '<em class="st-good">forte</em>' : vals[i] === worst ? '<em class="st-bad">fraco</em>' : '';
+    const cls = n >= 7 ? 'hi' : n <= 3 ? 'lo' : 'mid';
+    return `<div class="stat ${cls}"><span>${ATTRIBUTE_LABEL[k]}</span><i>${Array.from({ length: 10 }, (_, j) => `<b class="${j < n ? 'on' : ''}"></b>`).join('')}</i>${tag}</div>`;
+  }).join('')}</div>`;
 }
 
 function pips(n: number, max: number): string {
   return `<span class="pips">${Array.from({ length: max }, (_, i) => `<i class="${i < n ? 'on' : ''}"></i>`).join('')}</span>`;
 }
 
+/** Miniaturas já geradas (a geração é feita aos poucos, depois que o menu aparece). */
+const thumbReady = new Map<string, string>();
+const BLANK = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+
+/** Miniatura 3D de uma arma ou melhoria (gerada aos poucos, como a dos carros). */
+function itemImg(item: string, size = 96): string {
+  const key = `item|${item}|${size}`;
+  const url = thumbReady.get(key);
+  return `<img class="car-img item-img${url ? '' : ' loading'}" data-thumb="${key}" src="${url ?? BLANK}" alt="" draggable="false"/>`;
+}
+
+function carImg(id: string, color: number, size = 160): string {
+  const key = `${id}|${color}|${size}`;
+  const url = thumbReady.get(key);
+  return `<img class="car-img${url ? '' : ' loading'}" data-thumb="${key}" src="${url ?? BLANK}" alt="" draggable="false"/>`;
+}
+
+let fillToken = 0;
+/** Gera as miniaturas que faltam, uma por vez, sem travar a abertura do menu. */
+function fillThumbs(root: HTMLElement): void {
+  const token = ++fillToken;
+  const next = () => {
+    if (token !== fillToken) return; // outro menu foi aberto: recomeça por lá
+    const img = root.querySelector<HTMLImageElement>('img.car-img.loading');
+    if (!img) return;
+    const key = img.dataset.thumb!;
+    let url = thumbReady.get(key);
+    if (!url) {
+      const [id, color, size] = key.split('|');
+      url = id === 'item' ? itemThumbnail(color as ShopItem, Number(size)) : carThumbnail(id, Number(color), Number(size));
+      thumbReady.set(key, url || BLANK);
+    }
+    root.querySelectorAll<HTMLImageElement>(`img.car-img.loading[data-thumb="${key}"]`).forEach((el) => {
+      el.src = url || BLANK;
+      el.classList.remove('loading');
+    });
+    setTimeout(next, 0);
+  };
+  requestAnimationFrame(() => setTimeout(next, 0));
+}
+
+function trackImg(def: TrackDef, w = 200, h = 130): string {
+  return `<img class="trk-img" src="${trackThumbnail(def, w, h)}" alt="" draggable="false"/>`;
+}
+
+function dateLabel(ms: number): string {
+  const d = new Date(ms);
+  return `${d.toLocaleDateString('pt-BR')} ${d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`;
+}
+
 export class Menus {
   private el: HTMLElement;
+  private fsButton: HTMLButtonElement;
   private camera: CameraMode = 'iso';
-  private quick: QuickOptions = { trackId: 'chem6-1', vehicleId: 'marauder', color: COLORS[0] };
-  private newChar = { characterId: CHARACTERS[0].id, color: COLORS[0] };
+  private quick: QuickOptions = { trackId: 'chem6-1', vehicleId: 'marauder', color: COLORS[0], difficulty: 'normal' };
+  private newChar: NewCampaignOptions = { characterId: CHARACTERS[0].id, color: COLORS[0], difficulty: 'normal', slot: 0 };
   private shopTab: 'cars' | 'upgrades' | 'weapons' = 'upgrades';
+  /** planeta aberto na corrida rápida (abas) */
+  private quickPlanet = '';
   private lastHub: HubData | null = null;
   private inCampaign = false;
+  private hasSave = false;
+  /** tela de slots: veio de onde (para o "Voltar") */
+  private slotsFrom: 'main' | 'hub' = 'main';
+  /** Olaf, o piloto secreto (como no original: L + R + Select com o Tarquinn selecionado). */
+  private olafUnlocked = (() => {
+    try {
+      return localStorage.getItem('rnrr3d-olaf') === '1';
+    } catch {
+      return false;
+    }
+  })();
+  private secretKeys = new Set<string>();
+  private tarquinnTaps: number[] = [];
+  private padTimer = 0;
+  private nick = (() => {
+    try {
+      return localStorage.getItem('rnrr3d-nick') ?? '';
+    } catch {
+      return '';
+    }
+  })();
+  private fillCpu = true;
+  private lastLobby: LobbyView | null = null;
+  private app: AppInfo = { touch: false, fullscreen: false, fullscreenSupported: false, canInstall: false, installed: false, ios: false };
 
   constructor(
     root: HTMLElement,
@@ -118,10 +290,41 @@ export class Menus {
     this.el.style.display = 'none';
     root.appendChild(this.el);
     this.el.addEventListener('click', (e) => this.onClick(e));
+    // segredo do Olaf no teclado: segure Q + E (os "L" e "R") e aperte Backspace ou Tab ("Select")
+    window.addEventListener('keydown', (e) => {
+      this.secretKeys.add(e.code);
+      if ((e.code === 'Backspace' || e.code === 'Tab') && this.secretKeys.has('KeyQ') && this.secretKeys.has('KeyE')) {
+        if (this.trySecret()) e.preventDefault();
+      }
+    });
+    window.addEventListener('keyup', (e) => this.secretKeys.delete(e.code));
+    window.addEventListener('blur', () => this.secretKeys.clear());
+    // botão flutuante de tela cheia nos menus (celular)
+    this.fsButton = document.createElement('button');
+    this.fsButton.className = 'fs-float';
+    this.fsButton.setAttribute('aria-label', 'Tela cheia');
+    this.fsButton.addEventListener('click', () => this.actions.toggleFullscreen());
+    root.appendChild(this.fsButton);
+    this.updateFsButton();
   }
 
   setCameraChoice(mode: CameraMode): void {
     this.camera = mode;
+  }
+
+  /** Atualiza tela cheia / instalação e redesenha o menu principal se estiver nele. */
+  setApp(info: Partial<AppInfo>): void {
+    this.app = { ...this.app, ...info };
+    this.updateFsButton();
+    const main = this.el.querySelector('.main-buttons');
+    if (main && this.el.style.display !== 'none') this.showMain(this.hasSave);
+  }
+
+  private updateFsButton(): void {
+    const visible = this.app.touch && this.app.fullscreenSupported && this.el.style.display !== 'none';
+    this.fsButton.style.display = visible ? '' : 'none';
+    this.fsButton.textContent = this.app.fullscreen ? '🗗' : '⛶';
+    this.fsButton.title = this.app.fullscreen ? 'Sair da tela cheia' : 'Tela cheia';
   }
 
   private show(html: string): void {
@@ -129,10 +332,18 @@ export class Menus {
     this.el.style.display = '';
     this.el.scrollTop = 0;
     this.refresh();
+    this.updateFsButton();
+    fillThumbs(this.el);
+  }
+
+  /** A tela de som/opções está aberta? (para redesenhar depois de trocar a tela cheia) */
+  isShowingSettings(): boolean {
+    return this.el.style.display !== 'none' && !!this.el.querySelector('.vol');
   }
 
   hideAll(): void {
     this.el.style.display = 'none';
+    this.updateFsButton();
   }
 
   private cameraPicker(): string {
@@ -143,28 +354,52 @@ export class Menus {
     return `<div class="colors">${COLORS.map((c) => `<button class="color" data-color="${c}" data-group="${group}" style="background:${hex(c)}" aria-label="cor"></button>`).join('')}</div>`;
   }
 
-  private carCard(v: VehicleSpec, extra = ''): string {
-    const all = Object.values(this.vehicles);
-    const max = (k: keyof VehicleSpec) => Math.max(...all.map((x) => x[k] as number));
-    return `<b>${v.name}</b>
-      ${stat('Velocidade', v.maxSpeed / max('maxSpeed'))}${stat('Aceleração', v.accel / max('accel'))}${stat('Aderência', v.grip / max('grip'))}${stat('Blindagem', v.armor / max('armor'))}
-      <em>${WEAPON_LABEL[v.front]} + ${WEAPON_LABEL[v.rear]}</em>${extra}`;
+  private difficultyPicker(group: string): string {
+    return `<div class="diffs">${DIFFICULTIES.map((d) => `<button class="diff d-${d}" data-diff="${d}" data-group="${group}"><b>${DIFFICULTY_LABEL[d]}</b><small>${DIFF_HELP[d]}</small></button>`).join('')}</div>`;
+  }
+
+  private get allCars(): VehicleSpec[] {
+    return Object.values(this.vehicles);
+  }
+
+  private carCard(v: VehicleSpec, color: number, extra = '', spec: VehicleSpec = v): string {
+    return `${carImg(v.id, color)}<b>${v.name}</b>
+      ${statBars(spec)}
+      <em>${armamentText(v)}</em>${extra}`;
+  }
+
+  private fsButtonHtml(): string {
+    if (!this.app.touch || !this.app.fullscreenSupported) return '';
+    return `<button data-act="fullscreen">${this.app.fullscreen ? '🗗 Sair da tela cheia' : '⛶ Tela cheia'}</button>`;
   }
 
   /* ---------------- menu principal ---------------- */
 
   showMain(hasSave: boolean): void {
     this.inCampaign = false;
+    this.hasSave = hasSave;
+    const install = this.app.canInstall
+      ? '<button class="install" data-act="install">📲 Instalar o jogo</button>'
+      : this.app.ios && !this.app.installed
+        ? '<p class="small-note center">Para instalar no iPhone: toque em Compartilhar e depois em “Adicionar à Tela de Início”.</p>'
+        : '';
     this.show(`
-      <div class="card">
-        <h1>ROCK <span>'N'</span> ROLL<br/>RACING <em>3D</em></h1>
-        <p class="sub">6 planetas · 12 pistas · 5 carros · armas e muito rock</p>
+      <div class="card title-card">
+        <div class="logo-row">
+          <div class="logo-faces">${portraitSvg('snake', 64)}${portraitSvg('tarquinn', 64)}${portraitSvg('katarina', 64)}</div>
+          <h1>ROCK <span>'N'</span> ROLL<br/>RACING <em>3D</em></h1>
+        </div>
+        <p class="sub">6 planetas · 5 carros · armas, pancadaria e muito rock</p>
         <div class="main-buttons">
-          ${hasSave ? `<button class="go" data-act="continue">CONTINUAR CAMPANHA</button>` : ''}
+          ${hasSave ? `<button class="go" data-act="continue">CONTINUAR</button>` : ''}
           <button class="${hasSave ? '' : 'go'}" data-act="new">Nova campanha</button>
           <button data-act="quick">Corrida rápida</button>
-          <button data-act="password">Carregar senha</button>
-          <button data-act="settings">⚙ Som e música</button>
+          <button data-act="online">🌐 Online com amigos</button>
+          <button data-act="load">📂 Carregar jogo</button>
+          <button data-act="settings">⚙ Som e opções</button>
+          ${this.fsButtonHtml()}
+          ${install}
+          <button class="quit" data-act="quit-game">⏻ Sair do jogo</button>
         </div>
         ${this.helpBlock()}
       </div>`);
@@ -173,25 +408,44 @@ export class Menus {
   private helpBlock(): string {
     return `<details class="help">
       <summary>Controles</summary>
-      <p><b>Teclado:</b> ↑/W acelera · ↓/S freia/ré · ←→/A D vira · Espaço/J atira · X/K arma traseira · Shift nitro · C câmera · Esc pausa · M som</p>
-      <p><b>Controle:</b> RT acelera · LT freia · analógico vira · X/RB atira · B/LB arma traseira · L3/R3 nitro · Y câmera · Start pausa</p>
-      <p><b>Celular:</b> botões na tela; 🎥 troca a câmera. Melhor com o aparelho deitado.</p>
+      <p><b>Teclado:</b> ↑/W acelera · ↓/S freia/ré · ←→/A D vira · Q/E/Alt curva fechada · Ctrl esq./Espaço atira · \ ou X arma traseira · Shift assistência (nitro/pulo) · C câmera · Esc pausa · M som</p>
+      <p><b>Controle:</b> RT acelera · LT freia · analógico vira · LB curva fechada · X/RB atira · B arma traseira · L3/R3 assistência · Y câmera · Start pausa</p>
+      <p><b>Celular:</b> polegar esquerdo arrasta o volante (até o fim da faixa = curva fechada; arrastando para cima, atira sem soltar a direção) e tem TIRO, MINA e NITRO logo acima; polegar direito acelera, freia e tem o botão CURVA. Em “Som e opções”: aceleração automática (o polegar direito ganha um TIRO) e direção por inclinação.</p>
       <p>Armas e nitro recarregam a cada volta. Dinheiro e blindagem aparecem pela pista.</p>
     </details>`;
+  }
+
+  /** Tela de despedida quando o navegador não deixa fechar a aba. */
+  showGoodbye(): void {
+    this.show(`
+      <div class="card small center">
+        <h2>ATÉ A PRÓXIMA!</h2>
+        <p class="small-note">Seu progresso está salvo. Pode fechar esta aba.</p>
+        <button class="go" data-act="main">Voltar ao jogo</button>
+      </div>`);
   }
 
   /* ---------------- corrida rápida ---------------- */
 
   private showQuick(): void {
+    const planets = [...new Set(this.tracks.map((t) => t.planet))];
+    if (!planets.includes(this.quickPlanet)) this.quickPlanet = this.tracks.find((t) => t.id === this.quick.trackId)?.planet ?? planets[0];
     this.show(`
-      <div class="card">
+      <div class="card wide quick">
         <h2>CORRIDA RÁPIDA</h2>
         <h3>Pista</h3>
-        <div class="tracks">${this.tracks.map((t) => `<button class="trk" data-track="${t.id}"><b>${t.name}</b><small>${t.planet}</small></button>`).join('')}</div>
+        <div class="tabs planet-tabs">${planets.map((p) => `<button class="tab" data-qplanet="${esc(p)}">${esc(p)}</button>`).join('')}</div>
+        <div class="tracks track-row">${this.tracks
+          .filter((t) => t.planet === this.quickPlanet)
+          .map((t) => `<button class="trk" data-track="${t.id}">${trackImg(t)}<b>${esc(t.name)}</b></button>`)
+          .join('')}</div>
         <h3>Carro</h3>
-        <div class="cars">${Object.values(this.vehicles).map((v) => `<button class="car" data-vehicle="${v.id}">${this.carCard(v)}</button>`).join('')}</div>
-        <h3>Cor</h3>${this.colorPicker('quick')}
-        <h3>Câmera inicial</h3>${this.cameraPicker()}
+        <div class="cars">${this.allCars.map((v) => `<button class="car" data-vehicle="${v.id}">${this.carCard(v, this.quick.color)}</button>`).join('')}</div>
+        <div class="quick-opts">
+          <div><h3>Cor</h3>${this.colorPicker('quick')}</div>
+          <div><h3>Câmera inicial</h3>${this.cameraPicker()}</div>
+        </div>
+        <h3>Dificuldade</h3>${this.difficultyPicker('quick')}
         <button class="go" data-act="quick-start">CORRER!</button>
         <button class="link" data-act="main">← Voltar</button>
       </div>`);
@@ -199,21 +453,98 @@ export class Menus {
 
   /* ---------------- nova campanha ---------------- */
 
+  private bonusText(c: Character): string {
+    const names: Record<string, string> = { accel: 'Aceleração', topSpeed: 'Velocidade', cornering: 'Curvas', jumping: 'Saltos' };
+    return Object.entries(c.bonus ?? {})
+      .filter(([, v]) => v)
+      .map(([k, v]) => `<span class="skill">${names[k] ?? k} ${'★'.repeat(Number(v))}</span>`)
+      .join('');
+  }
+
+  /** Libera o Olaf se o Tarquinn estiver selecionado na tela de nova campanha. */
+  private trySecret(): boolean {
+    if (this.olafUnlocked || !this.el.querySelector('.chars') || this.el.style.display === 'none') return false;
+    if (this.newChar.characterId !== 'tarquinn') return false;
+    this.olafUnlocked = true;
+    try {
+      localStorage.setItem('rnrr3d-olaf', '1');
+    } catch {
+      /* sem armazenamento: vale só nesta sessão */
+    }
+    this.newChar.characterId = CHARACTERS.find((c) => c.secret)?.id ?? this.newChar.characterId;
+    const scroll = this.el.scrollTop;
+    this.showNewCampaign();
+    this.el.scrollTop = scroll;
+    const msg = this.el.querySelector('.secret-msg');
+    if (msg) msg.textContent = '⚡ Piloto secreto liberado: OLAF, direto de Valhalla!';
+    navigator.vibrate?.([30, 40, 30]);
+    return true;
+  }
+
+  /** Controle: L + R + Select (botões 4, 5 e 8) enquanto a tela de nova campanha estiver aberta. */
+  private watchPadSecret(): void {
+    cancelAnimationFrame(this.padTimer);
+    const tick = () => {
+      if (!this.el.querySelector('.chars') || this.el.style.display === 'none') return;
+      const pad = Array.from(navigator.getGamepads?.() ?? []).find((p) => p && p.connected);
+      if (pad && pad.buttons[4]?.pressed && pad.buttons[5]?.pressed && pad.buttons[8]?.pressed) this.trySecret();
+      this.padTimer = requestAnimationFrame(tick);
+    };
+    this.padTimer = requestAnimationFrame(tick);
+  }
+
   private showNewCampaign(): void {
-    const bonusText = (c: Character) =>
-      Object.entries(c.bonus)
-        .map(([k, v]) => `${{ accel: 'Aceleração', topSpeed: 'Velocidade', cornering: 'Curvas', jumping: 'Saltos' }[k]} ${'+'.repeat(v)}`)
-        .join(' · ');
+    const slots = this.actions.listSlots();
+    if (!slots.some((s) => s.slot === this.newChar.slot && s.empty)) this.newChar.slot = slots.find((s) => s.empty)?.slot ?? this.newChar.slot;
     this.show(`
-      <div class="card">
+      <div class="card wide">
         <h2>NOVA CAMPANHA</h2>
-        <p class="sub center">Comece em Chem VI, Divisão B, com um Dirt Devil e ${money(10000)}.
-          Some ${PROMOTE_POINTS} pontos em ${RACES_PER_SEASON} corridas para subir de divisão (1º: ${POINTS[0]} · 2º: ${POINTS[1]} · 3º: ${POINTS[2]}).</p>
+        <p class="sub center">Comece em ${esc(PLANETS[0].name)}, Divisão B, com ${money(START_MONEY)}. Some ${PLANETS[0].promote} pontos em ${PLANETS[0].races} corridas para subir
+          (1º: ${POINTS[0]} pts e ${money(CAMPAIGN_PRIZES[0])} · 2º: ${POINTS[1]} · 3º: ${POINTS[2]}).</p>
         <h3>Escolha seu piloto</h3>
-        <div class="chars">${CHARACTERS.map((c) => `<button class="char" data-char="${c.id}"><b>${c.name}</b><small>${c.description}</small><em>${bonusText(c)}</em></button>`).join('')}</div>
+        <div class="chars">${CHARACTERS.filter((c) => !c.secret || this.olafUnlocked).map(
+          (c) => `<button class="char ${c.secret ? 'secret' : ''}" data-char="${c.id}">${portraitSvg(c.id, 84)}<div><b>${esc(c.name)}</b><small class="home">${esc(c.homeworld ?? '')}</small><small>${esc(c.description)}</small><div class="skills">${this.bonusText(c)}</div></div></button>`,
+        ).join('')}</div>
+        <p class="pw-msg secret-msg"></p>
         <h3>Cor do carro</h3>${this.colorPicker('new')}
+        <h3>Dificuldade</h3>${this.difficultyPicker('new')}
+        <h3>Salvar no slot</h3>
+        <div class="slot-pick">${slots
+          .map((s) => `<button class="slotsel" data-slotsel="${s.slot}"><b>Slot ${s.slot + 1}</b><small>${s.empty ? 'vazio' : `substituir: ${esc(s.pilot)} · ${esc(s.planet)}`}</small></button>`)
+          .join('')}</div>
         <button class="go" data-act="new-start">COMEÇAR</button>
         <button class="link" data-act="main">← Voltar</button>
+      </div>`);
+    this.watchPadSecret();
+  }
+
+  /* ---------------- salvar / carregar ---------------- */
+
+  showSlots(mode: 'save' | 'load', notice = ''): void {
+    if (mode === 'save') this.slotsFrom = 'hub';
+    else this.slotsFrom = this.inCampaign ? 'hub' : 'main';
+    const slots = this.actions.listSlots();
+    this.show(`
+      <div class="card">
+        <h2>${mode === 'save' ? 'SALVAR JOGO' : 'CARREGAR JOGO'}</h2>
+        ${notice ? `<div class="notice">${notice}</div>` : ''}
+        <div class="slots">${slots
+          .map((s) =>
+            s.empty
+              ? `<div class="slot empty"><div class="slot-n">${s.slot + 1}</div><div class="slot-info"><b>Vazio</b></div>
+                  ${mode === 'save' ? `<button class="buy" data-save="${s.slot}">Salvar aqui</button>` : ''}</div>`
+              : `<div class="slot"><div class="slot-n">${s.slot + 1}</div>${portraitSvg(s.characterId, 56)}${carImg(s.vehicleId, s.color, 96)}
+                  <div class="slot-info"><b>${esc(s.pilot)}</b><small>${esc(s.planet)} · Divisão ${esc(s.division)}${s.champion ? ' · 🏆' : ''}</small>
+                  <small><span class="gold">${money(s.money)}</span> · ${dateLabel(s.savedAt)}</small></div>
+                  <div class="slot-btns">
+                    ${mode === 'save' ? `<button class="buy" data-save="${s.slot}">Substituir</button>` : `<button class="buy" data-loadslot="${s.slot}">Carregar</button>`}
+                    <button class="del" data-delslot="${s.slot}" aria-label="Apagar slot"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2zm-3 6h12l-1 12H7L6 9zm4 2v8h2v-8h-2zm4 0v8h2v-8h-2z"/></svg>Apagar</button>
+                  </div></div>`,
+          )
+          .join('')}</div>
+        <p class="small-note">O jogo também salva sozinho no slot em uso ao fim de cada corrida.</p>
+        ${mode === 'load' ? '<button data-act="password">🔑 Usar uma senha</button>' : '<button data-act="show-password">🔑 Ver senha (levar para outro aparelho)</button>'}
+        <button class="link" data-act="slots-back">← Voltar</button>
       </div>`);
   }
 
@@ -224,49 +555,53 @@ export class Menus {
     this.inCampaign = true;
     const s = d.state;
     const div = DIVISIONS[s.division];
-    const pct = Math.min(100, (s.points / PROMOTE_POINTS) * 100);
+    const season = seasonInfo(s);
+    const pct = Math.min(100, (s.points / season.promote) * 100);
     const u = s.car.upgrades;
+    const base = this.vehicles[s.car.vehicleId];
+    const early = canAdvanceEarly(s);
     this.show(`
       <div class="card wide">
         <div class="hub-head">
-          <div><small>PLANETA</small><b>${d.planet.name}</b></div>
+          <div><small>PLANETA</small><b>${esc(d.planet.name)}</b></div>
           <div><small>DIVISÃO</small><b>${div}</b></div>
-          <div><small>CORRIDA</small><b>${s.race + 1}/${RACES_PER_SEASON}</b></div>
+          <div><small>CORRIDA</small><b>${s.race + 1}/${season.races}</b></div>
           <div><small>DINHEIRO</small><b class="gold">${money(s.money)}</b></div>
         </div>
-        <div class="points"><span>Pontos: <b>${s.points}</b> / ${PROMOTE_POINTS} para subir</span><div class="bar"><i style="width:${pct}%"></i></div></div>
+        <div class="points"><span>Pontos: <b>${s.points}</b> / ${season.promote} para subir</span><div class="bar"><i style="width:${pct}%"></i></div></div>
         ${notice ? `<div class="notice">${notice}</div>` : ''}
+        ${early ? `<div class="notice promoted">Você já tem os pontos! Continue correndo aqui para ganhar dinheiro ou <button class="inline-go" data-act="advance">subir agora ➜</button></div>` : ''}
         <div class="hub-grid">
           <div class="panel">
             <h3>Próxima pista</h3>
-            <canvas class="hub-map" width="240" height="170"></canvas>
-            <p class="trk-name"><b>${d.track.def.name}</b> · ${d.track.def.laps} voltas${d.track.def.slime ? ' · poças de gosma' : ''}</p>
+            ${trackImg(d.track.def, 320, 200)}
+            <p class="trk-name"><b>${esc(d.track.def.name)}</b> · ${d.track.def.laps} voltas${d.track.def.slime ? ' · poças de gosma' : ''}</p>
             <h3>Rivais</h3>
-            <ul class="rivals">${d.opponents.map((o) => `<li><span class="dot" style="background:${hex(o.color)}"></span>${o.name} <small>${o.spec.name}</small></li>`).join('')}</ul>
+            <ul class="rivals">${d.opponents
+              .map(
+                (o) => `<li>${portraitSvg(o.name, 44)}<div><b style="color:${hex(o.color)}">${esc(o.name)}</b><small>${esc(o.spec.name)}</small></div>${carImg(o.spec.id, o.color, 96)}</li>`,
+              )
+              .join('')}</ul>
           </div>
           <div class="panel">
-            <h3>Seu carro</h3>
-            <div class="mycar">${this.carCard(d.spec)}</div>
+            <h3>Seu piloto e carro</h3>
+            <div class="me-row">${portraitSvg(d.character.id, 72)}<div><b>${esc(d.character.name)}</b><div class="skills">${this.bonusText(d.character)}</div></div></div>
+            <div class="mycar">${this.carCard(base ?? d.spec, s.color, '', d.spec)}</div>
             <ul class="upg-list">
-              ${UPGRADE_KINDS.map((k) => `<li>${UPGRADE_LABEL[k]} ${pips(u[k], MAX_UPGRADE)}</li>`).join('')}
+              ${UPGRADE_KINDS.filter((k) => upgradeAvailable(s.car.vehicleId, k)).map((k) => `<li><span>${UPGRADE_LABEL[k]} <small>${UPGRADE_NAMES[k][u[k]]}</small></span> ${pips(u[k], MAX_UPGRADE)}</li>`).join('')}
             </ul>
-            <p class="small-note">Piloto: <b>${d.character.name}</b> · ${d.spec.frontCharges}× ${WEAPON_LABEL[d.spec.front]} · ${d.spec.rearCharges}× ${WEAPON_LABEL[d.spec.rear]} · ${d.spec.nitroCharges}× nitro</p>
+            <p class="small-note">${d.spec.frontCharges}× ${weaponFull(d.spec.front)} · ${d.spec.rearCharges}× ${weaponFull(d.spec.rear)} · ${d.spec.nitroCharges}× ${weaponFull(d.spec.assist)}</p>
           </div>
         </div>
         <h3>Câmera</h3>${this.cameraPicker()}
         <button class="go" data-act="hub-race">CORRER!</button>
         <div class="row-buttons">
           <button data-act="shop">🛒 Loja</button>
-          <button data-act="show-password">🔑 Senha</button>
-          <button data-act="settings">⚙ Som</button>
+          <button data-act="save">💾 Salvar</button>
+          <button data-act="settings">⚙ Opções</button>
           <button data-act="main">Menu</button>
         </div>
       </div>`);
-    const canvas = this.el.querySelector<HTMLCanvasElement>('.hub-map');
-    if (canvas) {
-      const map = trackTransform(d.track, canvas.width, canvas.height, 12);
-      drawTrack(canvas.getContext('2d')!, d.track, map, 6);
-    }
   }
 
   /* ---------------- loja ---------------- */
@@ -275,35 +610,49 @@ export class Menus {
     this.lastHub = d;
     const s = d.state;
     const tabs = `<div class="tabs">
-      ${(['upgrades', 'weapons', 'cars'] as const).map((t) => `<button class="tab" data-tab="${t}">${{ upgrades: 'Melhorias', weapons: 'Armas', cars: 'Carros' }[t]}</button>`).join('')}
+      ${(['upgrades', 'weapons', 'cars'] as const).map((t) => `<button class="tab" data-tab="${t}">${{ upgrades: '🔧 Melhorias', weapons: '💥 Armas', cars: '🏎 Carros' }[t]}</button>`).join('')}
     </div>`;
     let body = '';
     if (this.shopTab === 'upgrades') {
-      body = UPGRADE_KINDS.map((k) => {
-        const price = upgradePrice(s.car, k);
-        return `<div class="shop-row"><div><b>${UPGRADE_LABEL[k]}</b> ${pips(s.car.upgrades[k], MAX_UPGRADE)}<small>${UPGRADE_HELP[k]}</small></div>
-          ${price === null ? '<span class="maxed">MÁXIMO</span>' : `<button class="buy" data-upgrade="${k}" ${price > s.money ? 'disabled' : ''}>${money(price)}</button>`}</div>`;
-      }).join('');
+      body = `<div class="shop-car"><div class="shop-car-img">${carImg(s.car.vehicleId, s.color, 320)}<b>${esc(d.spec.name)}</b></div><div>${statBars(d.spec)}</div></div>` +
+        UPGRADE_KINDS.map((k) => {
+          const lvl = s.car.upgrades[k];
+          if (!upgradeAvailable(s.car.vehicleId, k)) {
+            return `<div class="shop-row na"><div class="upg-icon">${itemImg(k)}</div><div class="grow"><b>${UPGRADE_LABEL[k]}</b><small>Não se aplica a este carro (${s.car.vehicleId === 'havac' ? 'aerodeslizador' : 'esteiras'}).</small></div><span class="maxed">—</span></div>`;
+          }
+          const price = upgradePrice(s.car, k);
+          const next = UPGRADE_NAMES[k][lvl + 1];
+          return `<div class="shop-row"><div class="upg-icon">${itemImg(k)}</div><div class="grow"><b>${UPGRADE_LABEL[k]}: ${UPGRADE_NAMES[k][lvl]}</b> ${pips(lvl, MAX_UPGRADE)}<small>${UPGRADE_HELP[k]}${next ? ` · próximo: <b>${next}</b>` : ''}</small></div>
+            ${price === null ? '<span class="maxed">MÁXIMO</span>' : `<button class="buy" data-upgrade="${k}" ${price > s.money ? 'disabled' : ''}>${money(price)}</button>`}</div>`;
+        }).join('');
     } else if (this.shopTab === 'weapons') {
+      const baseCar = d.vehicles[s.car.vehicleId];
       body = CHARGE_KINDS.map((k) => {
-        const price = chargePrice(s.car, k);
-        const label = k === 'front' ? `${CHARGE_LABEL[k]} (${WEAPON_LABEL[d.spec.front]})` : k === 'rear' ? `${CHARGE_LABEL[k]} (${WEAPON_LABEL[d.spec.rear]})` : CHARGE_LABEL[k];
+        const price = chargePrice(s.car, k, baseCar);
+        const kind = chargeWeapon(baseCar, k);
+        const label = `${CHARGE_LABEL[k]} · ${weaponFull(kind)}`;
         const total = k === 'front' ? d.spec.frontCharges : k === 'rear' ? d.spec.rearCharges : d.spec.nitroCharges;
-        return `<div class="shop-row"><div><b>${label}</b> ${pips(s.car.charges[k], MAX_EXTRA_CHARGES)}<small>${total} cargas por volta · +1 por compra</small></div>
+        const cap = total + Math.max(0, maxExtraCharges(baseCar, k) - s.car.charges[k]);
+        return `<div class="shop-row"><div class="upg-icon">${itemImg(kind)}</div><div class="grow"><b>${label}</b> ${pips(total, cap)}<small>${total} carga(s) por volta · +1 por compra (máx. 7)</small></div>
           ${price === null ? '<span class="maxed">MÁXIMO</span>' : `<button class="buy" data-charge="${k}" ${price > s.money ? 'disabled' : ''}>${money(price)}</button>`}</div>`;
       }).join('');
     } else {
-      const trade = tradeInValue(s.car);
+      const trade = tradeInValue(s.car, d.vehicles[s.car.vehicleId]);
       body =
         `<p class="small-note">Ao trocar de carro, o atual (com melhorias) entra como parte do pagamento: <b>${money(trade)}</b>.</p>` +
-        Object.values(this.vehicles)
+        `<div class="shop-cars">${this.allCars
           .map((v) => {
             const mine = v.id === s.car.vehicleId;
+            const forSale = carsForSale(s).includes(v.id);
             const net = Math.max(0, CAR_PRICES[v.id].price - trade);
-            return `<div class="shop-row car-row"><div class="car">${this.carCard(v, `<small>Preço: ${money(CAR_PRICES[v.id].price)}</small>`)}</div>
-              ${mine ? '<span class="maxed">SEU CARRO</span>' : `<button class="buy" data-buycar="${v.id}" ${net > s.money ? 'disabled' : ''}>${money(net)}</button>`}</div>`;
+            const action = mine
+              ? '<span class="maxed">SEU CARRO</span>'
+              : !forSale
+                ? '<span class="maxed">🔒 NÃO VENDIDO NESTE PLANETA</span>'
+                : `<button class="buy" data-buycar="${v.id}" ${net > s.money ? 'disabled' : ''}>${net === 0 ? 'TROCAR' : money(net)}</button>`;
+            return `<div class="shop-carcard ${mine ? 'mine' : ''} ${forSale || mine ? '' : 'locked'}"><div class="car">${this.carCard(v, s.color, `<small>Preço: ${money(CAR_PRICES[v.id].price)}</small>`)}</div>${action}</div>`;
           })
-          .join('');
+          .join('')}</div>`;
     }
     this.show(`
       <div class="card wide">
@@ -325,28 +674,35 @@ export class Menus {
         <p class="small-note">${saving ? 'Guarde esta senha para continuar em outro aparelho ou navegador.' : 'Cole aqui uma senha salva para continuar a campanha.'}</p>
         <textarea class="pw" rows="5" ${saving ? 'readonly' : ''} spellcheck="false">${saving ? esc(code) : ''}</textarea>
         <p class="pw-msg"></p>
-        ${saving ? '<button class="go" data-act="copy-password">Copiar</button><button data-act="hub">Voltar</button>' : '<button class="go" data-act="load-password">Carregar</button><button data-act="main">Voltar</button>'}
+        ${saving ? '<button class="go" data-act="copy-password">Copiar</button><button data-act="hub">Voltar</button>' : '<button class="go" data-act="load-password">Carregar</button><button data-act="load">Voltar</button>'}
       </div>`);
   }
 
-  /* ---------------- som e música ---------------- */
+  /* ---------------- som e opções ---------------- */
+
+  private lastAudio: AudioSettings | null = null;
 
   showSettings(a: AudioSettings): void {
-    const toggle = (key: string, label: string, on: boolean) =>
-      `<div class="shop-row"><div><b>${label}</b></div><button class="toggle ${on ? 'on' : ''}" data-toggle="${key}" data-on="${on ? 1 : 0}">${on ? 'LIGADO' : 'DESLIGADO'}</button></div>`;
+    this.lastAudio = a;
+    const toggle = (key: string, label: string, on: boolean, help = '') =>
+      `<div class="shop-row"><div class="grow"><b>${label}</b>${help ? `<small>${help}</small>` : ''}</div><button class="toggle ${on ? 'on' : ''}" data-toggle="${key}" data-on="${on ? 1 : 0}">${on ? 'LIGADO' : 'DESLIGADO'}</button></div>`;
     const total = a.bundled + a.user;
     this.show(`
       <div class="card small">
-        <h2>SOM E MÚSICA</h2>
+        <h2>SOM E OPÇÕES</h2>
         ${toggle('music', 'Música', a.music)}
         <div class="shop-row"><div><b>Volume da música</b></div><input class="vol" type="range" min="0" max="100" value="${Math.round(a.musicVolume * 100)}"/></div>
         ${toggle('sfx', 'Efeitos sonoros', a.sfx)}
         ${toggle('announcer', 'Locutor', a.announcer)}
+        <div class="shop-row"><div class="grow"><b>Qualidade gráfica</b><small>Em uso: ${QUALITY_LABELS[a.qualityNow]}. Baixa deixa o jogo liso em aparelhos simples.</small></div><button class="toggle on" data-quality="${a.quality}">${QUALITY_LABELS[a.quality].toUpperCase()}</button></div>
+        ${a.touch ? toggle('autothrottle', 'Aceleração automática', a.autoThrottle, 'O carro acelera sozinho; o polegar direito freia e atira') : ''}
+        ${a.touch && tiltSupported() ? toggle('tilt', 'Direção por inclinação', tiltSteeringEnabled(), 'Vire o celular como um volante; o polegar esquerdo fica só com as armas') : ''}
+        ${a.touch ? this.fsButtonHtml() : ''}
         <h3>Minhas músicas</h3>
         <p class="small-note">${
           total
-            ? `${total} música(s): ${a.bundled} da pasta <code>music/</code> e ${a.user} escolhida(s) neste aparelho. Tocam em ordem aleatória.`
-            : 'Nenhuma música sua — tocando a trilha de rock sintetizada (um tema por planeta). Escolha arquivos do aparelho ou coloque-os na pasta <code>music/</code> do projeto.'
+            ? `${total} música(s): ${a.bundled} da pasta <code>music/</code> e ${a.user} escolhida(s) neste aparelho.`
+            : 'Nenhuma música sua — tocando a trilha de rock sintetizada. Escolha arquivos do aparelho ou coloque-os na pasta <code>music/</code> do projeto.'
         }</p>
         <input class="music-files" type="file" accept="audio/*" multiple hidden />
         <button data-act="pick-music">➕ Adicionar músicas do aparelho</button>
@@ -366,20 +722,105 @@ export class Menus {
     });
   }
 
-  /* ---------------- pausa e resultado ---------------- */
+  /* ---------------- online com amigos ---------------- */
 
-  showPause(): void {
+  private onlineOptions(): OnlineOptions {
+    const input = this.el.querySelector<HTMLInputElement>('.nick');
+    const name = (input?.value ?? this.nick).trim().slice(0, 12) || 'Piloto';
+    this.nick = name;
+    try {
+      localStorage.setItem('rnrr3d-nick', name);
+    } catch {
+      /* sem armazenamento */
+    }
+    return { name, vehicleId: this.quick.vehicleId, color: this.quick.color };
+  }
+
+  /** Criar sala ou entrar numa (com o código já preenchido quando veio por link). */
+  showOnline(code = '', error = ''): void {
     this.show(`
-      <div class="card small">
-        <h2>PAUSADO</h2>
-        <button class="go" data-act="resume">Continuar</button>
-        <button data-act="restart">Reiniciar corrida</button>
-        <button data-act="settings">⚙ Som e música</button>
-        <button data-act="quit">${this.inCampaign ? 'Voltar à garagem (corrida não conta)' : 'Menu principal'}</button>
+      <div class="card wide">
+        <h2>ONLINE COM AMIGOS</h2>
+        <p class="sub center">Crie uma sala e mande o link. Até 4 pilotos, direto entre os navegadores.</p>
+        ${error ? `<div class="notice retry">${esc(error)}</div>` : ''}
+        <h3>Seu nome</h3>
+        <input class="nick" maxlength="12" placeholder="Piloto" value="${esc(this.nick)}" autocomplete="nickname"/>
+        <h3>Carro</h3>
+        <div class="cars">${this.allCars.map((v) => `<button class="car" data-vehicle="${v.id}">${this.carCard(v, this.quick.color)}</button>`).join('')}</div>
+        <h3>Cor</h3>${this.colorPicker('online')}
+        ${
+          code
+            ? `<h3>Sala ${esc(code)}</h3><input class="room" type="hidden" value="${esc(code)}"/>
+               <button class="go" data-act="online-join">ENTRAR NA SALA</button>`
+            : `<button class="go" data-act="online-create">CRIAR SALA</button>
+               <h3>Ou entre com um código</h3>
+               <div class="join-row"><input class="room" maxlength="4" placeholder="ABCD" autocapitalize="characters" spellcheck="false"/><button class="buy" data-act="online-join">Entrar</button></div>`
+        }
+        <p class="pw-msg online-msg"></p>
+        <button class="link" data-act="main">← Voltar</button>
       </div>`);
   }
 
-  showResults(rows: ResultRow[], lapTimes: number[], report: CampaignReport | null): void {
+  /** "Conectando…" enquanto a sala abre. */
+  showOnlineWait(text: string): void {
+    this.show(`<div class="card small center"><h2>ONLINE</h2><p class="sub">${esc(text)}</p><button class="link" data-act="online-leave">Cancelar</button></div>`);
+  }
+
+  showOnlineNotice(text: string): void {
+    this.show(`<div class="card small center"><h2>ONLINE</h2><div class="notice retry">${esc(text)}</div><button class="go" data-act="main">Menu principal</button></div>`);
+  }
+
+  showLobby(v: LobbyView): void {
+    this.lastLobby = v;
+    const open = this.el.querySelector<HTMLSelectElement>('.lobby-track');
+    if (open) this.quick.trackId = open.value;
+    const planets = [...new Set(this.tracks.map((t) => t.planet))];
+    const slots = Array.from({ length: v.max }, (_, i) => {
+      const p = v.players[i];
+      return p
+        ? `<li>${carImg(p.vehicleId, p.color, 96)}<div><b style="color:${hex(p.color)}">${esc(p.name)}</b><small>${esc(this.vehicles[p.vehicleId]?.name ?? '')}${i === 0 ? ' · host' : ''}${p.me ? ' · você' : ''}</small></div></li>`
+        : `<li class="empty"><div><small>${v.host && this.fillCpu ? 'CPU' : 'vago'}</small></div></li>`;
+    }).join('');
+    const canShare = typeof navigator.share === 'function';
+    this.show(`
+      <div class="card">
+        <h2>SALA ${esc(v.code)}</h2>
+        <p class="small-note center">Mande o link para os amigos: quem abrir já entra na sala.</p>
+        <div class="join-row"><input class="room-link" readonly value="${esc(v.link)}"/><button class="buy" data-act="share-link">${canShare ? 'Enviar' : 'Copiar'}</button></div>
+        <p class="pw-msg share-msg"></p>
+        <h3>Pilotos</h3>
+        <ul class="rivals lobby">${slots}</ul>
+        ${
+          v.host
+            ? `<h3>Pista</h3>
+               <select class="lobby-track">${planets
+                 .map((pl) => `<optgroup label="${esc(pl)}">${this.tracks.filter((t) => t.planet === pl).map((t) => `<option value="${t.id}" ${t.id === this.quick.trackId ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</optgroup>`)
+                 .join('')}</select>
+               <div class="shop-row"><div class="grow"><b>Completar com CPU</b><small>Preenche as vagas com rivais do computador</small></div><button class="toggle ${this.fillCpu ? 'on' : ''}" data-act="cpu-toggle">${this.fillCpu ? 'LIGADO' : 'DESLIGADO'}</button></div>
+               ${v.racing ? '<p class="small-note center">Corrida em andamento…</p>' : `<button class="go" data-act="online-start" ${v.players.length < 2 && !this.fillCpu ? 'disabled' : ''}>LARGAR!</button>`}`
+            : `<p class="sub center">${v.racing ? 'Corrida em andamento — você entra na próxima.' : 'Esperando o host largar…'}</p>`
+        }
+        <h3>Câmera</h3>${this.cameraPicker()}
+        <button class="link" data-act="online-leave">← Sair da sala</button>
+      </div>`);
+  }
+
+  /* ---------------- pausa e resultado ---------------- */
+
+  showPause(online = false): void {
+    this.show(`
+      <div class="card small">
+        <h2>${online ? 'MENU' : 'PAUSADO'}</h2>
+        ${online ? '<p class="small-note center">No online a corrida não para.</p>' : ''}
+        <button class="go" data-act="resume">Continuar</button>
+        ${online ? '' : '<button data-act="restart">Reiniciar corrida</button>'}
+        <button data-act="settings">⚙ Som e opções</button>
+        ${this.fsButtonHtml()}
+        <button class="quit" data-act="${online ? 'online-leave' : 'quit'}">${online ? '⏏ Sair da sala' : this.inCampaign ? '⏏ Sair da corrida (não conta)' : '⏏ Sair da corrida'}</button>
+      </div>`);
+  }
+
+  showResults(rows: ResultRow[], lapTimes: number[], report: CampaignReport | null, online = false): void {
     const best = lapTimes.length ? Math.min(...lapTimes) : 0;
     const me = rows.find((r) => r.me);
     const title =
@@ -388,26 +829,33 @@ export class Menus {
       ? `<div class="notice ${report.outcome}">
           ${report.outcome === 'champion' ? 'Você venceu a galáxia inteira! Lenda do rock.' : ''}
           ${report.outcome === 'promoted' ? `Subiu para: <b>${report.label}</b>` : ''}
-          ${report.outcome === 'retry' ? `Não somou ${PROMOTE_POINTS} pontos. A temporada recomeça — melhore o carro na loja!` : ''}
-          ${report.outcome === 'continue' ? `+${report.pointsEarned} pontos · total ${report.points}/${PROMOTE_POINTS}` : ''}
+          ${report.outcome === 'retry' ? `Não somou ${report.promote} pontos. A temporada recomeça — melhore o carro na loja!` : ''}
+          ${report.outcome === 'continue' ? `+${report.pointsEarned} pontos · total ${report.points}/${report.promote}` : ''}
         </div>`
       : '';
+    const podium = rows
+      .slice()
+      .sort((a, b) => a.place - b.place)
+      .map(
+        (r) => `<div class="res-row ${r.me ? 'me' : ''} p${r.place}"><span class="res-place">${r.place}º</span>${portraitSvg(r.pilot ?? r.name, 48)}
+          <div class="res-name"><b style="color:${r.color}">${esc(r.name)}</b><small>${r.time !== null ? formatTime(r.time) : '—'} · ${r.kills} abate(s)</small></div>
+          ${r.vehicleId ? carImg(r.vehicleId, parseInt(r.color.slice(1), 16), 96) : ''}<span class="gold">${money(r.prize)}</span></div>`,
+      )
+      .join('');
     this.show(`
-      <div class="card small results">
+      <div class="card results">
         <h2>${title}</h2>
         ${campaignBlock}
-        <table>
-          <tr><th>#</th><th>Piloto</th><th>Tempo</th><th>Abates</th><th>Prêmio</th></tr>
-          ${rows
-            .map(
-              (r) => `<tr class="${r.me ? 'me' : ''}"><td>${r.place}º</td><td><span class="dot" style="background:${r.color}"></span>${esc(r.name)}</td>
-                <td>${r.time !== null ? formatTime(r.time) : '—'}</td><td>${r.kills}</td><td>${money(r.prize)}</td></tr>`,
-            )
-            .join('')}
-        </table>
+        <div class="res-list">${podium}</div>
         ${lapTimes.length ? `<table>${lapTimes.map((t, i) => `<tr class="${t === best ? 'best' : ''}"><td>Volta ${i + 1}</td><td>${formatTime(t)}</td></tr>`).join('')}</table>` : ''}
         ${me ? `<p class="money">Ganho nesta corrida (prêmio + pista): <b>${money(me.money)}</b></p>` : ''}
-        ${report ? '<button class="go" data-act="results-continue">Continuar</button>' : '<button class="go" data-act="restart">Correr de novo</button><button data-act="main">Menu principal</button>'}
+        ${
+          online
+            ? '<button class="go" data-act="online-lobby">Voltar à sala</button>'
+            : report
+              ? '<button class="go" data-act="results-continue">Continuar</button>'
+              : '<button class="go" data-act="restart">Correr de novo</button><button data-act="main">Menu principal</button>'
+        }
       </div>`);
   }
 
@@ -419,8 +867,11 @@ export class Menus {
     sel('.car[data-vehicle]', (b) => b.dataset.vehicle === this.quick.vehicleId);
     sel('.trk', (b) => b.dataset.track === this.quick.trackId);
     sel('.char', (b) => b.dataset.char === this.newChar.characterId);
-    sel('.tab', (b) => b.dataset.tab === this.shopTab);
+    sel('.tab[data-tab]', (b) => b.dataset.tab === this.shopTab);
+    sel('.tab[data-qplanet]', (b) => b.dataset.qplanet === this.quickPlanet);
+    sel('.slotsel', (b) => Number(b.dataset.slotsel) === this.newChar.slot);
     sel('.color', (b) => Number(b.dataset.color) === (b.dataset.group === 'new' ? this.newChar.color : this.quick.color));
+    sel('.diff', (b) => b.dataset.diff === (b.dataset.group === 'new' ? this.newChar.difficulty : this.quick.difficulty));
   }
 
   private onClick(e: Event): void {
@@ -433,20 +884,85 @@ export class Menus {
     }
     if (d.vehicle) this.quick.vehicleId = d.vehicle;
     if (d.track) this.quick.trackId = d.track;
-    if (d.char) this.newChar.characterId = d.char;
+    if (d.char) {
+      // toque: 5 toques rápidos no Tarquinn liberam o Olaf
+      if (d.char === 'tarquinn' && !this.olafUnlocked) {
+        const now = performance.now();
+        this.tarquinnTaps = [...this.tarquinnTaps.filter((t0) => now - t0 < 5000), now];
+        if (this.tarquinnTaps.length >= 5) {
+          this.newChar.characterId = 'tarquinn';
+          this.tarquinnTaps = [];
+          this.trySecret();
+          return;
+        }
+      }
+      this.newChar.characterId = d.char;
+    }
+    if (d.slotsel) this.newChar.slot = Number(d.slotsel);
+    if (d.diff) {
+      if (d.group === 'new') this.newChar.difficulty = d.diff as Difficulty;
+      else this.quick.difficulty = d.diff as Difficulty;
+    }
     if (d.color) {
       if (d.group === 'new') this.newChar.color = Number(d.color);
-      else this.quick.color = Number(d.color);
+      else if (d.group === 'online') {
+        this.quick.color = Number(d.color);
+        this.nick = this.el.querySelector<HTMLInputElement>('.nick')?.value ?? this.nick;
+        const code = this.el.querySelector<HTMLInputElement>('.room[type="hidden"]')?.value ?? '';
+        const scroll = this.el.scrollTop;
+        this.showOnline(code);
+        this.el.scrollTop = scroll;
+        return;
+      }
+      else {
+        this.quick.color = Number(d.color);
+        // miniaturas dos carros na nova cor
+        const scroll = this.el.scrollTop;
+        this.showQuick();
+        this.el.scrollTop = scroll;
+        return;
+      }
+    }
+    if (d.qplanet) {
+      this.quickPlanet = d.qplanet;
+      const scroll = this.el.scrollTop;
+      this.showQuick();
+      this.el.scrollTop = scroll;
+      return;
     }
     if (d.tab && this.lastHub) {
       this.shopTab = d.tab as typeof this.shopTab;
       this.showShop(this.lastHub);
       return;
     }
-    if (d.toggle) this.actions.setAudio(d.toggle as 'music' | 'sfx' | 'announcer', d.on !== '1');
+    if (d.quality) {
+      const order: QualityPref[] = ['auto', 'baixo', 'medio', 'alto'];
+      this.actions.setQuality(order[(order.indexOf(d.quality as QualityPref) + 1) % order.length]);
+      return;
+    }
+    if (d.toggle) {
+      if (d.toggle === 'tilt') {
+        void setTiltSteering(d.on !== '1').then(() => this.lastAudio && this.showSettings(this.lastAudio));
+        return;
+      }
+      if (d.toggle === 'autothrottle') this.actions.setAutoThrottle(d.on !== '1');
+      else this.actions.setAudio(d.toggle as 'music' | 'sfx' | 'announcer', d.on !== '1');
+    }
     if (d.upgrade) this.actions.buyUpgrade(d.upgrade as UpgradeKind);
     if (d.charge) this.actions.buyCharge(d.charge as ChargeKind);
     if (d.buycar) this.actions.buyCar(d.buycar);
+    if (d.save) return this.actions.saveSlot(Number(d.save));
+    if (d.loadslot) return this.actions.loadSlot(Number(d.loadslot));
+    if (d.delslot) {
+      if (t.classList.contains('confirm')) {
+        this.actions.deleteSlot(Number(d.delslot));
+        this.showSlots(this.el.querySelector('[data-save]') ? 'save' : 'load', 'Slot apagado.');
+      } else {
+        t.classList.add('confirm');
+        t.textContent = 'Apagar?';
+      }
+      return;
+    }
 
     switch (d.act) {
       case 'continue':
@@ -454,11 +970,17 @@ export class Menus {
       case 'new':
         return this.showNewCampaign();
       case 'new-start':
-        return this.actions.newCampaign(this.newChar.characterId, this.newChar.color);
+        return this.actions.newCampaign({ ...this.newChar });
       case 'quick':
         return this.showQuick();
       case 'quick-start':
         return this.actions.quickRace({ ...this.quick });
+      case 'load':
+        return this.showSlots('load');
+      case 'save':
+        return this.showSlots('save');
+      case 'slots-back':
+        return this.slotsFrom === 'hub' ? this.actions.backToHub() : this.showMain(this.hasSave);
       case 'password':
         return this.showPassword(null);
       case 'show-password':
@@ -475,6 +997,8 @@ export class Menus {
         if (!ok) this.el.querySelector('.pw-msg')!.textContent = 'Senha inválida.';
         return;
       }
+      case 'advance':
+        return this.actions.advanceEarly();
       case 'hub-race':
         return this.actions.campaignRace();
       case 'shop':
@@ -495,6 +1019,12 @@ export class Menus {
         return this.actions.openSettings();
       case 'close-settings':
         return this.actions.closeSettings();
+      case 'fullscreen':
+        return this.actions.toggleFullscreen();
+      case 'install':
+        return this.actions.install();
+      case 'quit-game':
+        return this.actions.quitGame();
       case 'pick-music':
         this.el.querySelector<HTMLInputElement>('.music-files')?.click();
         return;
@@ -502,6 +1032,44 @@ export class Menus {
         return this.actions.clearMusic();
       case 'skip-track':
         return this.actions.skipTrack();
+      case 'online':
+        return this.showOnline();
+      case 'online-create':
+        return this.actions.onlineCreate(this.onlineOptions());
+      case 'online-join': {
+        const code = this.el.querySelector<HTMLInputElement>('.room')?.value ?? '';
+        if (code.replace(/\s/g, '').length < 4) {
+          this.el.querySelector('.online-msg')!.textContent = 'Digite o código de 4 letras da sala.';
+          return;
+        }
+        return this.actions.onlineJoin(this.onlineOptions(), code);
+      }
+      case 'online-start':
+        return this.actions.onlineStart(this.el.querySelector<HTMLSelectElement>('.lobby-track')?.value ?? this.quick.trackId, this.fillCpu);
+      case 'online-leave':
+        return this.actions.onlineLeave();
+      case 'online-lobby':
+        return this.actions.onlineLobby();
+      case 'cpu-toggle':
+        this.fillCpu = !this.fillCpu;
+        if (this.lastLobby) this.showLobby(this.lastLobby);
+        return;
+      case 'share-link': {
+        const link = this.lastLobby?.link ?? '';
+        const msg = this.el.querySelector('.share-msg')!;
+        if (typeof navigator.share === 'function') {
+          void navigator.share({ title: "Rock 'n' Roll Racing 3D", text: `Corre comigo! Sala ${this.lastLobby?.code}`, url: link }).catch(() => {});
+        } else {
+          void navigator.clipboard
+            ?.writeText(link)
+            .then(() => (msg.textContent = 'Link copiado!'))
+            .catch(() => {
+              this.el.querySelector<HTMLInputElement>('.room-link')?.select();
+              msg.textContent = 'Selecione e copie o link.';
+            });
+        }
+        return;
+      }
     }
     this.refresh();
   }

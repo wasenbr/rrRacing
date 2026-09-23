@@ -1,0 +1,221 @@
+/* HUD de corrida: faixa no alto inspirada no SNES, com acabamento metálico. */
+.rh {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  font-family: 'Arial Black', 'Trebuchet MS', Impact, sans-serif;
+  font-weight: 900;
+  color: #fff;
+  --rh-plate: linear-gradient(180deg, rgba(40, 40, 48, 0.88), rgba(12, 12, 16, 0.88));
+  --rh-edge: #9a9aa6;
+}
+.rh b, .rh span, .rh small { font-style: italic; }
+
+.rh-left {
+  position: absolute;
+  top: max(8px, env(safe-area-inset-top));
+  left: max(8px, env(safe-area-inset-left));
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+.rh-right {
+  position: absolute;
+  top: max(8px, env(safe-area-inset-top));
+  right: max(10px, env(safe-area-inset-right));
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+/* minimapa num quadro, como o do original */
+.rh-mapframe {
+  width: 138px;
+  height: 138px;
+  padding: 4px;
+  background: var(--rh-plate);
+  border: 2px solid var(--rh-edge);
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 2px #000, 0 3px 10px rgba(0, 0, 0, 0.6);
+}
+.rh-map { width: 100%; height: 100%; display: block; }
+
+.rh-mid { display: flex; flex-direction: column; gap: 6px; }
+
+/* armas: placa com ícone, contador grande */
+.rh-weapons { display: flex; gap: 6px; }
+.rh-weapons .w { position: relative; display: flex; flex-direction: column; align-items: center; }
+.rh-weapons .ic {
+  width: 50px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border: 2px solid var(--rh-edge);
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 2px rgba(0, 0, 0, 0.6), 0 3px 8px rgba(0, 0, 0, 0.6);
+  background: linear-gradient(180deg, #ffb24a, #e0520e 60%, #8a2a04);
+  color: #2a0a00;
+}
+.rh-weapons .rear .ic { background: linear-gradient(180deg, #ffe45a, #d8a010 60%, #7a5000); color: #2a1a00; }
+.rh-weapons .assist.nitro .ic { background: linear-gradient(180deg, #8ae4ff, #1a8ae0 60%, #0a3a7a); color: #021a30; }
+.rh-weapons .assist.jump .ic { background: linear-gradient(180deg, #a0ff7a, #30b020 60%, #0a4a08); color: #042a00; }
+.rh-weapons .w svg { width: 30px; height: 30px; filter: drop-shadow(0 1px 0 rgba(255, 255, 255, 0.55)); }
+.rh-weapons .w b {
+  position: absolute;
+  right: -6px;
+  bottom: 10px;
+  font-size: 22px;
+  line-height: 1;
+  color: #fff;
+  -webkit-text-stroke: 1.5px #000;
+  paint-order: stroke fill;
+  text-shadow: 0 2px 0 #000;
+}
+.rh-weapons .w small {
+  font-family: 'Trebuchet MS', sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  margin-top: 2px;
+  color: #fff;
+  text-shadow: 1px 0 0 #000, -1px 0 0 #000, 0 1px 0 #000, 0 -1px 0 #000, 0 1px 3px #000;
+  max-width: 70px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rh-weapons .w.empty .ic { background: linear-gradient(180deg, #6a6a72, #3a3a40); color: #1a1a1e; }
+.rh-weapons .w.empty b { color: #9a9aa4; }
+.rh-weapons .w.active .ic { box-shadow: 0 0 16px #6ad0ff, inset 0 0 0 2px rgba(255, 255, 255, 0.6); filter: brightness(1.3); }
+
+/* blindagem em esferas coloridas */
+.rh-armor { display: flex; gap: 3px; padding: 4px 6px; background: var(--rh-plate); border: 2px solid var(--rh-edge); border-radius: 12px; align-self: flex-start; }
+.rh-armor i {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #666, #1a1a1e 70%);
+  box-shadow: 0 0 0 1px #000;
+}
+.rh-armor.ok i.on { background: radial-gradient(circle at 35% 30%, #fff, #3cff4a 35%, #0a6a10); }
+.rh-armor.mid i.on { background: radial-gradient(circle at 35% 30%, #fff, #ffd21a 35%, #8a5a00); }
+.rh-armor.low i.on { background: radial-gradient(circle at 35% 30%, #fff, #ff3a1a 35%, #6a0a00); animation: rh-blink 0.4s infinite alternate; }
+@keyframes rh-blink { to { opacity: 0.35; } }
+
+.rh-money { font-size: 20px; color: #ffd84a; text-shadow: 0 2px 0 #000, 0 0 6px #000; }
+
+/* colocação e voltas */
+.rh-row { display: flex; align-items: flex-end; gap: 12px; }
+.rh-pos b {
+  font-size: 46px;
+  line-height: 0.9;
+  background: linear-gradient(180deg, #fff 0%, #ff6a5a 45%, #b01008 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-stroke: 2px #000;
+  filter: drop-shadow(0 3px 0 #000);
+}
+.rh-pos.p1 b { background-image: linear-gradient(180deg, #fff 0%, #ffe066 40%, #c88a00 100%); }
+.rh-pos.p2 b { background-image: linear-gradient(180deg, #fff 0%, #d8e0ea 45%, #6a7684 100%); }
+.rh-pos.p3 b { background-image: linear-gradient(180deg, #fff 0%, #f0a060 45%, #8a4a14 100%); }
+.rh-laps { display: flex; align-items: baseline; gap: 6px; }
+.rh-laps span { font-size: 14px; letter-spacing: 1px; color: #fff; text-shadow: 0 2px 0 #000; }
+.rh-laps b { font-size: 30px; color: #fff; -webkit-text-stroke: 1.5px #000; paint-order: stroke fill; text-shadow: 0 3px 0 #000; }
+.rh-lapdots { display: flex; gap: 4px; }
+.rh-lapdots i { width: 12px; height: 12px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #555, #111 70%); box-shadow: 0 0 0 1px #000; }
+.rh-lapdots i.done { background: radial-gradient(circle at 35% 30%, #fff, #3cff4a 35%, #0a6a10); }
+.rh-lapdots i.now { background: radial-gradient(circle at 35% 30%, #fff, #ffe04a 35%, #8a6a00); animation: rh-blink 0.6s infinite alternate; }
+.rh-time { font-size: 18px; font-variant-numeric: tabular-nums; text-shadow: 0 2px 0 #000, 0 0 6px #000; margin-top: 2px; }
+.rh-best { font-family: 'Trebuchet MS', sans-serif; font-size: 11px; font-weight: 700; color: #ddd; text-shadow: 0 1px 2px #000; }
+.rh-speed { display: flex; align-items: baseline; gap: 3px; text-shadow: 0 2px 0 #000; }
+.rh-speed b { font-size: 22px; font-variant-numeric: tabular-nums; }
+.rh-speed span { font-size: 11px; color: #ddd; }
+
+/* mensagens do centro: contagem, VAI!, VOLTA FINAL */
+.rh-center {
+  position: absolute;
+  top: 34%;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: 64px;
+  font-style: italic;
+  letter-spacing: 1px;
+  background: linear-gradient(180deg, #fff 0%, #ffe066 45%, #e05a00 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-stroke: 3px #000;
+  filter: drop-shadow(0 5px 0 #000) drop-shadow(0 0 18px rgba(255, 120, 0, 0.45));
+  opacity: 0;
+  transform: scale(1.6);
+  transition: opacity 0.12s, transform 0.18s cubic-bezier(0.2, 1.6, 0.4, 1);
+}
+.rh-center.show { opacity: 1; transform: scale(1); }
+.rh-center.m-count { font-size: 120px; }
+.rh-center.m-go { background-image: linear-gradient(180deg, #fff 0%, #7aff6a 45%, #0a8a10 100%); }
+.rh-center.m-warn { background-image: linear-gradient(180deg, #fff 0%, #ff7a5a 45%, #a00a00 100%); font-size: 52px; }
+
+.rh-toast {
+  position: absolute;
+  top: 150px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 14px;
+  font-family: 'Trebuchet MS', sans-serif;
+  font-weight: 700;
+  font-size: 15px;
+  background: rgba(10, 10, 14, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 16px;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.rh-toast.show { opacity: 1; }
+.rh-mirror { position: absolute; display: none; border: 3px solid #111; border-radius: 6px; box-shadow: 0 2px 8px #000; }
+
+/* telas pequenas (celular deitado) */
+@media (max-height: 520px), (max-width: 700px) {
+  .rh-mapframe { width: 92px; height: 92px; padding: 3px; }
+  .rh-weapons { gap: 4px; }
+  .rh-weapons .ic { width: 38px; height: 34px; }
+  .rh-weapons .w svg { width: 22px; height: 22px; }
+  .rh-weapons .w b { font-size: 17px; bottom: 2px; }
+  .rh-weapons .w small { display: none; }
+  .rh-armor i { width: 9px; height: 9px; }
+  .rh-armor { gap: 2px; padding: 3px 4px; }
+  .rh-money { font-size: 15px; }
+  .rh-pos b { font-size: 34px; }
+  .rh-laps b { font-size: 22px; }
+  .rh-laps span { font-size: 11px; }
+  .rh-lapdots i { width: 9px; height: 9px; }
+  .rh-time { font-size: 14px; }
+  .rh-speed b { font-size: 16px; }
+  .rh-center { font-size: 44px; }
+  .rh-center.m-count { font-size: 84px; }
+  .rh-toast { top: 108px; font-size: 13px; }
+}
+
+/* legibilidade em pistas claras (neve de Nho, deserto): contorno escuro em todo texto e uma
+   placa translúcida atrás do bloco de posição/voltas/tempo */
+.rh-right {
+  padding: 4px 8px 6px 12px;
+  border-radius: 10px;
+  background: radial-gradient(ellipse at 70% 40%, rgba(0, 0, 0, 0.42), rgba(0, 0, 0, 0.18) 70%, rgba(0, 0, 0, 0) 100%);
+}
+.rh-right, .rh-money, .rh-time, .rh-best, .rh-speed, .rh-laps span, .rh-toast {
+  text-shadow: 1.5px 0 0 #000, -1.5px 0 0 #000, 0 1.5px 0 #000, 0 -1.5px 0 #000, 0 2px 4px rgba(0, 0, 0, 0.9);
+}
+.rh-best, .rh-speed span { color: #f2f2f2; }
+
+/* vinheta leve: dá profundidade à cena (CSS, custo zero no celular) */
+.rh::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse at 50% 55%, rgba(0, 0, 0, 0) 58%, rgba(0, 0, 0, 0.32) 100%);
+}

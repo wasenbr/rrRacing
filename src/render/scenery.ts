@@ -1,48 +1,37 @@
+import { billboardGeometry, particleMaterial } from './effects';
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { createRng } from '../sim/math';
 import type { ThemeId, Track } from '../sim/track';
-import { canvasTexture } from './trackMesh';
-import { concreteNormal, mesaGeometry, rockGeometry, rockTexture, terrainNormal } from './textures';
+import { rockGeometry, rockTexture } from './textures';
 import type { Theme } from './themes';
+import { pipeTexture } from './trackStyle';
 
 export interface Scenery {
   group: THREE.Group;
   update: (t: number) => void;
 }
 
-function rustTexture(base: number, seed: number): THREE.CanvasTexture {
-  const rng = createRng(seed);
-  return canvasTexture(256, 256, (ctx) => {
-    ctx.fillStyle = `#${base.toString(16).padStart(6, '0')}`;
-    ctx.fillRect(0, 0, 256, 256);
-    for (let i = 0; i < 140; i++) {
-      ctx.fillStyle = rng() > 0.5 ? `rgba(120,50,20,${rng() * 0.35})` : `rgba(0,0,0,${rng() * 0.3})`;
-      ctx.beginPath();
-      ctx.ellipse(rng() * 256, rng() * 256, 3 + rng() * 22, 2 + rng() * 10, rng() * 3, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.fillStyle = 'rgba(0,0,0,0.35)';
-    for (let y = 0; y < 256; y += 42) ctx.fillRect(0, y, 256, 3); // soldas
-  });
-}
+type PropKind =
+  | 'refinery' | 'torch' | 'dome' | 'crate'
+  | 'totem' | 'pod' | 'eggs' | 'skullPole' | 'claw'
+  | 'stump' | 'palm' | 'rock' | 'log'
+  | 'crater' | 'ribs' | 'boulder'
+  | 'pine' | 'iceCrystal' | 'snowRock'
+  | 'obelisk' | 'lavaTorch' | 'hellDome';
 
-type PropKind = 'flamePipe' | 'tank' | 'tower' | 'pipeline' | 'rock' | 'reeds' | 'crater' | 'crystal' | 'mesa' | 'cactus' | 'spire' | 'post' | 'vent';
-
-/** Que tipo de objeto aparece em cada planeta, e com que frequência. */
+/** Objetos de cada planeta (tirados dos mapas do original) e sua frequência. */
 const PROPS: Record<ThemeId, [PropKind, number][]> = {
-  // pântano químico com refinarias e canos queimando metano
-  chem6: [['flamePipe', 18], ['tank', 12], ['tower', 12], ['pipeline', 13], ['rock', 25], ['reeds', 20]],
-  // roxo e preto, crateras lunares
-  drakonis: [['crater', 30], ['rock', 30], ['crystal', 20], ['spire', 12], ['tower', 8]],
-  // terra marrom e oceano azul
-  bogmire: [['rock', 35], ['post', 25], ['reeds', 25], ['tank', 8], ['pipeline', 7]],
-  // deserto
-  newmojave: [['mesa', 22], ['cactus', 35], ['rock', 35], ['post', 8]],
-  // rocha escura e cristais
-  nho: [['spire', 30], ['crystal', 30], ['rock', 30], ['crater', 10]],
-  // lava
-  inferno: [['vent', 25], ['spire', 25], ['rock', 35], ['flamePipe', 15]],
+  chem6: [['refinery', 16], ['torch', 30], ['dome', 10], ['crate', 8]],
+  drakonis: [['totem', 18], ['pod', 16], ['eggs', 18], ['skullPole', 22], ['claw', 8]],
+  bogmire: [['stump', 40], ['palm', 18], ['rock', 18], ['log', 14]],
+  newmojave: [['crater', 26], ['ribs', 22], ['boulder', 30]],
+  nho: [['pine', 45], ['iceCrystal', 22], ['snowRock', 22]],
+  inferno: [['obelisk', 24], ['lavaTorch', 20], ['hellDome', 14], ['boulder', 20]],
 };
+
+/** Altura aproximada (para não esconder a pista na vista aérea). */
+const TALL: Partial<Record<PropKind, number>> = { refinery: 9, torch: 6, totem: 6, pod: 4, palm: 7, pine: 7, obelisk: 10, lavaTorch: 6, claw: 5 };
 
 function pickKind(table: [PropKind, number][], r: number): PropKind {
   const total = table.reduce((a, [, w]) => a + w, 0);
@@ -54,40 +43,74 @@ function pickKind(table: [PropKind, number][], r: number): PropKind {
   return table[table.length - 1][0];
 }
 
+/**
+ * Junta geometrias estáticas por material: centenas de objetos viram poucas chamadas de desenho
+ * (importante no celular).
+ */
+class Batch {
+  private parts = new Map<THREE.Material, THREE.BufferGeometry[]>();
+  private m = new THREE.Matrix4();
+  private q = new THREE.Quaternion();
+  add(geo: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number, z: number, rotY = 0, sx = 1, sy = 1, sz = 1, rotX = 0, rotZ = 0): void {
+    const g = (geo.index ? geo.toNonIndexed() : geo.clone()) as THREE.BufferGeometry;
+    for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal' && k !== 'uv') g.deleteAttribute(k);
+    this.q.setFromEuler(new THREE.Euler(rotX, rotY, rotZ, 'YXZ'));
+    this.m.compose(new THREE.Vector3(x, y, z), this.q, new THREE.Vector3(sx, sy, sz));
+    g.applyMatrix4(this.m);
+    if (!this.parts.has(mat)) this.parts.set(mat, []);
+    this.parts.get(mat)!.push(g);
+  }
+  build(group: THREE.Group, shadows: boolean): void {
+    for (const [mat, list] of this.parts) {
+      const merged = mergeGeometries(list, false);
+      if (!merged) continue;
+      const mesh = new THREE.Mesh(merged, mat);
+      mesh.castShadow = shadows;
+      mesh.receiveShadow = shadows;
+      group.add(mesh);
+      for (const g of list) g.dispose();
+    }
+  }
+}
+
 /** Cenário ao redor da pista, gerado por código de acordo com o planeta. */
-export function buildScenery(track: Track, theme: Theme, themeId: ThemeId, shadows: boolean, seed = 6): Scenery {
+export function buildScenery(track: Track, theme: Theme, themeId: ThemeId, shadows: boolean, seed = 6, dense = shadows): Scenery {
   const group = new THREE.Group();
+  const batch = new Batch();
   const rng = createRng(seed);
   const b = track.bounds();
-  const margin = 70;
+  const margin = 55;
   const G = theme.groundLevel;
-  const rust = theme.props.map((c, i) => new THREE.MeshStandardMaterial({ map: rustTexture(c, 10 + i), roughness: 0.7, metalness: 0.6 }));
-  // rochas com cor variada e relevo (nada de polígonos chapados)
-  const rock = new THREE.MeshStandardMaterial({ map: rockTexture(theme.props[0]), normalMap: concreteNormal(), normalScale: new THREE.Vector2(1.5, 1.5), roughness: 0.95 });
-  const rockDark = new THREE.MeshStandardMaterial({ map: rockTexture(theme.skirt), normalMap: concreteNormal(), normalScale: new THREE.Vector2(1.5, 1.5), roughness: 0.95 });
-  const mesaMat = new THREE.MeshStandardMaterial({ map: rockTexture(theme.props[0]), normalMap: terrainNormal(), normalScale: new THREE.Vector2(2, 2), roughness: 0.97, vertexColors: true });
-  // poucas variações de geometria, compartilhadas entre as instâncias
-  const rockGeos = [0, 1, 2, 3, 4, 5].map((i) => rockGeometry(1, seed * 10 + i));
-  const crystalMat = new THREE.MeshStandardMaterial({ color: theme.glow, emissive: theme.glow, emissiveIntensity: 1.2, roughness: 0.2, metalness: 0.3, flatShading: true });
-  const plant = new THREE.MeshStandardMaterial({ color: themeId === 'newmojave' ? 0x4a7a2a : 0x3a4a22, roughness: 1 });
-  const wood = new THREE.MeshStandardMaterial({ color: 0x4a3420, roughness: 0.95 });
+  const [c0, c1, c2] = theme.props;
+
+  // materiais compartilhados
+  const std = (color: number, rough = 0.7, metal = 0, extra: Partial<THREE.MeshStandardMaterialParameters> = {}) =>
+    new THREE.MeshStandardMaterial({ color, roughness: rough, metalness: metal, ...extra });
+  const pipeMat = new THREE.MeshStandardMaterial({ map: pipeTexture(theme.wallAccent), metalness: 0.85, roughness: 0.3 });
+  const steel = std(0x9aa0a8, 0.35, 0.85);
+  const red = std(0xd02020, 0.4, 0.3, { emissive: 0x300000 });
+  const bone = std(0xd8d4c8, 0.6);
+  const blue = std(c0, 0.3, 0.2, { emissive: new THREE.Color(c0).multiplyScalar(0.15) });
+  const purple = std(c1, 0.35, 0.2, { emissive: new THREE.Color(c1).multiplyScalar(0.2) });
+  const wood = std(0x5a3418, 0.95);
+  const leaf = std(0x2a8a24, 0.8);
+  const pineMat = std(0x1e5a2c, 0.9);
+  const snowMat = std(0xf2f6ff, 0.6);
+  const ice = std(0x8ab8ff, 0.1, 0.1, { emissive: 0x10306a, transparent: true, opacity: 0.92 });
+  const rockMat = new THREE.MeshStandardMaterial({ map: rockTexture(c0), roughness: 0.95 });
+  const rockMat2 = new THREE.MeshStandardMaterial({ map: rockTexture(c2 ?? c1), roughness: 0.95 });
+  const hellStone = std(0x4a1208, 0.6, 0.2, { emissive: 0x3a0800 });
+  const dark = std(0x1a0808, 0.7);
+  const glowMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(theme.glow).multiplyScalar(2.5) });
+  const rockGeos = [0, 1, 2, 3].map((i) => rockGeometry(1, seed * 10 + i, 2));
+
+  // chamas animadas (tochas e refinarias) e fumaça subindo
   const flameMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0xff7a20).multiplyScalar(3), transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false });
   const flameCore = new THREE.MeshBasicMaterial({ color: new THREE.Color(0xffe6a0).multiplyScalar(4), transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false });
-  const flameGeo = new THREE.ConeGeometry(0.9, 4, 10, 1, true);
-  flameGeo.translate(0, 2, 0);
+  const flameGeo = new THREE.ConeGeometry(0.5, 2.2, 10, 1, true).translate(0, 1.1, 0);
   const flames: { outer: THREE.Mesh; inner: THREE.Mesh; phase: number }[] = [];
-  const glows: { mesh: THREE.Mesh; phase: number }[] = [];
-
-  const mesh = (geo: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number, z: number) => {
-    const m = new THREE.Mesh(geo, mat);
-    m.position.set(x, y, z);
-    m.castShadow = shadows;
-    m.receiveShadow = shadows;
-    group.add(m);
-    return m;
-  };
-
-  const addFlame = (x: number, y: number, z: number, scale: number) => {
+  const smokeSources: THREE.Vector3[] = [];
+  const addFlame = (x: number, y: number, z: number, scale: number, smoke = true) => {
     const outer = new THREE.Mesh(flameGeo, flameMat);
     const inner = new THREE.Mesh(flameGeo, flameCore);
     outer.position.set(x, y, z);
@@ -96,166 +119,280 @@ export function buildScenery(track: Track, theme: Theme, themeId: ThemeId, shado
     inner.scale.setScalar(scale * 0.55);
     group.add(outer, inner);
     flames.push({ outer, inner, phase: rng() * 10 });
+    if (smoke) smokeSources.push(new THREE.Vector3(x, y + 2 * scale, z));
   };
 
   const clearOfTrack = (x: number, z: number, need: number) => {
     const q = track.query(x, z);
     return Math.hypot(q.outside, Math.max(0, Math.abs(q.lateral) - track.halfWidth)) > need;
   };
-
-  /**
-   * Na vista aérea (câmera a 30°, olhando para +x/+z), um objeto de altura h esconde o que
-   * está até ~1,7·h atrás dele. Objetos altos não podem ficar nessa posição em relação à pista.
-   */
+  /** Na vista aérea (olhando para +x/+z), um objeto alto esconde o que fica logo atrás dele. */
   const hidesTrack = (x: number, z: number, h: number) => {
-    const reach = h * 1.8;
+    if (h <= 0) return false;
+    const reach = h * 1.9;
     for (let k = 1; k <= 6; k++) {
       const d = (reach * k) / 6 / Math.SQRT2;
       if (!clearOfTrack(x + d, z + d, 1)) return true;
     }
     return false;
   };
-  const TALL: Partial<Record<PropKind, number>> = { tank: 10, tower: 26, mesa: 18, spire: 18, flamePipe: 14 };
 
   const table = PROPS[themeId];
+  const maxProps = dense ? 380 : 180;
   let placed = 0;
-  for (let tries = 0; tries < 1500 && placed < 150; tries++) {
+  for (let tries = 0; tries < 4000 && placed < maxProps; tries++) {
     const x = b.minX - margin + rng() * (b.maxX - b.minX + margin * 2);
     const z = b.minZ - margin + rng() * (b.maxZ - b.minZ + margin * 2);
     const kind = pickKind(table, rng());
-    const big = kind === 'tank' || kind === 'tower' || kind === 'mesa' || kind === 'crater';
-    if (!clearOfTrack(x, z, big ? 16 : 8)) continue;
+    if (!clearOfTrack(x, z, 3.5)) continue;
     const tall = TALL[kind];
-    if (tall && hidesTrack(x, z, tall)) continue;
+    if (tall && hidesTrack(x, z, tall + G)) continue;
     placed++;
-    const mat = rust[Math.floor(rng() * rust.length)];
+    const rot = rng() * Math.PI * 2;
+    const s = 0.8 + rng() * 0.5;
 
     switch (kind) {
-      case 'flamePipe': {
-        const h = 6 + rng() * 10;
-        mesh(new THREE.CylinderGeometry(0.55, 0.7, h, 12), mat, x, G + h / 2, z);
-        mesh(new THREE.CylinderGeometry(0.8, 0.8, 0.5, 12), mat, x, G + h, z);
-        addFlame(x, G + h + 0.2, z, 0.8 + rng() * 0.6);
+      /* ---------------- Chem VI ---------------- */
+      case 'refinery': {
+        // tanque cilíndrico empilhado, com anéis vermelhos e canhões no topo
+        const r = 1.6 * s;
+        const levels = 1 + Math.floor(rng() * 2);
+        const hh = 2.6 * s;
+        for (let k = 0; k < levels; k++) {
+          const y = G + hh / 2 + k * (hh + 0.2);
+          batch.add(new THREE.CylinderGeometry(r, r, hh, 20), pipeMat, x, y, z, rot);
+          batch.add(new THREE.TorusGeometry(r * 1.01, 0.12, 6, 20), red, x, y + hh * 0.2, z, 0, 1, 1, 1, Math.PI / 2);
+          batch.add(new THREE.TorusGeometry(r * 1.01, 0.12, 6, 20), red, x, y - hh * 0.2, z, 0, 1, 1, 1, Math.PI / 2);
+        }
+        const topY = G + levels * (hh + 0.2);
+        batch.add(new THREE.SphereGeometry(r, 18, 8, 0, Math.PI * 2, 0, Math.PI / 2), steel, x, topY - 0.2, z, 0, 1, 0.45, 1);
+        for (const a of [0, 2.1, 4.2]) batch.add(new THREE.CylinderGeometry(0.1, 0.1, 1.2, 6), steel, x + Math.cos(a + rot) * r * 0.5, topY + 0.3, z + Math.sin(a + rot) * r * 0.5, a + rot, 1, 1, 1, Math.PI / 2.4);
+        const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.22, 8, 6), new THREE.MeshBasicMaterial({ color: new THREE.Color(0xff2020).multiplyScalar(3) }));
+        lamp.position.set(x, topY + 0.35, z);
+        group.add(lamp);
         break;
       }
-      case 'tank': {
-        const r = 3 + rng() * 3;
-        const h = 5 + rng() * 5;
-        mesh(new THREE.CylinderGeometry(r + 1, r + 1.4, 1.5, 20), rockDark, x, G + 0.5, z);
-        mesh(new THREE.CylinderGeometry(r, r, h, 24), mat, x, G + 1.2 + h / 2, z);
-        mesh(new THREE.SphereGeometry(r, 24, 8, 0, Math.PI * 2, 0, Math.PI / 2), mat, x, G + 1.2 + h, z).scale.y = 0.35;
-        mesh(new THREE.BoxGeometry(0.4, h, 0.15), rust[0], x + r + 0.1, G + 1.2 + h / 2, z);
+      case 'torch': {
+        // tocha de gás: cano fino com chama e fumaça
+        const h = 1.8 + rng() * 1.5;
+        batch.add(new THREE.CylinderGeometry(0.16, 0.22, h, 8), steel, x, G + h / 2, z);
+        batch.add(new THREE.CylinderGeometry(0.28, 0.28, 0.2, 8), dark, x, G + h, z);
+        addFlame(x, G + h + 0.1, z, 0.6 + rng() * 0.3);
         break;
       }
-      case 'tower': {
-        const h = 14 + rng() * 14;
-        mesh(new THREE.CylinderGeometry(1.2, 1.6, h, 14), mat, x, G + h / 2, z);
-        for (let k = 1; k < 4; k++) mesh(new THREE.TorusGeometry(1.7, 0.18, 6, 16), rust[0], x, G + (h * k) / 4, z).rotation.x = Math.PI / 2;
-        if (theme.flames && rng() > 0.5) addFlame(x, G + h, z, 1.2);
-        else {
-          const lamp = mesh(new THREE.SphereGeometry(0.5, 10, 8), new THREE.MeshBasicMaterial({ color: new THREE.Color(0xff2020).multiplyScalar(3) }), x, G + h + 0.4, z);
-          glows.push({ mesh: lamp, phase: rng() * 6 });
+      case 'dome': {
+        batch.add(new THREE.SphereGeometry(1.4 * s, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2), steel, x, G, z, rot, 1, 0.7, 1);
+        batch.add(new THREE.CylinderGeometry(0.14, 0.14, 1.5, 6), dark, x + Math.cos(rot) * 0.6, G + 1, z + Math.sin(rot) * 0.6, rot, 1, 1, 1, Math.PI / 2.5);
+        break;
+      }
+      case 'crate': {
+        batch.add(new THREE.BoxGeometry(1.4, 0.8, 1.1), steel, x, G + 0.4, z, rot);
+        batch.add(new THREE.BoxGeometry(1.45, 0.12, 1.15), dark, x, G + 0.6, z, rot);
+        break;
+      }
+      /* ---------------- Drakonis ---------------- */
+      case 'totem': {
+        // totem de ossos: coluna, caveira no topo e ossos cruzados
+        const h = 3 + rng() * 1.5;
+        batch.add(new THREE.CylinderGeometry(0.16, 0.22, h, 8), bone, x, G + h / 2, z);
+        batch.add(new THREE.SphereGeometry(0.42, 12, 10), bone, x, G + h + 0.25, z, rot, 1, 1.1, 1);
+        batch.add(new THREE.CylinderGeometry(0.1, 0.1, 1.8, 6), bone, x, G + h * 0.65, z, rot, 1, 1, 1, 0, 0.9);
+        batch.add(new THREE.CylinderGeometry(0.1, 0.1, 1.8, 6), bone, x, G + h * 0.65, z, rot, 1, 1, 1, 0, -0.9);
+        const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.08, 6, 4), glowMat);
+        eyeL.position.set(x + Math.cos(rot) * 0.3, G + h + 0.3, z + Math.sin(rot) * 0.3);
+        group.add(eyeL);
+        break;
+      }
+      case 'pod': {
+        // casulo alienígena azul com abertura
+        batch.add(new THREE.CapsuleGeometry(0.9 * s, 1.4 * s, 6, 12), blue, x, G + 1.3 * s, z, rot, 1, 1, 0.8);
+        batch.add(new THREE.TorusGeometry(0.9 * s, 0.14, 8, 16), purple, x, G + 0.35, z, 0, 1, 1, 1, Math.PI / 2);
+        break;
+      }
+      case 'eggs': {
+        // monte de ovos/bolhas azuis
+        for (let k = 0; k < 5; k++) {
+          const a = (k / 5) * Math.PI * 2 + rot;
+          const rr = 0.45 + rng() * 0.3;
+          batch.add(new THREE.SphereGeometry(rr, 12, 8), blue, x + Math.cos(a) * 0.6, G + rr * 0.9, z + Math.sin(a) * 0.6, 0, 1, 1.25, 1);
+        }
+        batch.add(new THREE.SphereGeometry(0.6, 12, 8), blue, x, G + 1.1, z, 0, 1, 1.3, 1);
+        break;
+      }
+      case 'skullPole': {
+        const h = 1.6 + rng();
+        batch.add(new THREE.CylinderGeometry(0.06, 0.06, h, 5), bone, x, G + h / 2, z);
+        batch.add(new THREE.SphereGeometry(0.22, 10, 8), bone, x, G + h + 0.1, z, 0, 1, 1.15, 1);
+        break;
+      }
+      case 'claw': {
+        // máquina de garras roxas (as armas-tentáculo do mapa)
+        batch.add(new THREE.CylinderGeometry(0.5, 0.7, 1.2, 10), purple, x, G + 0.6, z);
+        for (let k = 0; k < 4; k++) {
+          const a = rot + (k - 1.5) * 0.35;
+          batch.add(new THREE.ConeGeometry(0.16, 2.6, 6), purple, x + Math.cos(a) * 0.3, G + 2.2, z + Math.sin(a) * 0.3, a, 1, 1, 1, 0.35, 0);
+        }
+        batch.add(new THREE.CylinderGeometry(0.14, 0.14, 1.8, 6), blue, x, G + 1.2, z, rot, 1, 1, 1, Math.PI / 2);
+        break;
+      }
+      /* ---------------- Bogmire ---------------- */
+      case 'stump': {
+        const r = 0.5 + rng() * 0.5;
+        batch.add(new THREE.CylinderGeometry(r, r * 1.3, 0.9, 10), wood, x, G + 0.3, z, rot);
+        break;
+      }
+      case 'palm': {
+        const h = 3 + rng() * 2;
+        const lean = (rng() - 0.5) * 0.4;
+        batch.add(new THREE.CylinderGeometry(0.14, 0.24, h, 7), wood, x, G + h / 2, z, rot, 1, 1, 1, lean);
+        const tx = x + Math.sin(lean) * h * 0.5 * Math.cos(rot);
+        const tz = z + Math.sin(lean) * h * 0.5 * Math.sin(rot);
+        for (let k = 0; k < 6; k++) {
+          const a = (k / 6) * Math.PI * 2;
+          batch.add(new THREE.ConeGeometry(0.35, 2.4, 4), leaf, tx + Math.cos(a) * 0.9, G + h - 0.2, tz + Math.sin(a) * 0.9, -a + Math.PI / 2, 1, 1, 0.35, 0, Math.PI / 2.4);
         }
         break;
       }
-      case 'pipeline': {
-        const len = 10 + rng() * 20;
-        const ang = rng() * Math.PI;
-        const pipe = mesh(new THREE.CylinderGeometry(0.5, 0.5, len, 10), mat, x, G + 2.5, z);
-        pipe.rotation.set(0, ang, Math.PI / 2);
-        for (const t of [-0.4, 0, 0.4]) mesh(new THREE.BoxGeometry(0.4, 2.5, 0.4), rust[0], x + Math.cos(ang) * len * t, G + 1.25, z - Math.sin(ang) * len * t);
+      case 'rock':
+      case 'boulder':
+      case 'snowRock': {
+        const r = (kind === 'boulder' ? 0.9 : 0.7) + rng() * 1.3;
+        const mat = kind === 'snowRock' ? snowMat : rng() > 0.5 ? rockMat : rockMat2;
+        batch.add(rockGeos[Math.floor(rng() * rockGeos.length)], mat, x, G + r * 0.2, z, rot, r, r * (0.5 + rng() * 0.4), r * (1 + rng() * 0.4));
         break;
       }
-      case 'rock': {
-        const r = 1.5 + rng() * 4;
-        const m = mesh(rockGeos[Math.floor(rng() * rockGeos.length)], rng() > 0.5 ? rock : rockDark, x, G + r * 0.05, z);
-        m.scale.set(r, r * (0.45 + rng() * 0.5), r * (1 + rng() * 0.6));
-        m.rotation.y = rng() * Math.PI;
+      case 'log': {
+        batch.add(new THREE.CylinderGeometry(0.28, 0.28, 2.6 + rng() * 2, 8), wood, x, G + 0.1, z, rot, 1, 1, 1, 0, Math.PI / 2);
         break;
       }
-      case 'reeds': {
-        const reeds = new THREE.Group();
-        for (let k = 0; k < 7; k++) {
-          const h = 1 + rng() * 2;
-          const r = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.06, h, 4), plant);
-          r.position.set((rng() - 0.5) * 2, G + h / 2, (rng() - 0.5) * 2);
-          r.rotation.set((rng() - 0.5) * 0.4, 0, (rng() - 0.5) * 0.4);
-          reeds.add(r);
-        }
-        reeds.position.set(x, 0, z);
-        group.add(reeds);
-        break;
-      }
+      /* ---------------- New Mojave ---------------- */
       case 'crater': {
-        const r = 4 + rng() * 6;
-        const rim = mesh(new THREE.TorusGeometry(r, r * 0.22, 10, 36), rock, x, G, z);
-        rim.rotation.x = Math.PI / 2;
-        rim.scale.z = 0.5;
-        const floor = mesh(new THREE.CircleGeometry(r, 24), rockDark, x, G + 0.02, z);
-        floor.rotation.x = -Math.PI / 2;
+        const r = 1.6 + rng() * 2.2;
+        batch.add(new THREE.TorusGeometry(r, r * 0.25, 8, 22), rockMat, x, G, z, 0, 1, 1, 0.45, Math.PI / 2);
+        batch.add(new THREE.CircleGeometry(r, 18), dark, x, G + 0.03, z, 0, 1, 1, 1, -Math.PI / 2);
         break;
       }
-      case 'crystal': {
-        const n = 2 + Math.floor(rng() * 3);
+      case 'ribs': {
+        // ossada de um bicho gigante: arcos de costelas
+        for (let k = 0; k < 5; k++) {
+          const off = (k - 2) * 0.55;
+          batch.add(new THREE.TorusGeometry(1.1 - Math.abs(k - 2) * 0.12, 0.08, 6, 12, Math.PI), bone, x + Math.cos(rot) * off, G, z + Math.sin(rot) * off, rot + Math.PI / 2);
+        }
+        batch.add(new THREE.CylinderGeometry(0.1, 0.1, 3, 6), bone, x, G + 0.1, z, rot, 1, 1, 1, 0, Math.PI / 2);
+        break;
+      }
+      /* ---------------- Nho ---------------- */
+      case 'pine': {
+        const h = 2.4 + rng() * 2;
+        batch.add(new THREE.CylinderGeometry(0.1, 0.16, h * 0.35, 6), wood, x, G + h * 0.17, z);
+        for (let k = 0; k < 3; k++) {
+          const w = (1.1 - k * 0.28) * (h / 3);
+          batch.add(new THREE.ConeGeometry(w, h * 0.45, 8), pineMat, x, G + h * (0.35 + k * 0.22), z, rot);
+          batch.add(new THREE.ConeGeometry(w * 0.7, h * 0.12, 8), snowMat, x, G + h * (0.49 + k * 0.22), z, rot);
+        }
+        break;
+      }
+      case 'iceCrystal': {
+        const n = 3 + Math.floor(rng() * 3);
         for (let k = 0; k < n; k++) {
-          const h = 2 + rng() * 5;
-          const c = mesh(new THREE.OctahedronGeometry(0.8, 0), crystalMat, x + (rng() - 0.5) * 3, G + h / 2, z + (rng() - 0.5) * 3);
-          c.scale.set(0.7, h / 1.6, 0.7);
-          c.rotation.set((rng() - 0.5) * 0.5, rng() * 3, (rng() - 0.5) * 0.5);
-          c.castShadow = false;
+          const h = 1 + rng() * 2.4;
+          batch.add(new THREE.OctahedronGeometry(0.5, 0), ice, x + (rng() - 0.5) * 1.6, G + h / 2, z + (rng() - 0.5) * 1.6, rng() * 3, 0.8, h, 0.8, (rng() - 0.5) * 0.5, (rng() - 0.5) * 0.5);
         }
         break;
       }
-      case 'mesa': {
-        const r = 6 + rng() * 10;
-        const h = 6 + rng() * 14;
-        const m = mesh(mesaGeometry(r, h, Math.floor(rng() * 1000)), mesaMat, x, G + h / 2, z);
-        m.rotation.y = rng() * 3;
+      /* ---------------- Inferno ---------------- */
+      case 'obelisk': {
+        const h = 3 + rng() * 3;
+        batch.add(new THREE.CylinderGeometry(0.55, 0.9, h, 6), hellStone, x, G + h / 2, z, rot);
+        batch.add(new THREE.ConeGeometry(0.6, 1.2, 6), hellStone, x, G + h + 0.6, z, rot);
+        const core = new THREE.Mesh(new THREE.BoxGeometry(0.15, h * 0.5, 0.15), new THREE.MeshBasicMaterial({ color: new THREE.Color(0xff5010).multiplyScalar(2) }));
+        core.position.set(x + Math.cos(rot) * 0.62, G + h * 0.55, z + Math.sin(rot) * 0.62);
+        group.add(core);
         break;
       }
-      case 'cactus': {
-        const h = 2.5 + rng() * 3;
-        mesh(new THREE.CylinderGeometry(0.3, 0.35, h, 8), plant, x, G + h / 2, z);
-        for (const side of [-1, 1]) {
-          if (rng() > 0.6) continue;
-          const armH = 0.8 + rng();
-          const y = G + h * (0.4 + rng() * 0.3);
-          mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.8, 6), plant, x + side * 0.5, y, z).rotation.z = Math.PI / 2;
-          mesh(new THREE.CylinderGeometry(0.2, 0.22, armH, 6), plant, x + side * 0.9, y + armH / 2, z);
-        }
+      case 'lavaTorch': {
+        const h = 2 + rng() * 1.5;
+        batch.add(new THREE.CylinderGeometry(0.08, 0.1, h, 6), steel, x, G + h / 2, z);
+        addFlame(x, G + h, z, 0.5, false);
         break;
       }
-      case 'spire': {
-        const h = 8 + rng() * 18;
-        // pico de rocha: pedra orgânica esticada na vertical
-        const w = 1.5 + rng() * 2;
-        const m = mesh(rockGeos[Math.floor(rng() * rockGeos.length)], rockDark, x, G + h * 0.35, z);
-        m.scale.set(w, h * 0.55, w * (0.8 + rng() * 0.4));
-        m.rotation.set((rng() - 0.5) * 0.15, rng() * 3, (rng() - 0.5) * 0.15);
-        break;
-      }
-      case 'post': {
-        const h = 2 + rng() * 3;
-        mesh(new THREE.CylinderGeometry(0.25, 0.3, h, 6), wood, x, G + h / 2 - 0.5, z).rotation.z = (rng() - 0.5) * 0.3;
-        break;
-      }
-      case 'vent': {
-        const r = 1.5 + rng() * 1.5;
-        mesh(new THREE.CylinderGeometry(r * 0.6, r, 1.6, 10), rockDark, x, G + 0.8, z);
-        addFlame(x, G + 1.5, z, 0.7 + rng() * 0.5);
+      case 'hellDome': {
+        batch.add(new THREE.SphereGeometry(1.2, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2), steel, x, G, z, rot, 1, 0.6, 1);
+        batch.add(new THREE.CylinderGeometry(0.1, 0.1, 1.2, 6), dark, x, G + 0.8, z, rot, 1, 1, 1, Math.PI / 2.5);
         break;
       }
     }
   }
+  // detritos pequenos espalhados (pedras, cascalho): quebram o chão liso entre os objetos
+  if (!theme.liquid) {
+    const debris = dense ? 420 : 160;
+    const debrisMat = themeId === 'nho' ? snowMat : rockMat2;
+    for (let i = 0, tries = 0; i < debris && tries < 3000; tries++) {
+      const x = b.minX - margin + rng() * (b.maxX - b.minX + margin * 2);
+      const z = b.minZ - margin + rng() * (b.maxZ - b.minZ + margin * 2);
+      if (!clearOfTrack(x, z, 2)) continue;
+      i++;
+      const r = 0.15 + rng() * rng() * 0.9;
+      batch.add(rockGeos[i % 4], debrisMat, x, G + r * 0.2, z, rng() * 6, r * (1 + rng()), r * 0.6, r * (1 + rng()));
+    }
+  }
+  // Nho: aglomerados de cristais azuis na base dos paredões (como no SNES)
+  if (themeId === 'nho') {
+    const want = dense ? 150 : 70;
+    for (let i = 0, tries = 0; i < want && tries < 6000; tries++) {
+      const x = b.minX - 8 + rng() * (b.maxX - b.minX + 16);
+      const z = b.minZ - 8 + rng() * (b.maxZ - b.minZ + 16);
+      const q = track.query(x, z);
+      const d = Math.hypot(q.outside, Math.max(0, Math.abs(q.lateral) - track.halfWidth));
+      if (d < 1.2 || d > 4.5) continue;
+      i++;
+      const n = 2 + Math.floor(rng() * 3);
+      for (let k = 0; k < n; k++) {
+        const h = 1.2 + rng() * 3.2;
+        batch.add(new THREE.OctahedronGeometry(0.5, 0), ice, x + (rng() - 0.5) * 1.4, G + h / 2, z + (rng() - 0.5) * 1.4, rng() * 3, 0.7 + rng() * 0.4, h, 0.7 + rng() * 0.4, (rng() - 0.5) * 0.6, (rng() - 0.5) * 0.6);
+      }
+    }
+  }
+  batch.build(group, shadows);
+
+  // fumaça das tochas: billboards suaves que sobem e somem (reaproveitados em ciclo)
+  const PER = 4;
+  const smokeCount = Math.max(1, smokeSources.length * PER);
+  const bb = billboardGeometry(smokeCount);
+  const smokeMesh = new THREE.InstancedMesh(bb.geo, particleMaterial('smoke'), smokeCount);
+  smokeMesh.setColorAt(0, new THREE.Color(0x4a4440));
+  for (let i = 0; i < smokeCount; i++) {
+    smokeMesh.setColorAt(i, new THREE.Color(0x4a4440));
+    bb.rot.setX(i, i * 1.7);
+  }
+  smokeMesh.renderOrder = 2;
+  smokeMesh.count = smokeSources.length * PER;
+  smokeMesh.frustumCulled = false;
+  group.add(smokeMesh);
+  const sm = new THREE.Matrix4();
+  const sq = new THREE.Quaternion();
+  const sp = new THREE.Vector3();
+  const ss = new THREE.Vector3();
 
   const update = (t: number) => {
     for (const f of flames) {
-      const n = Math.sin(t * 13 + f.phase) * 0.12 + Math.sin(t * 29 + f.phase * 2) * 0.08;
+      const n = Math.sin(t * 13 + f.phase) * 0.14 + Math.sin(t * 29 + f.phase * 2) * 0.08;
       f.outer.scale.y = f.outer.scale.x * (1 + n);
       f.inner.scale.y = f.inner.scale.x * (1 + n * 1.5);
       f.outer.rotation.y = t * 2 + f.phase;
     }
-    for (const g of glows) g.mesh.visible = Math.sin(t * 3 + g.phase) > 0;
+    smokeSources.forEach((src, i) => {
+      for (let k = 0; k < PER; k++) {
+        const life = (t * 0.35 + k / PER + i * 0.37) % 1;
+        sp.set(src.x + Math.sin(i + life * 3) * 0.4 * life, src.y + life * 5, src.z + life * 0.8);
+        ss.setScalar(0.8 + life * 3);
+        sm.compose(sp, sq, ss);
+        smokeMesh.setMatrixAt(i * PER + k, sm);
+        bb.alpha.setX(i * PER + k, Math.min(1, life / 0.1) * (1 - life) * 0.8);
+      }
+    });
+    smokeMesh.instanceMatrix.needsUpdate = true;
+    bb.alpha.needsUpdate = true;
   };
   return { group, update };
 }

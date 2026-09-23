@@ -19,10 +19,17 @@ export interface CarPose {
 }
 
 // Direção fixa da câmera aérea: olhando "de baixo para cima e da direita", como no original.
-// Isométrico clássico 2:1 da pixel art (câmera a 30° de elevação), como no original.
-const ISO_DIR = new THREE.Vector3(-1, Math.SQRT2 * Math.tan(Math.PI / 6), -1).normalize();
+// Elevação de 32°: praticamente o isométrico 2:1 da pixel art do SNES (mostra as laterais dos
+// blocos da pista, a marca registrada do original), só um pouco mais alto para ver o piso.
+export const ISO_ELEVATION = (32 * Math.PI) / 180;
+const ISO_DIR = new THREE.Vector3(-1, Math.SQRT2 * Math.tan(ISO_ELEVATION), -1).normalize();
 const ISO_DISTANCE = 120;
+const COCKPIT_OFFSET = new THREE.Vector3(0, 0.22, 0.35);
 const BACK = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
+
+/** Perseguição: distância horizontal e altura mínimas até o carro (m). */
+const CHASE_MIN_DIST = 8.5;
+const CHASE_MIN_HEIGHT = 3.6;
 
 export class CameraRig {
   mode: CameraMode = 'iso';
@@ -33,8 +40,10 @@ export class CameraRig {
   private chasePos = new THREE.Vector3();
   private first = true;
   private aspect = 1;
-  /** metros de pista visíveis na vertical da vista aérea */
-  isoView = 40;
+  /** metros de pista visíveis na vertical da vista aérea (perto: carros grandes na tela) */
+  isoView = 23;
+  /** zoom atual (abre um pouco em alta velocidade: sensação de velocidade e mais pista à frente) */
+  private zoom = 1;
 
   constructor() {
     this.iso = new THREE.OrthographicCamera(-1, 1, 1, -1, 1, 400);
@@ -74,28 +83,73 @@ export class CameraRig {
       (Math.random() - 0.5) * car.shake,
       (Math.random() - 0.5) * car.shake,
     );
-    const k = this.first ? 1 : 1 - Math.exp(-dt * 6);
+    // teleporte (nova corrida, reaparecimento): a câmera salta em vez de atravessar o mapa
+    const ref = this.mode === 'iso' ? this.isoTarget : this.chasePos;
+    if (!this.first && this.mode !== 'cockpit' && ref.distanceTo(car.position) > 40) this.first = true;
 
     if (this.mode === 'iso') {
-      // olha um pouco à frente do carro, na direção do movimento
-      const lead = car.velocity.clone().setY(0).multiplyScalar(0.3);
-      lead.clampLength(0, 10);
+      // olha à frente do carro, na direção do movimento (mais pista à frente em alta velocidade)
+      const flat = car.velocity.clone().setY(0);
+      const speed = flat.length();
+      const lead = flat.multiplyScalar(0.3);
+      lead.clampLength(0, 9);
       const target = car.position.clone().add(lead);
-      this.isoTarget.lerp(target, this.first ? 1 : k);
+      this.isoTarget.lerp(target, this.first ? 1 : 1 - Math.exp(-dt * 8));
+      // abre o zoom com a velocidade (até +18%) — o cenário passa mais rápido na tela
+      const wantZoom = 1 + Math.min(1, Math.max(0, (speed - 12) / 28)) * 0.18;
+      this.zoom += (wantZoom - this.zoom) * (1 - Math.exp(-dt * 2));
+      const halfH = ((this.aspect < 1 ? this.isoView * 1.5 : this.isoView) / 2) * this.zoom;
+      if (Math.abs(this.iso.top - halfH) > 0.01) {
+        this.iso.top = halfH;
+        this.iso.bottom = -halfH;
+        this.iso.left = -halfH * this.aspect;
+        this.iso.right = halfH * this.aspect;
+        this.iso.updateProjectionMatrix();
+      }
       this.iso.position.copy(this.isoTarget).addScaledVector(ISO_DIR, ISO_DISTANCE).addScaledVector(shake, 0.5);
       this.iso.lookAt(this.isoTarget);
     } else if (this.mode === 'cockpit') {
-      const eye = car.eye.clone().applyQuaternion(car.quaternion).add(car.position);
+      const baseFov = this.aspect < 1 ? 85 : 70;
+      if (this.persp.fov !== baseFov) {
+        this.persp.fov = baseFov;
+        this.persp.updateProjectionMatrix();
+      }
+      // um pouco acima e à frente dos olhos do piloto: o painel ocupa menos da tela
+      const eye = car.eye.clone().add(COCKPIT_OFFSET).applyQuaternion(car.quaternion).add(car.position);
       this.persp.position.copy(eye).addScaledVector(shake, 0.25);
       this.persp.quaternion.copy(car.quaternion).multiply(BACK);
     } else {
       const fwd = new THREE.Vector3(Math.sin(car.heading), 0, Math.cos(car.heading));
-      const desired = car.position.clone().addScaledVector(fwd, -9).add(new THREE.Vector3(0, 4, 0));
+      // em alta velocidade a câmera fica um pouco mais para trás e o campo de visão abre
+      const speed = Math.hypot(car.velocity.x, car.velocity.z);
+      const fast = Math.min(1, Math.max(0, (speed - 10) / 30));
+      const fov = (this.aspect < 1 ? 85 : 70) + fast * 12;
+      if (Math.abs(this.persp.fov - fov) > 0.05) {
+        this.persp.fov += (fov - this.persp.fov) * Math.min(1, dt * 4);
+        this.persp.updateProjectionMatrix();
+      }
+      const desired = car.position.clone().addScaledVector(fwd, -11 - fast * 2).add(new THREE.Vector3(0, 5.2, 0));
       if (this.first) this.chasePos.copy(desired);
-      else this.chasePos.lerp(desired, 1 - Math.exp(-dt * 5));
-      if (this.chasePos.y < car.position.y + 1.5) this.chasePos.y = car.position.y + 1.5;
+      else {
+        // segue mais rápido quando o carro gira bruscamente (rodada, pancada): não fica para trás
+        const off = this.chasePos.clone().sub(car.position).setY(0);
+        const behind = off.lengthSq() > 0.01 ? -off.normalize().dot(fwd) : 1;
+        const rate = behind < 0.5 ? 12 : 5;
+        this.chasePos.lerp(desired, 1 - Math.exp(-dt * rate));
+      }
+      // nunca encosta no carro: distância horizontal e altura mínimas (o carro inteiro cabe no
+      // terço de baixo da tela, com barbatanas e armas à vista)
+      const flatOff = this.chasePos.clone().sub(car.position).setY(0);
+      const d = flatOff.length();
+      if (d < CHASE_MIN_DIST) {
+        if (d < 0.1) flatOff.copy(fwd).multiplyScalar(-1);
+        flatOff.setLength(CHASE_MIN_DIST);
+        this.chasePos.x = car.position.x + flatOff.x;
+        this.chasePos.z = car.position.z + flatOff.z;
+      }
+      if (this.chasePos.y < car.position.y + CHASE_MIN_HEIGHT) this.chasePos.y = car.position.y + CHASE_MIN_HEIGHT;
       this.persp.position.copy(this.chasePos).add(shake);
-      this.persp.lookAt(car.position.clone().addScaledVector(fwd, 5).add(new THREE.Vector3(0, 1.2, 0)));
+      this.persp.lookAt(car.position.clone().addScaledVector(fwd, 8).add(new THREE.Vector3(0, 1.2, 0)));
     }
 
     // retrovisor (usado no cockpit): olha para trás, acima do aerofólio

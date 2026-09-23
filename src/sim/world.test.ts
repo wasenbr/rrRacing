@@ -4,7 +4,7 @@ import { VEHICLES } from '../data/vehicles';
 import { newCampaign, opponentsFor } from './campaign';
 import { emptyInput } from './input';
 import { Track } from './track';
-import { createWorld, stepWorld, type RacerEntry } from './world';
+import { createWorld, KILL_BOUNTY, stepWorld, type RacerEntry } from './world';
 
 const DT = 1 / 60;
 const track = new Track(TRACKS[0]);
@@ -80,5 +80,103 @@ describe('mundo da corrida', () => {
     for (let i = 0; i < 60 * 3; i++) stepWorld(world, {}, DT);
     expect(target.alive).toBe(true);
     expect(target.armor).toBe(target.spec.armor);
+    // quem plantou a mina leva a destruição, mas (como no original) mina não dá "attack bonus"
+    expect(world.racers[1].kills).toBe(1);
+    expect(world.racers[1].money).toBe(0);
+  });
+
+  it('scatterpack dá o "attack bonus" pela destruição', () => {
+    const entries: RacerEntry[] = [
+      { name: 'A', color: 0, spec: VEHICLES.marauder, ai: null },
+      { name: 'B', color: 0, spec: VEHICLES.havac, ai: null },
+    ];
+    const world = createWorld(track, entries, 4, 1);
+    const target = world.racers[0];
+    target.armor = 5;
+    world.hazards.push({ id: 99, kind: 'scatter', owner: 1, x: target.car.x, y: target.car.y, z: target.car.z, age: 10 });
+    world.started = true;
+    stepWorld(world, {}, DT);
+    expect(target.alive).toBe(false);
+    expect(world.racers[1].money).toBe(KILL_BOUNTY);
+  });
+
+  it('scatterpack solta um leque de minas', () => {
+    const world = createWorld(track, [{ name: 'A', color: 0, spec: VEHICLES.havac, ai: null }], 4, 1);
+    world.started = true;
+    stepWorld(world, { 0: { ...emptyInput(), drop: true } }, DT);
+    expect(world.hazards.filter((h) => h.kind === 'scatter').length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('Battle Trak e Havac são imunes ao óleo', () => {
+    for (const id of ['battletrak', 'havac']) {
+      const world = createWorld(track, [{ name: 'A', color: 0, spec: VEHICLES[id], ai: null }], 4, 1);
+      const car = world.racers[0].car;
+      const fx = Math.sin(car.heading), fz = Math.cos(car.heading);
+      world.hazards.push({ id: 98, kind: 'oil', owner: -1, x: car.x + fx * 20, y: car.y, z: car.z + fz * 20, age: 5 });
+      world.started = true;
+      let spins = 0;
+      for (let i = 0; i < 60 * 3; i++) {
+        stepWorld(world, { 0: { ...emptyInput(), throttle: 1 } }, DT);
+        spins += world.events.filter((e) => e.type === 'spin').length;
+      }
+      expect(spins).toBe(0);
+    }
+  });
+
+  it('jatos de pulo tiram o carro do chão; turbo acelera', () => {
+    const world = createWorld(track, [{ name: 'A', color: 0, spec: VEHICLES.dirtdevil, ai: null }], 4, 1);
+    world.started = true;
+    for (let i = 0; i < 30; i++) stepWorld(world, { 0: { ...emptyInput(), throttle: 1 } }, DT);
+    stepWorld(world, { 0: { ...emptyInput(), throttle: 1, nitro: true } }, DT);
+    expect(world.events.some((e) => e.type === 'assist' && e.kind === 'jump')).toBe(true);
+    for (let i = 0; i < 6; i++) stepWorld(world, { 0: { ...emptyInput(), throttle: 1 } }, DT);
+    expect(world.racers[0].car.grounded).toBe(false);
+  });
+
+  it('batida forte fere os dois carros', () => {
+    const entries: RacerEntry[] = [
+      { name: 'A', color: 0, spec: VEHICLES.marauder, ai: null },
+      { name: 'B', color: 0, spec: VEHICLES.marauder, ai: null },
+    ];
+    const world = createWorld(track, entries, 4, 1);
+    world.started = true;
+    const [a, b] = world.racers;
+    b.car.x = a.car.x + Math.sin(a.car.heading) * 2.2;
+    b.car.z = a.car.z + Math.cos(a.car.heading) * 2.2;
+    a.car.vx = Math.sin(a.car.heading) * 30;
+    a.car.vz = Math.cos(a.car.heading) * 30;
+    stepWorld(world, {}, DT);
+    expect(a.armor).toBeLessThan(a.spec.armor);
+    expect(b.armor).toBeLessThan(b.spec.armor);
+  });
+
+  it('dificuldade muda o dano que o jogador sofre', () => {
+    const hurt = (d: 'easy' | 'hard') => {
+      const entries: RacerEntry[] = [
+        { name: 'P', color: 0, spec: VEHICLES.marauder, ai: null },
+        { name: 'C', color: 0, spec: VEHICLES.havac, ai: { skill: 0.5, aggression: 0, lane: 0 } },
+      ];
+      const world = createWorld(track, entries, 4, 1, undefined, d);
+      const p = world.racers[0];
+      world.hazards.push({ id: 99, kind: 'mine', owner: 1, x: p.car.x, y: p.car.y, z: p.car.z, age: 10 });
+      stepWorld(world, {}, DT);
+      return p.spec.armor - p.armor;
+    };
+    expect(hurt('hard')).toBeGreaterThan(hurt('easy'));
+  });
+
+  it('óleo faz o carro rodar uma vez e não de novo na mesma mancha', () => {
+    const entries: RacerEntry[] = [{ name: 'A', color: 0, spec: VEHICLES.marauder, ai: null }];
+    const world = createWorld(track, entries, 4, 1);
+    const car = world.racers[0].car;
+    const fx = Math.sin(car.heading), fz = Math.cos(car.heading);
+    world.hazards.push({ id: 98, kind: 'oil', owner: -1, x: car.x + fx * 20, y: car.y, z: car.z + fz * 20, age: 5 });
+    world.started = true;
+    let spins = 0;
+    for (let i = 0; i < 60 * 3; i++) {
+      stepWorld(world, { 0: { ...emptyInput(), throttle: 1 } }, DT);
+      spins += world.events.filter((e) => e.type === 'spin').length;
+    }
+    expect(spins).toBe(1);
   });
 });

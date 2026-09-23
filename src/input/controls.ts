@@ -1,8 +1,77 @@
 import { clamp } from '../sim/math';
 import { emptyInput, type ControlInput } from '../sim/input';
 
+const TILT_KEY = 'rnrr3d-tilt';
+/** Graus de inclinação para esterçar tudo. */
+const TILT_FULL = 22;
+const TILT_DEAD = 2.5;
+
+let tiltOn = (() => {
+  try {
+    return localStorage.getItem(TILT_KEY) === '1';
+  } catch {
+    return false;
+  }
+})();
+/** direção atual pela inclinação (-1..1) */
+let tiltSteer = 0;
+let tiltListening = false;
+
+function onOrientation(e: DeviceOrientationEvent): void {
+  if (e.beta === null || e.gamma === null) return;
+  // celular deitado: girar como volante muda o beta; o sinal depende de para que lado ele deitou
+  const angle = screen.orientation?.angle ?? (window as Window & { orientation?: number }).orientation ?? 0;
+  const tilt = angle === 90 ? e.beta : angle === 270 || angle === -90 ? -e.beta : e.gamma;
+  const a = Math.abs(tilt) < TILT_DEAD ? 0 : (Math.abs(tilt) - TILT_DEAD) / (TILT_FULL - TILT_DEAD);
+  tiltSteer = clamp(Math.sign(tilt) * a, -1, 1);
+}
+
+function listenTilt(): void {
+  if (tiltListening) return;
+  tiltListening = true;
+  window.addEventListener('deviceorientation', onOrientation);
+}
+
+/** Direção por inclinação ligada? (celular) */
+export function tiltSteeringEnabled(): boolean {
+  return tiltOn;
+}
+
+/** O aparelho tem sensor de inclinação? */
+export function tiltSupported(): boolean {
+  return typeof window !== 'undefined' && 'DeviceOrientationEvent' in window;
+}
+
+/**
+ * Liga/desliga a direção por inclinação. No iPhone a permissão só pode ser pedida durante um toque
+ * do usuário (chame a partir do clique no botão). Com ela ligada, o volante de toque some e o
+ * polegar esquerdo fica livre para as armas.
+ */
+export async function setTiltSteering(on: boolean): Promise<boolean> {
+  if (on) {
+    const req = (DeviceOrientationEvent as unknown as { requestPermission?: () => Promise<string> }).requestPermission;
+    if (req) {
+      try {
+        if ((await req()) !== 'granted') on = false;
+      } catch {
+        on = false;
+      }
+    }
+  }
+  tiltOn = on;
+  if (on) listenTilt();
+  else tiltSteer = 0;
+  try {
+    localStorage.setItem(TILT_KEY, on ? '1' : '0');
+  } catch {
+    /* sem armazenamento: vale só nesta sessão */
+  }
+  document.querySelectorAll('.touch').forEach((el) => el.classList.toggle('tilt', on));
+  return on;
+}
+
 /** Ações de interface (não vão para a simulação). */
-export type UiAction = 'camera' | 'pause' | 'mute';
+export type UiAction = 'camera' | 'pause' | 'mute' | 'fullscreen';
 
 /**
  * Junta teclado, controle (Gamepad API) e botões de toque num único ControlInput.
@@ -12,20 +81,30 @@ export class Controls {
   private touch = new Map<string, number>(); // ação -> quantidade de dedos pressionando
   private listeners: ((a: UiAction) => void)[] = [];
   private prevPadButtons: boolean[] = [];
+  /** direção analógica do volante de toque (-1..1), 0 = solto */
+  private touchSteer = 0;
+  /** volante de toque arrastado até o fim da faixa: curva fechada */
+  private touchSharp = false;
+  /** celular: acelera sozinho (freio/ré continuam no botão) */
+  autoThrottle = false;
 
   constructor() {
     window.addEventListener('keydown', (e) => {
+      const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
+      // Ctrl esquerdo é o tiro: bloqueia os atalhos do navegador (Ctrl+S, Ctrl+D...) enquanto atira
+      if (!typing && (e.code.startsWith('Arrow') || e.code === 'Space' || e.code === 'ControlLeft' || e.ctrlKey)) e.preventDefault();
       if (e.repeat) return;
       this.keys.add(e.code);
       if (e.code === 'KeyC') this.emit('camera');
       if (e.code === 'Escape' || e.code === 'KeyP') this.emit('pause');
       if (e.code === 'KeyM') this.emit('mute');
-      if (e.code.startsWith('Arrow') || e.code === 'Space') e.preventDefault();
     });
     window.addEventListener('keyup', (e) => this.keys.delete(e.code));
     window.addEventListener('blur', () => {
       this.keys.clear();
       this.touch.clear();
+      this.touchSteer = 0;
+      this.touchSharp = false;
     });
   }
 
@@ -43,6 +122,12 @@ export class Controls {
     else this.touch.set(action, n);
   }
 
+  /** Volante de toque: -1 (esquerda) .. 1 (direita). */
+  setTouchSteer(v: number, sharp = false): void {
+    this.touchSteer = clamp(v, -1, 1);
+    this.touchSharp = sharp;
+  }
+
   private key(...codes: string[]): boolean {
     return codes.some((c) => this.keys.has(c));
   }
@@ -53,12 +138,16 @@ export class Controls {
 
   read(): ControlInput {
     const input = emptyInput();
-    input.throttle = this.key('ArrowUp', 'KeyW') || this.t('gas') ? 1 : 0;
     input.brake = this.key('ArrowDown', 'KeyS') || this.t('brake') ? 1 : 0;
-    input.steer = (this.key('ArrowRight', 'KeyD') || this.t('right') ? 1 : 0) - (this.key('ArrowLeft', 'KeyA') || this.t('left') ? 1 : 0);
-    input.fire = this.key('Space', 'KeyJ') || this.t('fire');
-    input.drop = this.key('KeyX', 'KeyK', 'ControlLeft') || this.t('drop');
+    input.throttle = this.key('ArrowUp', 'KeyW') || this.t('gas') || (this.autoThrottle && !input.brake) ? 1 : 0;
+    input.steer = (this.key('ArrowRight', 'KeyD') ? 1 : 0) - (this.key('ArrowLeft', 'KeyA') ? 1 : 0);
+    if (input.steer === 0) input.steer = this.touchSteer;
+    if (input.steer === 0 && tiltOn) input.steer = tiltSteer;
+    input.fire = this.key('ControlLeft', 'Space', 'KeyJ') || this.t('fire');
+    // "\": Backslash no teclado americano, IntlBackslash (ao lado do Z) no ABNT2
+    input.drop = this.key('Backslash', 'IntlBackslash', 'KeyX', 'KeyK') || this.t('drop');
     input.nitro = this.key('ShiftLeft', 'ShiftRight', 'KeyL') || this.t('nitro');
+    input.sharp = this.key('KeyQ', 'KeyE', 'KeyU', 'AltLeft') || this.t('sharp') || this.touchSharp;
     this.readGamepad(input);
     return input;
   }
@@ -76,7 +165,9 @@ export class Controls {
     input.throttle = Math.max(input.throttle, v(7), b(0) ? 1 : 0);
     input.brake = Math.max(input.brake, v(6));
     input.fire ||= b(2) || b(5);
-    input.drop ||= b(1) || b(4);
+    input.drop ||= b(1);
+    // LB: curva fechada (freio de mão)
+    input.sharp ||= b(4);
     input.nitro ||= b(10) || b(11);
     // borda de subida para ações de interface
     const cam = b(3);
@@ -92,27 +183,66 @@ export function isTouchDevice(): boolean {
   return window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
 }
 
-/** Cria os botões na tela para celular/tablet. */
+/**
+ * Cria os controles de toque para celular/tablet.
+ * Polegar esquerdo: volante (arrastar para os lados) e, logo acima, TIRO / ARMA TRASEIRA / NITRO.
+ * Arrastando o volante para cima, o mesmo polegar atira sem soltar a direção. Com a direção por
+ * inclinação, o volante some; com a aceleração automática, aparece um TIRO também à direita.
+ * Polegar direito: ACELERAR (grande) e FREIO/RÉ — assim nunca é preciso soltar o acelerador para atirar.
+ */
 export function createTouchControls(root: HTMLElement, controls: Controls): HTMLElement {
   const el = document.createElement('div');
   el.className = 'touch';
   el.innerHTML = `
     <div class="touch-left">
-      <button data-a="left" aria-label="Esquerda">◀</button>
-      <button data-a="right" aria-label="Direita">▶</button>
+      <div class="touch-actions">
+        <button data-a="drop" class="act drop" aria-label="Arma traseira">MINA</button>
+        <button data-a="fire" class="act fire" aria-label="Atirar">TIRO</button>
+        <button data-a="nitro" class="act nitro" aria-label="Nitro">NITRO</button>
+      </div>
+      <div class="steer" aria-label="Volante: arraste para os lados">
+        <span class="arrow l">◀</span><span class="knob"></span><span class="arrow r">▶</span>
+      </div>
     </div>
     <div class="touch-right">
-      <button data-a="drop" class="small" aria-label="Arma traseira">MINA</button>
-      <button data-a="fire" class="small" aria-label="Atirar">TIRO</button>
-      <button data-a="nitro" class="small" aria-label="Nitro">NITRO</button>
-      <button data-a="brake" aria-label="Freio">FREIO</button>
+      <div class="touch-rcol">
+        <button data-a="sharp" class="sharp" aria-label="Curva fechada">CURVA</button>
+        <button data-a="brake" class="brake" aria-label="Freio e ré">FREIO</button>
+      </div>
       <button data-a="gas" class="gas" aria-label="Acelerar">ACEL</button>
+      <button data-a="fire" class="fire2" aria-label="Atirar">TIRO</button>
     </div>
+    <div class="rotate-hint" aria-live="polite"><div><span class="rot-phone">📱</span><b>Gire o celular</b><small>O jogo é na horizontal. A corrida fica pausada.</small></div></div>
     <div class="touch-top">
-      <button data-ui="camera" aria-label="Trocar câmera">🎥</button>
       <button data-ui="pause" aria-label="Pausar">❚❚</button>
+      <button data-ui="camera" aria-label="Trocar câmera">🎥</button>
+      <button data-ui="fullscreen" class="fs-btn" aria-label="Tela cheia">⛶</button>
     </div>`;
   root.appendChild(el);
+  if (tiltOn) {
+    el.classList.add('tilt');
+    listenTilt();
+  }
+
+  // em pé: aviso para girar o aparelho e pausa a corrida (só se ela estiver rodando)
+  const portrait = window.matchMedia('(orientation: portrait)');
+  let pausedByRotate = false;
+  const checkOrientation = () => {
+    const overlay = root.querySelector<HTMLElement>('.overlay');
+    const racing = !!overlay && overlay.style.display === 'none' && el.offsetParent !== null;
+    if (portrait.matches) {
+      if (racing) {
+        pausedByRotate = true;
+        controls.emit('pause');
+      }
+      el.classList.toggle('portrait', pausedByRotate || racing);
+    } else {
+      pausedByRotate = false;
+      el.classList.remove('portrait');
+    }
+  };
+  portrait.addEventListener('change', checkOrientation);
+  window.addEventListener('resize', checkOrientation);
 
   el.querySelectorAll<HTMLButtonElement>('button[data-a]').forEach((btn) => {
     const action = btn.dataset.a!;
@@ -124,6 +254,7 @@ export function createTouchControls(root: HTMLElement, controls: Controls): HTML
         active.add(e.pointerId);
         controls.setTouch(action, true);
         btn.classList.add('on');
+        navigator.vibrate?.(action === 'fire' ? 12 : 6);
       }
     };
     const up = (e: PointerEvent) => {
@@ -137,6 +268,55 @@ export function createTouchControls(root: HTMLElement, controls: Controls): HTML
     btn.addEventListener('pointercancel', up);
     btn.addEventListener('lostpointercapture', up);
   });
+
+  // volante: o dedo pousa em qualquer ponto e arrasta; o lado (e a distância) define a direção
+  const steer = el.querySelector<HTMLElement>('.steer')!;
+  const knob = steer.querySelector<HTMLElement>('.knob')!;
+  let steerPointer = -1;
+  // o mesmo polegar que esterça pode subir até a fileira das armas e ATIRAR sem soltar o volante
+  let slideFire = false;
+  const setSlideFire = (on: boolean) => {
+    if (on === slideFire) return;
+    slideFire = on;
+    controls.setTouch('fire', on);
+    el.querySelector('.touch-actions .fire')?.classList.toggle('on', on);
+    if (on) navigator.vibrate?.(12);
+  };
+  const setFrom = (e: PointerEvent) => {
+    const r = steer.getBoundingClientRect();
+    setSlideFire(e.clientY < r.top - r.height * 0.35);
+    const rel = (e.clientX - (r.left + r.width / 2)) / (r.width * 0.32);
+    // zona morta pequena e resposta cheia perto das bordas; passando da ponta da faixa = curva fechada
+    const v = Math.abs(rel) < 0.12 ? 0 : clamp(Math.sign(rel) * Math.min(1, (Math.abs(rel) - 0.12) / 0.7 + 0.35), -1, 1);
+    const sharp = Math.abs(rel) > 1.3;
+    controls.setTouchSteer(v, sharp);
+    steer.classList.toggle('sharp', sharp);
+    knob.style.transform = `translateX(${v * r.width * 0.32}px)`;
+    steer.classList.toggle('l', v < 0);
+    steer.classList.toggle('r', v > 0);
+  };
+  const release = (e: PointerEvent) => {
+    if (e.pointerId !== steerPointer) return;
+    steerPointer = -1;
+    setSlideFire(false);
+    controls.setTouchSteer(0);
+    knob.style.transform = '';
+    steer.classList.remove('l', 'r', 'sharp');
+  };
+  steer.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    if (steerPointer !== -1) return;
+    steerPointer = e.pointerId;
+    steer.setPointerCapture(e.pointerId);
+    setFrom(e);
+  });
+  steer.addEventListener('pointermove', (e) => {
+    if (e.pointerId === steerPointer) setFrom(e);
+  });
+  steer.addEventListener('pointerup', release);
+  steer.addEventListener('pointercancel', release);
+  steer.addEventListener('lostpointercapture', release);
+
   el.querySelectorAll<HTMLButtonElement>('button[data-ui]').forEach((btn) => {
     btn.addEventListener('pointerdown', (e) => {
       e.preventDefault();
@@ -145,4 +325,9 @@ export function createTouchControls(root: HTMLElement, controls: Controls): HTML
   });
   el.addEventListener('contextmenu', (e) => e.preventDefault());
   return el;
+}
+
+/** Mostra/esconde o botão de acelerar (com aceleração automática ele some e o freio cresce). */
+export function setTouchAutoThrottle(el: HTMLElement | null, on: boolean): void {
+  el?.classList.toggle('auto-gas', on);
 }
