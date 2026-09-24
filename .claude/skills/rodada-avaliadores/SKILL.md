@@ -86,6 +86,19 @@ Um grupo também é chamado quando:
 Chamar o grupo inteiro, não só um avaliador dele. O argumento da skill pode nomear grupos
 (ex.: "/rodada-avaliadores aparência som"): roda esses mais o QA.
 
+### Menu de grupos (início da skill)
+
+Se o argumento não nomear grupos, ANTES de qualquer outro passo mostrar um menu com
+`AskUserQuestion` (limite de 4 opções por pergunta, por isso duas perguntas, ambas `multiSelect: true`):
+1. "Quais grupos avaliar nesta execução? (QA entra sempre)" — Aparência, Jogo, Plataforma, Som
+   (cada opção com os avaliadores do grupo na descrição).
+2. "Mais opções" — Online; Todos (todos os grupos); Automático (recomendado: escolher pelas regras
+   da tabela acima).
+
+Resultado: grupos marcados + QA. "Todos" chama todos; "Automático" ou nada marcado usa as regras
+acima. A escolha vale para todas as rodadas do loop (sem perguntar de novo); a aprovação final
+considera só os avaliadores desses grupos.
+
 Cada avaliador recebe este prompt-base mais o foco da área:
 
 > Você é um avaliador independente e EXTREMAMENTE exigente de um jogo de corrida de combate 3D
