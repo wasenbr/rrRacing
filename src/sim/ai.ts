@@ -92,6 +92,14 @@ export function computeAiInput(world: World, r: Racer, dt: number): ControlInput
   st.fireCooldown = Math.max(0, st.fireCooldown - dt);
   if (st.thinkTimer <= 0) {
     st.thinkTimer = 0.25 + world.rng() * 0.15;
+    // Munição dosada ao longo da volta (recarrega na volta, como no original): até ~15% da volta
+    // pode gastar 1 carga, na metade ~55% delas, a última só no fim; na última volta solta mais cedo.
+    const T = track.totalLength;
+    const lapFrac = clamp((raceDistance(world, r) - (r.progress.lap - 1) * T) / T, 0, 1);
+    const slack = r.progress.lap >= world.laps ? 0.35 : 0.1;
+    const canUse = (charges: number, max: number) => max - charges < Math.ceil(max * (lapFrac * 0.9 + slack));
+    const frontOk = canUse(r.frontCharges, r.spec.frontCharges);
+    const rearOk = canUse(r.rearCharges, r.spec.rearCharges);
     let lane = ai.lane;
     st.wantFire = false;
     st.wantDrop = false;
@@ -124,7 +132,7 @@ export function computeAiInput(world: World, r: Racer, dt: number): ControlInput
         lane = me.lateral + Math.sign(oc.lateral - me.lateral) * 2;
       }
       // atira em quem está na mira
-      if (r.frontCharges > 0 && ahead > 3 && ahead < range) {
+      if (frontOk && r.frontCharges > 0 && ahead > 3 && ahead < range) {
         const ang = Math.abs(wrapAngle(Math.atan2(o.car.x - car.x, o.car.z - car.z) - car.heading));
         // como no original, a CPU só atira no que está em linha reta à frente (o sundog persegue sozinho)
         const cone = front === 'missile' ? 0.22 : front === 'sundog' ? 1.2 : 0.12;
@@ -133,13 +141,13 @@ export function computeAiInput(world: World, r: Racer, dt: number): ControlInput
         if (near && ang < cone && world.rng() < 0.35 + ai.aggression * 0.6) st.wantFire = true;
       }
       // o sundog persegue para qualquer lado: também vale contra quem vem colado atrás
-      if (front === 'sundog' && r.frontCharges > 0 && ahead < -3 && ahead > -18 && world.rng() < ai.aggression * 0.12) st.wantFire = true;
+      if (front === 'sundog' && frontOk && r.frontCharges > 0 && ahead < -3 && ahead > -18 && world.rng() < ai.aggression * 0.12) st.wantFire = true;
       // solta mina/óleo em quem vem colado atrás
       // (óleo só com o perseguidor bem alinhado e perto: mancha solta a esmo só enche a pista)
       const oil = r.spec.rear === 'oil';
       const spread = r.spec.rear === 'scatter' ? 6 : oil ? 1.5 : 3;
       // óleo só com o perseguidor a 12–25 m: longe o bastante para ele ver a mancha e poder desviar
-      if (r.rearCharges > 0 && ahead < (oil ? -12 : -3) && ahead > (oil ? -25 : -16) && Math.abs(oc.lateral - me.lateral) < spread) {
+      if (rearOk && r.rearCharges > 0 && ahead < (oil ? -12 : -3) && ahead > (oil ? -25 : -16) && Math.abs(oc.lateral - me.lateral) < spread) {
         if (world.rng() < 0.2 + ai.aggression * 0.5) st.wantDrop = true;
       }
     }

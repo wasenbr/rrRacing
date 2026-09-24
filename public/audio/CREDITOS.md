@@ -51,6 +51,12 @@ Pós-tratamento (`scripts/locutor/tratar.py`, ffmpeg + rubberband): takes sem em
 silêncio aparado, nomes graves afinados para cima, frases longas aceleradas e loudness igual (−18 LUFS).
 As frases seguem o estilo do locutor do original, sem usar gravações dele.
 
+Largada (`start_*.mp3`, "Let the carnage begin!", regravada na rodada 8): Chatterbox com exagero 1,45–1,55
+e cfg 0,25–0,3, dois takes clonando `scripts/locutor/voz-referencia-luta.wav` (recortada de **"Boxing
+announcement Ladies and Gentleman"** de **klankbeeld**, Freesound https://freesound.org/people/klankbeeld/sounds/387839/,
+licença **CC-BY 4.0**) e um clonando a referência de Alba MacKenna acima. Escolhidos entre 24 takes por
+transcrição exata (faster-whisper), F0 mediano 207–223 Hz e faixa de F0 de 12,5–19,7 semitons (Praat).
+
 ## Música
 
 Sem nada em `music/`, toca a trilha sintetizada do projeto (`src/audio/synthrock.ts`).

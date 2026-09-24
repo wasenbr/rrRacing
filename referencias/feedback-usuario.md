@@ -117,3 +117,7 @@ Cada item precisa ser atendido e verificado pelos avaliadores.
     empolgada, de apresentador de arena.
 54. Celular: na tela de iniciar corrida, ao rolar as opções (pista, pilotos) a rolagem demora para
     renderizar. A rolagem dos menus tem que ser imediata e lisa no celular.
+55. Celular (iPhone pequeno): os botões de toque (direção, tiro, mina, nitro etc.) estão pequenos e
+    colados. O polegar do volante escorrega para cima dos botões de arma e o carro não responde
+    direito. Botões maiores, mais espaço entre o volante e as armas, e o volante não pode disparar
+    arma por engano.

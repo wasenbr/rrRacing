@@ -202,5 +202,5 @@
     }
   },
   "tratado": true,
-  "tratamento": "tratar.py: -18.0 LUFS, silêncio aparado, nomes graves afinados, frases longas aceleradas"
+  "tratamento": "tratar.py: -18.0 LUFS, silêncio aparado, takes agudos baixados (> 225 Hz), frases longas aceleradas"
 }

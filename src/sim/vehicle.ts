@@ -126,6 +126,14 @@ const JUMP_JET_PUSH = 4;
 export const RAIL_CLEAR = 2.0;
 /** Velocidade lateral (m/s) para fora necessária para passar por cima da mureta. */
 const RAIL_OUT_SPEED = 6;
+/**
+ * Mureta: abaixo de RAIL_SCRAPE (m/s contra ela) é raspão — quase de graça (só RAIL_RUB, fração por
+ * segundo encostado). Acima, perde RAIL_HIT_LOSS por m/s e quica até RAIL_BOUNCE.
+ */
+const RAIL_SCRAPE = 2;
+const RAIL_HIT_LOSS = 0.012;
+const RAIL_BOUNCE = 0.3;
+const RAIL_RUB = 0.1;
 /** Quanto abaixo da pista o carro precisa cair para contar como queda. */
 const FALL_DEPTH = 7;
 
@@ -376,15 +384,21 @@ export function stepVehicle(v: VehicleState, spec: VehicleSpec, input: ControlIn
     v.z -= nz * pen;
     const vn = v.vx * nx + v.vz * nz;
     if (vn > 0) {
-      v.vx -= 1.3 * vn * nx;
-      v.vz -= 1.3 * vn * nz;
+      // raspão devolve pouco; pancada forte quica e custa velocidade (atrito ~ força da batida)
+      const bounce = 1 + RAIL_BOUNCE * clamp((vn - RAIL_SCRAPE) / 10, 0, 1);
+      v.vx -= bounce * vn * nx;
+      v.vz -= bounce * vn * nz;
+      const loss = clamp((vn - RAIL_SCRAPE) * RAIL_HIT_LOSS, 0, 0.3);
+      v.vx *= 1 - loss;
+      v.vz *= 1 - loss;
       v.wallImpact = vn;
     }
-    // raspando na mureta: o bico é puxado para o sentido da pista (desliza em vez de travar)
+    // raspando na mureta: o bico é puxado de leve para o sentido da pista (desliza em vez de travar)
     const along = Math.abs(wrapAngle(sample.heading - v.heading)) < Math.PI / 2 ? sample.heading : sample.heading + Math.PI;
-    v.heading += wrapAngle(along - v.heading) * clamp(dt * 6 + vn * 0.01, 0, 0.25);
-    v.vx *= 0.99;
-    v.vz *= 0.99;
+    v.heading += wrapAngle(along - v.heading) * clamp(dt * 3 + Math.max(0, vn - RAIL_SCRAPE) * 0.006, 0, 0.12);
+    const rub = 1 - RAIL_RUB * dt;
+    v.vx *= rub;
+    v.vz *= rub;
     sample = track.query(v.x, v.z, v.pieceIndex);
   }
 

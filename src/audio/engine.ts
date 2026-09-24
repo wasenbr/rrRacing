@@ -1,4 +1,4 @@
-import { audio } from './context';
+import { audio, isAudioLite } from './context';
 import { ENGINE_LOOPS, getBuffer, loadBuffer } from './samples';
 
 /**
@@ -52,6 +52,41 @@ function pulseCurve(): Float32Array<ArrayBuffer> {
     c[i] = Math.pow(Math.max(0, x), 3);
   }
   return c;
+}
+
+/**
+ * Liga/desliga uma camada do grafo pelo peso: calada (peso ~0) há mais de `QUIET_OFF` s, a saída
+ * é desconectada (os nós acima deixam de ser processados pela thread de áudio); volta a ligar
+ * assim que o peso sobe. O ganho já está em ~0 quando desliga, então não estala.
+ */
+const QUIET_OFF = 1.2;
+const QUIET_LEVEL = 1e-3;
+class LayerGate {
+  private on = true;
+  private quietSince = -1;
+  constructor(
+    private readonly node: AudioNode,
+    private readonly dest: AudioNode,
+  ) {}
+  set(level: number, t: number): void {
+    if (level > QUIET_LEVEL) {
+      this.quietSince = -1;
+      if (!this.on) {
+        this.node.connect(this.dest);
+        this.on = true;
+      }
+      return;
+    }
+    if (this.quietSince < 0) this.quietSince = t;
+    else if (this.on && t - this.quietSince > QUIET_OFF) {
+      try {
+        this.node.disconnect(this.dest);
+      } catch {
+        /* já desconectado */
+      }
+      this.on = false;
+    }
+  }
 }
 
 /** Nível dos loops gravados em relação à síntese. */
@@ -185,7 +220,9 @@ export class EngineSound {
   private windGain!: GainNode;
   private out!: GainNode;
   /** loops gravados (quando carregados): fonte, ganho e frequência de queima original */
-  private rec: { src: AudioBufferSourceNode; gain: GainNode; f: number }[] = [];
+  private rec: { src: AudioBufferSourceNode; gain: GainNode; f: number; gate: LayerGate }[] = [];
+  /** camadas que passam a maior parte do tempo caladas (nitro, pneus, vento, admissão, gravação) */
+  private gates = new Map<GainNode, LayerGate>();
   private recBus!: GainNode;
   private recTone!: BiquadFilterNode;
   /** quanto da síntese fica onde a gravação domina (pouco: duas fontes no mesmo tom batem) */
@@ -233,7 +270,7 @@ export class EngineSound {
         src.start(t0, Math.random() * (b as AudioBuffer).duration);
         // mesma instabilidade lenta de rotação da síntese: as camadas andam juntas, sem batimento
         this.drift.connect(src.detune);
-        return { src, gain, f: REC_LOOP_F[ENGINE_LOOPS[i]] };
+        return { src, gain, f: REC_LOOP_F[ENGINE_LOOPS[i]], gate: new LayerGate(gain, this.recTone) };
       });
       this.synthUnderRec = 0.12;
     };
@@ -241,13 +278,13 @@ export class EngineSound {
     this.noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
     const d = this.noiseBuf.getChannelData(0);
     for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
-    const loopNoise = () => {
-      const s = ctx.createBufferSource();
-      s.buffer = this.noiseBuf;
-      s.loop = true;
-      s.start(t, Math.random());
-      return s;
-    };
+    // UM loop de ruído compartilhado por todas as camadas (antes eram 7 fontes iguais tocando em
+    // paralelo): cada camada tem o próprio filtro, então o ruído correlacionado não se percebe
+    const sharedNoise = ctx.createBufferSource();
+    sharedNoise.buffer = this.noiseBuf;
+    sharedNoise.loop = true;
+    sharedNoise.start(t, Math.random());
+    const loopNoise = () => sharedNoise;
     const biquad = (type: BiquadFilterType, f: number, q: number, gain = 0) => {
       const b = ctx.createBiquadFilter();
       b.type = type;
@@ -273,7 +310,7 @@ export class EngineSound {
     this.body.gain.value = 0.8;
     const shaper = ctx.createWaveShaper();
     shaper.curve = distortion(1.8);
-    shaper.oversample = '2x';
+    shaper.oversample = isAudioLite() ? 'none' : '2x';
     this.tone = biquad('lowpass', 400, 0.6);
     this.formant1 = biquad('peaking', 220, 1.2, 5);
     this.formant2 = biquad('peaking', 800, 1.6, 3);
@@ -380,6 +417,7 @@ export class EngineSound {
       this.drift.connect(o.detune);
       o.start(t);
     }
+    for (const g of [this.intakeGain, this.blowGain, this.hissGain, this.squealGain, this.windGain]) this.gates.set(g, new LayerGate(g, this.out));
     this.cycLight.start(t, Math.random() * 2);
     this.cycHeavy.start(t, Math.random() * 2);
     this.lastT = t;
@@ -477,6 +515,7 @@ export class EngineSound {
         const w = j === i ? Math.cos((x * Math.PI) / 2) : j === i + 1 ? Math.sin((x * Math.PI) / 2) : 0;
         r.gain.gain.setTargetAtTime(w, t, 0.04);
         r.src.playbackRate.setTargetAtTime(recRate(f, r.f), t, k);
+        r.gate.set(w * recW, t);
       });
       this.recTone.frequency.setTargetAtTime(700 + Math.min(1, rpm) * 2000 + load * 800, t, k);
       this.recBus.gain.setTargetAtTime(recW * REC_LEVEL * (0.75 + load * 0.35), t, 0.06);
@@ -497,7 +536,8 @@ export class EngineSound {
     // sub: a gravação já tem o grave; outra fonte no mesmo tom por baixo só criaria batimento
     this.subGain.gain.setTargetAtTime((0.14 - Math.min(1, rpm) * 0.05) * (1 - recW * 0.8), t, 0.1);
     this.intake.frequency.setTargetAtTime(350 + rpm * 900, t, k);
-    this.intakeGain.gain.setTargetAtTime(load * (0.02 + rpm * 0.07), t, 0.06);
+    const intakeLevel = load * (0.02 + rpm * 0.07);
+    this.intakeGain.gain.setTargetAtTime(intakeLevel, t, 0.06);
     this.out.gain.setTargetAtTime(0.3 + load * 0.2 + rpm * 0.14, t, shifting ? 0.03 : 0.08);
 
     this.blow.frequency.setTargetAtTime(300 + Math.min(1, rpm) * 600, t, 0.1);
@@ -508,7 +548,14 @@ export class EngineSound {
     const sq = Math.max(0, Math.min(1, (slip - 0.3) / 0.7));
     this.squealGain.gain.setTargetAtTime(sq * 0.45, t, 0.06);
     this.squeal.frequency.setTargetAtTime(900 + sq * 250, t, 0.1);
-    this.windGain.gain.setTargetAtTime(Math.max(0, s - 0.5) * 0.14, t, 0.2);
+    const windLevel = Math.max(0, s - 0.5) * 0.14;
+    this.windGain.gain.setTargetAtTime(windLevel, t, 0.2);
+    // camadas caladas saem do grafo (menos trabalho para a thread de áudio)
+    this.gates.get(this.intakeGain)?.set(intakeLevel, t);
+    this.gates.get(this.blowGain)?.set(boosting ? 1 : 0, t);
+    this.gates.get(this.hissGain)?.set(boosting ? 1 : 0, t);
+    this.gates.get(this.squealGain)?.set(sq, t);
+    this.gates.get(this.windGain)?.set(windLevel, t);
   }
 
   silence(): void {
@@ -573,7 +620,14 @@ export class RivalEngines {
     const nd = noise.getChannelData(0);
     for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
     const pulses = pulseCurve();
-    for (let i = 0; i < this.count; i++) {
+    // um loop de ruído só para todas as vozes (cada uma filtra o seu)
+    const noiseSrc = ctx.createBufferSource();
+    noiseSrc.buffer = noise;
+    noiseSrc.loop = true;
+    noiseSrc.start(t, Math.random());
+    // modo leve (toque / qualidade baixa): só o rival mais próximo tem motor
+    const count = isAudioLite() ? Math.min(1, this.count) : this.count;
+    for (let i = 0; i < count; i++) {
       const tone = ctx.createBiquadFilter();
       tone.type = 'lowpass';
       tone.Q.value = 0.5;
@@ -598,10 +652,7 @@ export class RivalEngines {
       fireBand.type = 'bandpass';
       fireBand.Q.value = 0.9;
       fireBand.frequency.value = 600;
-      const src = ctx.createBufferSource();
-      src.buffer = noise;
-      src.loop = true;
-      src.connect(fireBand);
+      noiseSrc.connect(fireBand);
       fireBand.connect(am);
       const fireGain = ctx.createGain();
       fireGain.gain.value = 0.5;
@@ -619,7 +670,6 @@ export class RivalEngines {
       pan.connect(a.engine);
       cyc.start(t, Math.random() * 2);
       fire.start(t);
-      src.start(t, Math.random());
       this.voices.push({ cyc, cycGain: cg, rec: [], fire, fireBand, fireGain, tone, gain, pan, rpm: 0.3, on: true, quietSince: -1 });
     }
     // gravação: os mesmos loops do motor do jogador (timbre igual de perto), passando pelo mesmo

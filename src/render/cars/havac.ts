@@ -108,10 +108,12 @@ function ductGeo(rIn: number, rOut: number, hl: number, cr: number): THREE.Lathe
  * Emissor Sundog no bico e KO Scatterpack atrás.
  */
 export function createHavac(color: number, shadows: boolean): CarVisual {
-  const { root, body, ext } = carFrame();
-  // tudo que flutua fica em "hull", que balança sozinho
+  const { root, body, ext, chassis } = carFrame();
+  // tudo que flutua fica em "hull", que balança sozinho; a saia (colchão de ar) fica no chassi,
+  // rente ao chão, e o casco balança por cima dela
   const hull = new THREE.Group();
   ext.add(hull);
+  chassis.position.y = 0.1;
   const k = new Kit(color, shadows, hull);
 
   // pintura lisa e brilhante (sem desgaste): cara de brinquedo envernizado
@@ -126,17 +128,17 @@ export function createHavac(color: number, shadows: boolean): CarVisual {
   const TY = 0.38;
   const outline = roundRect(0.98, 1.72, 0.72).getSpacedPoints(80).slice(0, -1);
   const path = new THREE.CatmullRomCurve3(outline.map((p) => new THREE.Vector3(p.x, TY, p.y)), true, 'centripetal');
-  k.add(new THREE.TubeGeometry(path, 120, TR, 16, true), rubber, 0, 0, 0);
+  k.add(new THREE.TubeGeometry(path, 120, TR, 16, true), rubber, 0, 0, 0, chassis);
   // gomos do tubo: vincos finos e escuros (sutis)
   const seamGeo = new THREE.TorusGeometry(TR + 0.004, 0.012, 5, 20);
   for (let i = 0; i < 22; i++) {
     const t = (i + 0.5) / 22;
     const p = path.getPointAt(t);
     const tg = path.getTangentAt(t);
-    k.add(seamGeo, seamMat, p.x, p.y, p.z).lookAt(p.x + tg.x, p.y + tg.y, p.z + tg.z);
+    k.add(seamGeo, seamMat, p.x, p.y, p.z, chassis).lookAt(p.x + tg.x, p.y + tg.y, p.z + tg.z);
   }
   // fundo que fecha o tubo por baixo
-  k.add(slab(roundRect(0.95, 1.68, 0.7), 0.04, 0.02), k.trim, 0, 0.16, 0);
+  k.add(slab(roundRect(0.95, 1.68, 0.7), 0.04, 0.02), k.trim, 0, 0.16, 0, chassis);
 
   // ---- CASCO: convés arredondado + corpo em sabonete ----
   const deck = k.add(slab(roundRect(0.86, 1.6, 0.62), 0.14, 0.14), gloss, 0, 0.44, 0);
@@ -258,11 +260,11 @@ export function createHavac(color: number, shadows: boolean): CarVisual {
   const glow = new THREE.Mesh(new THREE.CircleGeometry(1, 28).rotateX(-Math.PI / 2), haloMat);
   glow.position.y = 0.04;
   glow.scale.set(1.2, 1, 2.0);
-  hull.add(glow);
+  chassis.add(glow);
 
   const eye = new THREE.Vector3(0, 1.22, 0.5);
   // o cockpit fica preso à carroceria (não ao casco que balança), alinhado com a câmera
-  const { cockpit, steeringWheel } = cockpitRig(k, { eye, halfWidth: 0.85, hoodLength: 1.45, weapon: 'sundog', stripes: 3, skirt: true, intake: false }, body);
+  const { cockpit, steeringWheel, emitter } = cockpitRig(k, { eye, halfWidth: 0.85, hoodLength: 1.45, weapon: 'sundog', stripes: 3, skirt: true, intake: false }, body);
 
   k.merge([sun, glow], hull);
 
@@ -271,7 +273,8 @@ export function createHavac(color: number, shadows: boolean): CarVisual {
   return {
     root,
     body,
-    cabin: [ext],
+    // o aro e o sol do Sundog no capô somem no cockpit junto com o exterior
+    cabin: emitter ? [ext, chassis, emitter] : [ext, chassis],
     cockpit,
     steeringWheel,
     flames,

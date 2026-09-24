@@ -77,7 +77,7 @@ export const THEMES: Record<ThemeId, Theme> = {
   chem6: {
     skyHorizon: 0x5a3010, skyTop: 0x06040a, fog: 0x160e06, groundLevel: -8, ground: 0x8a5a0e, groundStyle: 'sludge',
     liquid: true, liquidEmissive: 0x201000,
-    road: '#4a4644', roadGrid: '#120a0a', roadGlow: 0.12, roadPattern: 'grid', roadEdge: '#e02a20', roadLine: '#e02a20',
+    road: '#1e1818', roadGrid: '#c01c14', roadGlow: 0.35, roadPattern: 'grid', roadEdge: '#e02a20', roadLine: '#e02a20',
     skirt: 0xa8acb4, walls: 'pipes', wallAccent: 0xe02020,
     rail: ['#b8bcc4', '#e02a20'], railStyle: 'lip',
     props: [0xb0b4bc, 0x8a8e96, 0x6a6e76], glow: 0xff7a20, flames: true,
@@ -110,7 +110,7 @@ export const THEMES: Record<ThemeId, Theme> = {
   newmojave: {
     skyHorizon: 0x7a3a10, skyTop: 0x080408, fog: 0x241206, groundLevel: -8, ground: 0xe0801c, groundStyle: 'sand',
     liquid: false, liquidEmissive: 0,
-    road: '#3e4c2a', roadGrid: '#141c0c', roadGlow: 0.15, roadPattern: 'hex', roadEdge: '#ffd21a', roadLine: '#ffd21a',
+    road: '#34441a', roadGrid: '#101806', roadGlow: 0, roadPattern: 'hex', roadEdge: '#ffd21a', roadLine: '#ffd21a',
     skirt: 0x9a7650, walls: 'riveted', wallAccent: 0xffd21a,
     rail: ['#8a4a22', '#ffe020'], railStyle: 'bumper',
     props: [0x9a5a2a, 0xd8d0c0, 0x6a6a70], glow: 0xffd070, flames: false,
@@ -119,9 +119,9 @@ export const THEMES: Record<ThemeId, Theme> = {
     light: { sunDir: [60, 30, -34], fill: 0x6a8aff, fillIntensity: 0.7, hemi: 0.28 }, cells: 10,
   },
   nho: {
-    skyHorizon: 0x2a4a8a, skyTop: 0x02040c, fog: 0x141a26, groundLevel: -8, ground: 0x8c9cbc, groundStyle: 'snow',
+    skyHorizon: 0x2a4a8a, skyTop: 0x02040c, fog: 0x141a26, groundLevel: -8, ground: 0xe4eefc, groundStyle: 'snow',
     liquid: false, liquidEmissive: 0,
-    road: '#5a6674', roadGrid: '#1a2230', roadGlow: 0, roadPattern: 'ice', roadEdge: '#8ac0ff', roadLine: '#8ac0ff',
+    road: '#1c58c8', roadGrid: '#08184a', roadGlow: 0.3, roadPattern: 'ice', roadEdge: '#8ac0ff', roadLine: '#8ac0ff',
     skirt: 0x22242c, walls: 'icerock', wallAccent: 0x1a3aa0,
     rail: ['#4a8aff', '#d8ecff'], railStyle: 'ice',
     props: [0x2a6a3a, 0x8ab8ff, 0xc8d8f0], glow: 0x60c8ff, flames: false,
@@ -132,7 +132,7 @@ export const THEMES: Record<ThemeId, Theme> = {
   inferno: {
     skyHorizon: 0x6a1004, skyTop: 0x060102, fog: 0x220402, groundLevel: -8, ground: 0xb81800, groundStyle: 'lava',
     liquid: true, liquidEmissive: 0xff3a00,
-    road: '#4c4c54', roadGrid: '#141418', roadGlow: 0, roadPattern: 'scales', roadEdge: '#e02010', roadLine: '#e02010',
+    road: '#2e2e34', roadGrid: '#08080a', roadGlow: 0, roadPattern: 'scales', roadEdge: '#e02010', roadLine: '#e02010',
     skirt: 0x1a0606, walls: 'demonic', wallAccent: 0xff5a10,
     rail: ['#141416', '#e02010'], railStyle: 'spiked',
     props: [0x6a1a0a, 0x3a3a40, 0x8a8a90], glow: 0xff5010, flames: true,

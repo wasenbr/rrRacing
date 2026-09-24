@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { carFrame, cockpitRig, Kit, sideProfile, wheel, type CarVisual } from './common';
+import { carFrame, cockpitRig, Kit, sideProfile, wheel, wheelTravel, type CarVisual } from './common';
 
 const WR = 0.86; // rodas de monster truck, como nos sprites do original
 const WX = 0.98; // centro das rodas
@@ -340,7 +340,7 @@ function wingShape(): THREE.Shape {
  * bocais dos Locust Jump Jets embaixo.
  */
 export function createMarauder(color: number, shadows: boolean): CarVisual {
-  const { root, body, ext } = carFrame();
+  const { root, body, ext, chassis } = carFrame();
   const k = new Kit(color, shadows, ext);
   const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
 
@@ -415,8 +415,8 @@ export function createMarauder(color: number, shadows: boolean): CarVisual {
   for (const sx of [-1, 1]) k.tube(V(sx * 0.3, CH - 0.1, 2.2), V(sx * 0.3, CH - 0.1, -2.1), 0.06, k.trim);
   // suspensão de monster truck (à mostra entre a carroceria e as rodas)
   for (const z of [WZF, WZR]) {
-    k.add(new THREE.SphereGeometry(0.24, 14, 10).scale(1.1, 0.9, 1), k.gunMetal, 0, WR, z); // diferencial
-    k.tube(V(-WX + 0.18, WR, z), V(WX - 0.18, WR, z), 0.07, k.gunMetal); // eixo
+    k.add(new THREE.SphereGeometry(0.24, 14, 10).scale(1.1, 0.9, 1), k.gunMetal, 0, WR, z, chassis); // diferencial
+    k.tube(V(-WX + 0.18, WR, z), V(WX - 0.18, WR, z), 0.07, k.gunMetal, chassis); // eixo
     for (const sx of [-1, 1]) {
       const ax = z === WZF ? 0.3 : 0.45; // na frente a bandeja é mais estreita
       k.tube(V(sx * ax, CH - 0.12, z + 0.34), V(sx * (WX - 0.26), WR, z), 0.045, k.steel);
@@ -454,6 +454,9 @@ export function createMarauder(color: number, shadows: boolean): CarVisual {
   const flames = k.flames([[-0.4, 1.18, -2.85], [0.4, 1.18, -2.85]], 0.8);
 
   const wheels = [-1, 1].flatMap((sx) => [-1, 1].map((sz) => ({ sz, ...wheel(k, { radius: WR, width: 0.52, spokes: 5, knobby: true }, sx * WX, WR, sz > 0 ? WZF : WZR) })));
+  // rodas e eixos no chassi: a carroceria balança por cima deles
+  for (const w of wheels) chassis.add(w.pivot);
+  const travel = wheelTravel(0.28);
 
   const eye = new THREE.Vector3(0, 2.02, -0.65);
   const { cockpit, steeringWheel } = cockpitRig(k, { eye, halfWidth: 0.66, weapon: 'plasma' }, body);
@@ -462,12 +465,13 @@ export function createMarauder(color: number, shadows: boolean): CarVisual {
   return {
     root,
     body,
-    cabin: [ext],
+    cabin: [ext, chassis],
     cockpit,
     steeringWheel,
     flames,
     eye,
     animate(a) {
+      chassis.position.y = travel(a);
       for (const w of wheels) {
         w.spin.rotation.x = a.spin;
         if (w.sz > 0) w.pivot.rotation.y = -a.steer * STEER;

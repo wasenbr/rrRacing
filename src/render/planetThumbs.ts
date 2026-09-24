@@ -1,12 +1,12 @@
 import * as THREE from 'three';
 import type { ThemeId } from '../sim/track';
-import { thumbRenderer } from './thumbnails';
+import { canvasToUrl, thumbRenderer } from './thumbnails';
 
 /**
  * Miniaturas dos 6 planetas: esfera 3D com textura procedural coerente com o tema, relevo,
  * luzes/lava no lado escuro, nuvens, atmosfera na cor do planeta e luz de terminador dramática,
  * sobre um fundo de espaço com estrelas. Usa o renderizador compartilhado das miniaturas e guarda
- * o resultado em cache (data URL) por planeta e tamanho; as texturas ficam em cache por planeta.
+ * o resultado em cache (object URL) por planeta e tamanho; as texturas ficam em cache por planeta.
  */
 
 type RGB = [number, number, number];
@@ -399,24 +399,24 @@ function drawSpace(g: CanvasRenderingContext2D, s: number, look: PlanetLook, id:
   g.restore();
 }
 
-const urlCache = new Map<string, string>();
+const urlCache = new Map<string, Promise<string>>();
 let composeCanvas: HTMLCanvasElement | null = null;
 
 /** Planetas com miniatura (os temas do jogo). */
 export const PLANET_THEMES = Object.keys(LOOKS) as ThemeId[];
 
 /**
- * Imagem (data URL) do planeta `id` (tema), quadrada, com `size` pixels CSS de lado
- * (até 2× em telas retina). Retorna '' se não houver WebGL.
+ * Imagem (object URL) do planeta `id` (tema), quadrada, com `size` pixels CSS de lado
+ * (até 2× em telas retina). Resolve '' se não houver WebGL.
  */
-export function planetThumbnail(id: ThemeId, size = 128): string {
+export function planetThumbnail(id: ThemeId, size = 128): Promise<string> {
   const dpr = typeof window !== 'undefined' ? Math.min(2, Math.max(1, window.devicePixelRatio || 1)) : 1;
   const px = Math.round(size * dpr);
   const key = `${id}|${px}`;
   const hit = urlCache.get(key);
   if (hit !== undefined) return hit;
   const look = LOOKS[id];
-  let url = '';
+  let url: Promise<string> | null = null;
   const group = new THREE.Group();
   try {
     const renderer = thumbRenderer();
@@ -479,11 +479,10 @@ export function planetThumbnail(id: ThemeId, size = 128): string {
     const pr = (1 / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) / Math.sqrt(camera.position.z ** 2 - 1)) * (px / 2);
     drawSpace(g, px, look, id, px / 2, px / 2, pr);
     g.drawImage(renderer.domElement, 0, 0);
-    url = cv.toDataURL('image/webp', 0.9);
-    if (!url.startsWith('data:image/webp')) url = cv.toDataURL('image/png');
+    url = canvasToUrl(cv);
   } catch (e) {
     console.warn('miniatura do planeta falhou', id, e);
-    url = '';
+    url = null;
   } finally {
     scene?.remove(group);
     group.traverse((o) => {
@@ -493,8 +492,13 @@ export function planetThumbnail(id: ThemeId, size = 128): string {
     });
   }
   // falha (ex.: contexto WebGL perdido) não fica no cache: a próxima tela tenta de novo
-  if (url) urlCache.set(key, url);
-  return url;
+  if (!url) return Promise.resolve('');
+  const p = url;
+  urlCache.set(key, p);
+  void p.then((u) => {
+    if (!u && urlCache.get(key) === p) urlCache.delete(key);
+  });
+  return p;
 }
 
 let ringTex: THREE.Texture | null = null;

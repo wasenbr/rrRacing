@@ -31,6 +31,8 @@ export interface TrackDef {
   layout: string;
   /** poças de gosma (deixam o carro lento), espalhadas pelas retas */
   slime?: number;
+  /** casas com poça fixa, transcritas do mapa original (substitui o espalhamento de `slime`) */
+  puddles?: number[];
   /** ordem da pista no planeta (1 = primeira), como no original */
   order?: number;
   /** piso; se omitido, vem do planeta (ver SURFACE_OF_THEME) */

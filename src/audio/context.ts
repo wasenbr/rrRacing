@@ -26,6 +26,41 @@ let engineDuck: GainNode | null = null;
 let sfxLift: GainNode | null = null;
 let muted = false;
 let sfxOn = true;
+/** cama → compressor de cola (modo normal) ou direto ao pré-limitador (modo leve) */
+let bedOut: BiquadFilterNode | null = null;
+let glueNode: DynamicsCompressorNode | null = null;
+let preLimitNode: GainNode | null = null;
+/**
+ * Modo leve de áudio (toque / qualidade baixa): um compressor só no master, reverb curto mono na
+ * trilha, distorção sem oversampling, 1 rival com motor e camadas do motor desligadas. Padrão:
+ * aparelhos de toque (ponteiro grosso) ou com até 4 núcleos. O jogo pode forçar com setAudioLite().
+ */
+let lite: boolean = (() => {
+  try {
+    const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+    const cores = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency || 8 : 8;
+    return coarse || cores <= 4;
+  } catch {
+    return false;
+  }
+})();
+
+/** Modo leve de áudio ativo? (toque / qualidade baixa) */
+export function isAudioLite(): boolean {
+  return lite;
+}
+
+/**
+ * Liga/desliga o modo leve (chamar ao mudar o nível de qualidade: baixo/toque → true). O master
+ * troca na hora; trilha e motor leem o modo ao serem criados (vale a partir da próxima corrida).
+ */
+export function setAudioLite(on: boolean): void {
+  if (on === lite) return;
+  lite = on;
+  if (!bedOut || !glueNode || !preLimitNode) return;
+  bedOut.disconnect();
+  bedOut.connect(on ? preLimitNode : glueNode);
+}
 
 /** Nível fixo da música na mixagem (o volume do jogador multiplica isto). */
 const MUSIC_TRIM = 0.3;
@@ -47,6 +82,20 @@ export interface AudioOut {
 
 export function audio(): AudioOut | null {
   return ctx && sfxBus && musicBus && engineBus && voiceBus ? { ctx, out: sfxBus, engine: engineBus, music: musicBus, voice: voiceBus } : null;
+}
+
+/** Teto do master: -1 dBFS. */
+export const CEIL = Math.pow(10, -1 / 20);
+
+/** Curva do soft clip do master: linear até `knee`, satura (tanh) até no máximo `ceil`. */
+export function ceilingCurve(knee: number, ceil: number, n = 2048): Float32Array<ArrayBuffer> {
+  const curve = new Float32Array(new ArrayBuffer(n * 4));
+  for (let i = 0; i < n; i++) {
+    const x = (i / (n - 1)) * 2 - 1;
+    const ax = Math.abs(x);
+    curve[i] = ax < knee ? x : Math.sign(x) * (knee + (ceil - knee) * Math.tanh((ax - knee) / (ceil - knee)));
+  }
+  return curve;
 }
 
 function buildGraph(c: BaseAudioContext): void {
@@ -74,22 +123,22 @@ function buildGraph(c: BaseAudioContext): void {
   rumbleCut.frequency.value = 30;
   rumbleCut.Q.value = 0.7;
   bed.connect(rumbleCut);
-  rumbleCut.connect(glue);
   // pré-limitador: ~1 dB de folga (volume geral agradável), o limitador só segura picos raros
   const preLimit = ctx.createGain();
   preLimit.gain.value = 0.89;
+  // modo leve: a cama vai direto ao pré-limitador (um compressor só, o limitador)
+  rumbleCut.connect(lite ? preLimit : glue);
+  bedOut = rumbleCut;
+  glueNode = glue;
+  preLimitNode = preLimit;
   glue.connect(preLimit);
   preLimit.connect(limiter);
-  // soft clip final: rede de segurança (linear até 0,9)
+  // teto do master: o compressor do navegador deixa passar o transitório do ataque (a mixagem
+  // chegava a -0,2 dBFS). O soft clip é linear até 0,8 e satura assintoticamente em CEIL
+  // (-1 dBFS): nenhuma amostra passa de ~-1 dBFS, mesmo com entrada acima de 0 dBFS.
   const clip = ctx.createWaveShaper();
-  const curve = new Float32Array(new ArrayBuffer(2048 * 4));
-  const knee = 0.9;
-  for (let i = 0; i < 2048; i++) {
-    const x = (i / 2047) * 2 - 1;
-    const ax = Math.abs(x);
-    curve[i] = ax < knee ? x : Math.sign(x) * (knee + (1 - knee) * Math.tanh((ax - knee) / (1 - knee)));
-  }
-  clip.curve = curve;
+  clip.curve = ceilingCurve(0.8, CEIL);
+  clip.oversample = 'none';
   // o compressor do navegador aplica ganho de compensação automático (~+1,5 dB aqui): desconta
   const postLimit = ctx.createGain();
   postLimit.gain.value = 0.84;
@@ -128,7 +177,8 @@ function buildGraph(c: BaseAudioContext): void {
 
 export function unlockAudio(): void {
   if (ctx) {
-    void ctx.resume();
+    // pausado de propósito (suspendAudio): só resumeAudio() retoma; um toque no menu de pausa não
+    if (!userSuspended && (ctx.state as string) !== 'running') void resumeAudio();
     return;
   }
   const AC = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
@@ -142,6 +192,68 @@ export function unlockAudio(): void {
     c = new AC();
   }
   buildGraph(c);
+  watchState(c);
+}
+
+/** O áudio foi pausado por suspendAudio() (pausa/aba oculta): resumeAudio() só retoma nesse caso. */
+let userSuspended = false;
+
+/**
+ * Pausa o áudio (pausa do jogo, aba oculta): `ctx.suspend()` libera a CPU/bateria de áudio.
+ * Seguro de chamar sem contexto ou já suspenso.
+ */
+export function suspendAudio(): Promise<void> {
+  userSuspended = true;
+  if (!ctx || ctx.state === 'closed' || typeof ctx.suspend !== 'function') return Promise.resolve();
+  return ctx.suspend().catch(() => undefined);
+}
+
+/**
+ * Retoma o áudio (volta da pausa, aba visível de novo, reinício/saída da corrida). Trata o estado
+ * `interrupted` do iOS (ligação, Siri, outro app tocando): nele o `resume()` pode falhar ou ficar
+ * pendente; tenta de novo no próximo gesto do usuário (toque/tecla), que o Safari exige.
+ */
+export function resumeAudio(): Promise<void> {
+  userSuspended = false;
+  // sem contexto ainda: nada a retomar (ele nasce no primeiro gesto, em unlockAudio)
+  if (!ctx) return Promise.resolve();
+  if ((ctx.state as string) === 'running' || ctx.state === 'closed') return Promise.resolve();
+  const c = ctx;
+  return c
+    .resume()
+    .catch(() => undefined)
+    .then(() => {
+      if ((c.state as string) !== 'running') retryOnGesture();
+    });
+}
+
+let gestureArmed = false;
+function retryOnGesture(): void {
+  if (gestureArmed || typeof window === 'undefined') return;
+  gestureArmed = true;
+  const retry = (): void => {
+    gestureArmed = false;
+    window.removeEventListener('pointerdown', retry, true);
+    window.removeEventListener('keydown', retry, true);
+    window.removeEventListener('touchend', retry, true);
+    if (!userSuspended) void resumeAudio();
+  };
+  window.addEventListener('pointerdown', retry, true);
+  window.addEventListener('keydown', retry, true);
+  window.addEventListener('touchend', retry, true);
+}
+
+/** Estado atual do contexto ('running', 'suspended', 'interrupted' no iOS, 'closed') ou null. */
+export function audioState(): string | null {
+  return ctx ? (ctx.state as string) : null;
+}
+
+function watchState(c: AudioContext): void {
+  // iOS: fim da interrupção (ligação/Siri) deixa o contexto 'suspended'/'interrupted'; se o jogo
+  // não pausou o áudio de propósito, retoma sozinho (ou no próximo toque)
+  c.addEventListener?.('statechange', () => {
+    if (!userSuspended && (c.state as string) !== 'running' && c.state !== 'closed') void resumeAudio();
+  });
 }
 
 /**
@@ -206,6 +318,11 @@ export function setSfxEnabled(on: boolean): void {
     sfxBus.gain.setTargetAtTime(on ? SFX_TRIM : 0, ctx.currentTime, 0.05);
     engineBus.gain.setTargetAtTime(on ? ENGINE_TRIM : 0, ctx.currentTime, 0.05);
   }
+}
+
+/** Só para medição (scripts/evidencias.mjs): o nó final da mixagem, antes do destino. */
+export function audioOutputForTest(): AudioNode | null {
+  return master;
 }
 
 /**

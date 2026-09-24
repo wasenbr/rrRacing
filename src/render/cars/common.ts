@@ -280,7 +280,7 @@ function hoodPatch(hw: number, L: number, z0: number, eyeY: number, nu: number, 
  * um capô baixo na cor do carro, o painel e o volante. Nada acima da linha dos olhos: a pista
  * fica sempre livre, qualquer que seja a forma do carro.
  */
-export function cockpitRig(kit: Kit, o: CockpitOpts, parent: THREE.Object3D = kit.body): { cockpit: THREE.Group; steeringWheel: THREE.Group } {
+export function cockpitRig(kit: Kit, o: CockpitOpts, parent: THREE.Object3D = kit.body): { cockpit: THREE.Group; steeringWheel: THREE.Group; emitter: THREE.Group | null } {
   const cockpit = new THREE.Group();
   cockpit.visible = false;
   parent.add(cockpit);
@@ -379,6 +379,7 @@ export function cockpitRig(kit: Kit, o: CockpitOpts, parent: THREE.Object3D = ki
   steeringWheel.add(top);
   // arma no capô (sempre por cima da superfície, para aparecer na faixa de baixo da tela)
   const w = o.weapon ?? 'none';
+  let emitter: THREE.Group | null = null;
   const surf = (x: number, t: number) => e.y + hoodHeight(x, t, hw);
   if (w === 'plasma') {
     for (const sx of [-1, 1]) {
@@ -397,35 +398,67 @@ export function cockpitRig(kit: Kit, o: CockpitOpts, parent: THREE.Object3D = ki
       for (const dx of [-0.07, 0.07]) kit.add(new THREE.ConeGeometry(0.05, 0.16, 8).rotateX(Math.PI / 2), kit.tail, x + dx, gy, z0 + 1.17, cockpit);
     }
   } else if (w === 'sundog') {
-    // emissor Sundog no bico: pedestal, aro cromado virado para a frente, sol aceso e raios
+    // emissor Sundog no bico: só o pedestal baixo fica à vista. O aro, o sol e os raios ficam num
+    // grupo à parte (`emitter`), que o carro põe em `cabin`: na câmera de cockpit eles tapavam o
+    // meio da pista
     const t = 0.8;
     const zz = z0 + L * t;
     const gy = surf(0, t) + 0.16;
     kit.add(new THREE.CylinderGeometry(0.07, 0.11, 0.16, 12), kit.gunMetal, 0, gy - 0.1, zz, cockpit);
-    kit.add(new THREE.TorusGeometry(0.15, 0.03, 8, 24), kit.chrome, 0, gy, zz, cockpit);
+    emitter = new THREE.Group();
+    cockpit.add(emitter);
+    kit.add(new THREE.TorusGeometry(0.15, 0.03, 8, 24), kit.chrome, 0, gy, zz, emitter);
     // (brilho contido: colado na câmera, o emissivo forte estourava o bloom e cobria a tela)
     const core = new THREE.MeshStandardMaterial({ color: 0xffc040, emissive: 0xff9020, emissiveIntensity: 1.1, roughness: 0.4 });
-    kit.add(new THREE.SphereGeometry(0.075, 16, 12), core, 0, gy, zz, cockpit);
+    kit.add(new THREE.SphereGeometry(0.075, 16, 12), core, 0, gy, zz, emitter);
     for (let k = 0; k < 8; k++) {
       const a = (k / 8) * Math.PI * 2;
-      const ray = kit.add(new THREE.ConeGeometry(0.022, 0.09, 5), kit.gunMetal, Math.cos(a) * 0.2, gy + Math.sin(a) * 0.2, zz, cockpit);
+      const ray = kit.add(new THREE.ConeGeometry(0.022, 0.09, 5), kit.gunMetal, Math.cos(a) * 0.2, gy + Math.sin(a) * 0.2, zz, emitter);
       ray.rotation.z = a - Math.PI / 2;
     }
   }
-  return { cockpit, steeringWheel };
+  return { cockpit, steeringWheel, emitter };
 }
 
 /**
  * Esqueleto comum: `root` (posição/rotação do carro) > `body` (balanço da suspensão) >
- * `ext` (todo o exterior, escondido na câmera de cockpit).
+ * `ext` (todo o exterior, escondido na câmera de cockpit). `chassis` (filho de root, irmão de
+ * `body`) leva rodas/esteiras e eixos: a carroceria balança por cima deles (suspensão real) e eles
+ * ficam no chão. Vai também na lista `cabin` (some no cockpit).
  */
-export function carFrame(): { root: THREE.Group; body: THREE.Group; ext: THREE.Group } {
+export function carFrame(): { root: THREE.Group; body: THREE.Group; ext: THREE.Group; chassis: THREE.Group } {
   const root = new THREE.Group();
   const body = new THREE.Group();
   const ext = new THREE.Group();
-  root.add(body);
+  const chassis = new THREE.Group();
+  root.add(body, chassis);
   body.add(ext);
-  return { root, body, ext };
+  return { root, body, ext, chassis };
+}
+
+/**
+ * Curso da suspensão: devolve o deslocamento vertical (m, ≤ 0) do grupo das rodas. No ar as rodas
+ * descem até `travel` abaixo da carroceria; ao tocar o chão voltam com uma mola amortecida.
+ * Usa `a.time` para o passo; salto no tempo (vitrine, sondagem do merge) zera o estado.
+ */
+export function wheelTravel(travel: number): (a: CarAnim) => number {
+  let y = 0;
+  let v = 0;
+  let t = -Infinity;
+  return (a) => {
+    const dt = a.time - t;
+    t = a.time;
+    if (!(dt > 0 && dt < 0.25)) {
+      y = 0;
+      v = 0;
+      return 0;
+    }
+    const h = Math.min(dt, 0.05);
+    const target = a.grounded ? 0 : -travel;
+    v += ((target - y) * 160 - v * 16) * h;
+    y = Math.max(-travel * 1.15, Math.min(travel * 0.3, y + v * h));
+    return y;
+  };
 }
 
 /** Textura de esteira (para o Battle Trak), com rolagem por offset. */

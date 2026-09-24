@@ -9,10 +9,10 @@ Pós-tratamento das falas do locutor (roda depois de gerar.py; só precisa de ff
      agudo demais (F0 mediano > 225 Hz) desce até 4 semitons (rubberband, formantes preservados),
      para toda a narração ficar na mesma voz grave de arena.
   4. Exclamações longas ficam mais rápidas (sem mudar o tom), até 1,25x: exclamações ≤ 1,5 s,
-     largada ≤ 2,5 s, demais frases ≤ 2,2 s, quando possível.
+     largada ≤ 3,0 s, demais frases ≤ 2,2 s, quando possível.
   5. Normaliza o loudness de todas as falas para o mesmo nível (LOUD_ALVO LUFS) e limita o pico.
 
-Uso: python scripts/locutor/tratar.py [--medir]   (--medir só imprime duração, LUFS e F0)
+Uso: python scripts/locutor/tratar.py [--medir] [--forcar] [--so start]   (--medir só imprime duração, LUFS e F0)
 O manifest ganha "tratado": true; rodar de novo não reprocessa (use --forcar depois de gerar.py).
 """
 import json, os, re, subprocess, sys, tempfile
@@ -113,7 +113,7 @@ def main():
             med, rng = f0(p)
             print(f'{f:24s} {duration(p):5.2f} s  {loudness(p):6.1f} LUFS  F0 {med:4.0f} Hz  faixa {rng:4.1f} st')
         return
-    if m.get('tratado') and '--forcar' not in sys.argv:
+    if m.get('tratado') and '--forcar' not in sys.argv and '--so' not in sys.argv:
         print('já tratado (use --forcar)')
         return
 
@@ -131,6 +131,10 @@ def main():
     used = sorted({f for lst in m['lines'].values() for f in lst} |
                   {f for by in m.get('combos', {}).values() for lst in by.values() for f in lst})
 
+    # --so start,lastLap: trata só essas chaves (as outras falas já tratadas não são recodificadas)
+    if '--so' in sys.argv:
+        only = set(sys.argv[sys.argv.index('--so') + 1].split(','))
+        used = [f for f in used if key_of(f) in only]
     tmp = tempfile.mkdtemp()
     for f in used:
         p = os.path.join(DIR, f)
@@ -151,7 +155,7 @@ def main():
             print(f'{f}: F0 {med:.0f} Hz, -{semis:.1f} semitons')
         # 4. frases longas mais rápidas (tom igual)
         d = duration(a)
-        alvo = 1.5 if k in EXCLAMACAO else 2.5 if k == 'start' else 2.2
+        alvo = 1.5 if k in EXCLAMACAO else 3.0 if k == 'start' else 2.2  # largada: acelerar embolava "carnage"
         if not name and d > alvo:
             tempo = min(1.25, d / alvo)
             if tempo > 1.03:

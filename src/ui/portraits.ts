@@ -5,6 +5,8 @@
  * montador de peças com o mesmo acabamento.
  */
 
+import { idleJob } from './idleQueue';
+
 const INK = '#120a08';
 type Stop = [number, string, number?];
 type Pt = [number, number];
@@ -1610,7 +1612,9 @@ export function portraitSvg(nameOrId: string, size = 96): string {
 function rasterize(k: string, svgUrl: string, size: number): void {
   if (typeof document === 'undefined') return;
   const img = new Image();
-  img.onload = () => {
+  // a pintura (drawImage do SVG com filtros) é o passo caro: vai para a fila dos intervalos livres
+  img.onload = () => idleJob(`portrait-png:${k}`, paint, true);
+  const paint = () => {
     try {
       const px = Math.round(size * Math.min(3, Math.max(1, window.devicePixelRatio || 1)));
       const c = document.createElement('canvas');
@@ -1621,6 +1625,9 @@ function rasterize(k: string, svgUrl: string, size: number): void {
         const png = URL.createObjectURL(b);
         cache.set(k, png);
         document.querySelectorAll<HTMLImageElement>(`img.portrait[src="${svgUrl}"]`).forEach((el) => (el.src = png));
+        // o SVG não é mais usado (o cache aponta para o PNG): libera a memória depois que as
+        // imagens trocadas carregarem o PNG
+        setTimeout(() => URL.revokeObjectURL(svgUrl), 1000);
       }, 'image/png');
     } catch {
       // canvas contaminado ou sem suporte: fica o SVG
@@ -1631,15 +1638,7 @@ function rasterize(k: string, svgUrl: string, size: number): void {
 
 /** Prepara (em PNG) os retratos dos menus antes de abrir a tela, nos intervalos livres. */
 export function warmPortraits(ids: string[], sizes: number[]): void {
-  const jobs = ids.flatMap((id) => sizes.map((s) => () => portraitSvg(id, s)));
-  const idle = (window as unknown as { requestIdleCallback?: (f: () => void) => void }).requestIdleCallback ?? ((f: () => void) => setTimeout(f, 50));
-  const next = () => {
-    const job = jobs.shift();
-    if (!job) return;
-    job();
-    idle(next);
-  };
-  idle(next);
+  for (const id of ids) for (const s of sizes) idleJob(`portrait:${faceKey(id) || id}|${s}`, () => portraitSvg(id, s));
 }
 
 /** SVG do retrato (string com o <svg> embutido). */

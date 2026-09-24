@@ -1,3 +1,5 @@
+import { isAudioLite } from './context';
+
 /**
  * Trilha de rock sintetizada em tempo real (Web Audio): bateria, baixo e guitarra distorcida.
  * Os riffs são originais, no espírito do hard rock que embala o jogo de 1993.
@@ -166,10 +168,10 @@ function distortionCurve(amount: number): Float32Array<ArrayBuffer> {
 }
 
 /** Resposta ao impulso de uma sala pequena (reverb gerado por código). */
-function roomImpulse(ctx: BaseAudioContext, seconds: number, decay: number): AudioBuffer {
+function roomImpulse(ctx: BaseAudioContext, seconds: number, decay: number, channels = 2): AudioBuffer {
   const n = Math.round(ctx.sampleRate * seconds);
-  const buf = ctx.createBuffer(2, n, ctx.sampleRate);
-  for (let ch = 0; ch < 2; ch++) {
+  const buf = ctx.createBuffer(channels, n, ctx.sampleRate);
+  for (let ch = 0; ch < channels; ch++) {
     const d = buf.getChannelData(ch);
     for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, decay);
   }
@@ -183,14 +185,15 @@ interface GuitarSide {
   cab: BiquadFilterNode;
 }
 
-function guitarSide(ctx: BaseAudioContext, dest: AudioNode, pan: number, delay: number, drive: number): GuitarSide {
+function guitarSide(ctx: BaseAudioContext, dest: AudioNode, pan: number, delay: number, drive: number, lite = false): GuitarSide {
   const input = ctx.createGain();
   const pre = ctx.createBiquadFilter();
   pre.type = 'highpass';
   pre.frequency.value = 100;
   const dist = ctx.createWaveShaper();
   dist.curve = distortionCurve(drive);
-  dist.oversample = '2x';
+  // modo leve: sem oversampling (o 2x dobra o custo de CPU de cada guitarra)
+  dist.oversample = lite ? 'none' : '2x';
   const cab = ctx.createBiquadFilter();
   cab.type = 'lowpass';
   cab.frequency.value = 3600;
@@ -244,19 +247,27 @@ export class SynthRock {
     private ctx: AudioContext,
     destination: AudioNode,
   ) {
+    // modo leve (toque / qualidade baixa): sem compressor próprio (fica só o limitador do master),
+    // reverb de 0,4 s mono no lugar da sala estéreo de 1,4 s e distorção sem oversampling
+    const lite = isAudioLite();
     this.out = ctx.createGain();
     this.out.gain.value = 0.55;
-    const comp = ctx.createDynamicsCompressor();
-    // compressão leve: segura os picos sem achatar a dinâmica entre seções (intro → refrão)
-    comp.threshold.value = -12;
-    comp.knee.value = 8;
-    comp.ratio.value = 2.2;
-    comp.attack.value = 0.015;
-    comp.release.value = 0.25;
     const makeup = ctx.createGain();
-    makeup.gain.value = 1.25;
-    this.out.connect(comp);
-    comp.connect(makeup);
+    if (lite) {
+      makeup.gain.value = 1.1;
+      this.out.connect(makeup);
+    } else {
+      const comp = ctx.createDynamicsCompressor();
+      // compressão leve: segura os picos sem achatar a dinâmica entre seções (intro → refrão)
+      comp.threshold.value = -12;
+      comp.knee.value = 8;
+      comp.ratio.value = 2.2;
+      comp.attack.value = 0.015;
+      comp.release.value = 0.25;
+      makeup.gain.value = 1.25;
+      this.out.connect(comp);
+      comp.connect(makeup);
+    }
     // volume da seção DEPOIS do compressor (como um técnico subindo o fader no refrão): a
     // compressão não desfaz a diferença entre intro, riff, refrão e ponte
     this.section = ctx.createGain();
@@ -266,7 +277,7 @@ export class SynthRock {
     this.gate.connect(destination);
     // reverb de sala (caixa, solos e um pouco da guitarra)
     const conv = ctx.createConvolver();
-    conv.buffer = roomImpulse(ctx, 1.4, 3);
+    conv.buffer = lite ? roomImpulse(ctx, 0.4, 2.5, 1) : roomImpulse(ctx, 1.4, 3);
     this.reverb = ctx.createGain();
     this.reverb.gain.value = 0.35;
     this.reverb.connect(conv);
@@ -276,8 +287,8 @@ export class SynthRock {
     // (antes da distorção só mudaria a saturação)
     this.guitarBus = ctx.createGain();
     this.guitarBus.connect(this.out);
-    const gl = guitarSide(ctx, this.guitarBus, -0.75, 0, 60);
-    const gr = guitarSide(ctx, this.guitarBus, 0.75, 0.013, 45);
+    const gl = guitarSide(ctx, this.guitarBus, -0.75, 0, 60, lite);
+    const gr = guitarSide(ctx, this.guitarBus, 0.75, 0.013, 45, lite);
     this.sides = [gl, gr];
     this.guitarL = gl.input;
     this.guitarR = gr.input;
@@ -288,7 +299,7 @@ export class SynthRock {
     this.guitarL.connect(gSend);
     gSend.connect(this.reverb);
     // guitarra solo: centro, mais aguda, com eco
-    this.lead = guitarSide(ctx, this.out, 0.1, 0, 90).input;
+    this.lead = guitarSide(ctx, this.out, 0.1, 0, 90, lite).input;
     this.lead.gain.value = 0.11;
     const echo = ctx.createDelay(1);
     echo.delayTime.value = 0.28;

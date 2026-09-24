@@ -1,5 +1,5 @@
 // Gera evidências para os avaliadores: capturas de tela, teste de jogo automático e gravações de som.
-// Uso: node scripts/evidencias.mjs <pastaSaida> [tudo|telas|ui|celular|jogo|som|desempenho]  (telas inclui ui e celular) [url]
+// Uso: node scripts/evidencias.mjs <pastaSaida> [tudo|telas|ui|celular|jogo|som|picote|desempenho]  (som inclui picote)  (telas inclui ui e celular) [url]
 // Precisa do servidor de desenvolvimento rodando (npm run dev).
 import { chromium } from 'playwright-core';
 import fs from 'node:fs';
@@ -13,7 +13,7 @@ fs.mkdirSync(out, { recursive: true });
 const browser = await chromium.launch({
   channel: 'chrome',
   headless: true,
-  args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--autoplay-policy=no-user-gesture-required'],
+  args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--autoplay-policy=no-user-gesture-required', '--enable-blink-features=AudioContextPlayoutStats'],
 });
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 // máquina carregada (render por software): capturas podem levar mais que os 30 s padrão
@@ -419,6 +419,191 @@ async function jogo() {
 /* ------------------------------------------------------------------ */
 /* Som: renderização offline de efeitos, motor, músicas e uma mixagem  */
 /* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+/* Picote do som (itens 47/50): corrida real com CPU 4x mais lenta,     */
+/* grava a saída do master e mede buracos/descontinuidades              */
+/* ------------------------------------------------------------------ */
+async function picote() {
+  const dir = path.join(out, 'som');
+  fs.mkdirSync(dir, { recursive: true });
+  const cdp = await page.context().newCDPSession(page);
+  const SEG = +(process.env.PICOTE_S ?? 20) || 20;
+  const casos = [
+    { nome: 'normal_cpu4x', leve: false },
+    { nome: 'leve_cpu4x', leve: true },
+  ];
+  const resultados = [];
+  for (const caso of casos) {
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
+    await page.goto(`${base}?autopilot&laps=3&q=baixo`, { waitUntil: 'domcontentloaded', timeout: 180000 });
+    await page.waitForFunction(() => !!window.game, null, { timeout: 180000 });
+    await wait(2500);
+    await page.evaluate(async (leve) => {
+      const m = await window.devModules();
+      m.setAudioLite?.(leve);
+      // tarefas longas da thread principal durante a medição
+      window.__longtasks = [];
+      try {
+        new PerformanceObserver((l) => {
+          for (const e of l.getEntries()) window.__longtasks.push(Math.round(e.duration));
+        }).observe({ type: 'longtask', buffered: false });
+      } catch {
+        /* sem suporte */
+      }
+      window.game.menuActions().quickRace({ trackId: 'chem6-1', vehicleId: 'marauder', color: 0x2f7bff, difficulty: 'normal' });
+    }, caso.leve);
+    await page.waitForFunction(() => window.game.phase === 'racing', null, { timeout: 180000, polling: 250 });
+    // grava a saída do master com um AudioWorklet (mono) e mede, a cada bloco de 128 amostras, o
+    // atraso do render em relação ao relógio de parede: se a thread de áudio atrasa, o relógio do
+    // áudio fica para trás de uma vez (salto do atraso) — é o buraco que se ouve como picote
+    await page.evaluate(async () => {
+      const m = await window.devModules();
+      const a = m.audio();
+      const master = m.audioOutputForTest();
+      const src = `class Tap extends AudioWorkletProcessor {
+        constructor() { super(); this.chunk = new Float32Array(sampleRate / 2); this.n = 0; this.w0 = -1; this.frames = 0; this.hi = -1e9; this.saltos = []; this.on = true;
+          this.port.onmessage = () => { this.on = false; this.port.postMessage({ fim: true, saltos: this.saltos }); }; }
+        process(inputs) {
+          if (!this.on) return false;
+          const now = Date.now();
+          if (this.w0 < 0) this.w0 = now;
+          const lag = (now - this.w0) - (this.frames / sampleRate) * 1000;
+          if (this.frames > sampleRate && lag > this.hi + 2) this.saltos.push(+(lag - this.hi).toFixed(1));
+          if (lag > this.hi) this.hi = lag;
+          const ch = inputs[0] && inputs[0][0];
+          const ch2 = inputs[0] && inputs[0][1];
+          for (let i = 0; i < 128; i++) {
+            this.chunk[this.n++] = ch ? (ch2 ? (ch[i] + ch2[i]) / 2 : ch[i]) : 0;
+            if (this.n === this.chunk.length) { this.port.postMessage(this.chunk); this.chunk = new Float32Array(sampleRate / 2); this.n = 0; }
+          }
+          this.frames += 128;
+          return true;
+        }
+      }
+      registerProcessor('tap-picote', Tap);`;
+      const url = URL.createObjectURL(new Blob([src], { type: 'application/javascript' }));
+      await a.ctx.audioWorklet.addModule(url);
+      const tap = new AudioWorkletNode(a.ctx, 'tap-picote', { numberOfInputs: 1, numberOfOutputs: 0, channelCount: 2, channelCountMode: 'explicit' });
+      master.connect(tap);
+      window.__tap = { node: tap, chunks: [], saltos: null };
+      tap.port.onmessage = (e) => {
+        if (e.data && e.data.fim) window.__tap.saltos = e.data.saltos;
+        else window.__tap.chunks.push(e.data);
+      };
+      window.__playout0 = a.ctx.playoutStats ? { ...a.ctx.playoutStats.toJSON?.() } : null;
+      window.__longtasks.length = 0;
+    });
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
+    await wait(SEG * 1000);
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
+    const r = await page.evaluate(async () => {
+      const m = await window.devModules();
+      const a = m.audio();
+      const t = window.__tap;
+      t.node.port.postMessage('fim');
+      for (let k = 0; k < 50 && !t.saltos; k++) await new Promise((res) => setTimeout(res, 100));
+      const sr = a.ctx.sampleRate;
+      const n = t.chunks.reduce((s, c) => s + c.length, 0);
+      const x = new Float32Array(n);
+      let o = 0;
+      for (const c of t.chunks) {
+        x.set(c, o);
+        o += c.length;
+      }
+      // buracos no sinal: trechos de silêncio digital (|x| < 1e-5) >= 2 ms com som dos dois lados
+      const minRun = Math.round(sr * 0.002);
+      const buracos = [];
+      let run = 0;
+      for (let i = 0; i < n; i++) {
+        if (Math.abs(x[i]) < 1e-5) run++;
+        else {
+          if (run >= minRun && i - run > 0) {
+            const antes = Math.abs(x[i - run - 1]);
+            if (antes > 1e-3 || Math.abs(x[i]) > 1e-3) buracos.push(+((run / sr) * 1000).toFixed(1));
+          }
+          run = 0;
+        }
+      }
+      // descontinuidades: salto de amostra muito maior que a variação local (estalo)
+      let desc = 0;
+      const W = 64;
+      for (let i = W + 1; i < n - W; i += 1) {
+        const d = Math.abs(x[i] - x[i - 1]);
+        if (d < 0.15) continue;
+        let s = 0;
+        for (let j = i - W; j < i + W; j++) if (j !== i) s += Math.abs(x[j] - x[j - 1]);
+        if (d > 8 * (s / (2 * W - 1))) {
+          desc++;
+          i += W;
+        }
+      }
+      let pico = 0;
+      for (let i = 0; i < n; i++) pico = Math.max(pico, Math.abs(x[i]));
+      // WAV 16 bits mono para ouvir
+      const wav = new DataView(new ArrayBuffer(44 + n * 2));
+      const ws = (p, s) => [...s].forEach((ch, i) => wav.setUint8(p + i, ch.charCodeAt(0)));
+      ws(0, 'RIFF');
+      wav.setUint32(4, 36 + n * 2, true);
+      ws(8, 'WAVEfmt ');
+      wav.setUint32(16, 16, true);
+      wav.setUint16(20, 1, true);
+      wav.setUint16(22, 1, true);
+      wav.setUint32(24, sr, true);
+      wav.setUint32(28, sr * 2, true);
+      wav.setUint16(32, 2, true);
+      wav.setUint16(34, 16, true);
+      ws(36, 'data');
+      wav.setUint32(40, n * 2, true);
+      for (let i = 0; i < n; i++) wav.setInt16(44 + i * 2, Math.max(-1, Math.min(1, x[i])) * 32767, true);
+      const bytes = new Uint8Array(wav.buffer);
+      let bin = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      const lt = window.__longtasks;
+      const ps = a.ctx.playoutStats?.toJSON?.() ?? null;
+      const saltos = t.saltos ?? [];
+      return {
+        segundosGravados: +(n / sr).toFixed(1),
+        sampleRate: sr,
+        baseLatencyMs: +((a.ctx.baseLatency ?? 0) * 1000).toFixed(1),
+        outputLatencyMs: +((a.ctx.outputLatency ?? 0) * 1000).toFixed(1),
+        audioLeve: m.isAudioLite(),
+        buracosSinalMaior2ms: buracos.length,
+        buracosSinalMs: buracos.slice(0, 30),
+        descontinuidades: desc,
+        atrasosRenderMaior2ms: saltos.length,
+        atrasosRenderMaior10ms: saltos.filter((s) => s > 10).length,
+        atrasosRenderMs: saltos.slice(0, 30),
+        picoDbfs: +(20 * Math.log10(pico || 1e-9)).toFixed(2),
+        longtasks: { total: lt.length, maiorMs: lt.length ? Math.max(...lt) : 0, somaMs: lt.reduce((s, v) => s + v, 0) },
+        playoutStats: ps,
+        playoutInicio: window.__playout0,
+        wav: btoa(bin),
+      };
+    });
+    const { wav, ...met } = r;
+    fs.writeFileSync(path.join(dir, `picote_${caso.nome}.wav`), Buffer.from(wav, 'base64'));
+    const res = { caso: caso.nome, cpuLentidao: 4, ...met };
+    console.log('picote', JSON.stringify(res));
+    resultados.push(res);
+  }
+  fs.writeFileSync(
+    path.join(dir, 'picote.json'),
+    JSON.stringify(
+      {
+        observacao:
+          'Corrida real (chem6-1, autopiloto, q=baixo) com CPU 4x mais lenta (CDP Emulation.setCPUThrottlingRate). A saída do master é gravada por um ' +
+          'AudioWorklet. buracosSinal = silêncio digital >= 2 ms no meio do som; descontinuidades = saltos de amostra ~8x maiores que a variação local; ' +
+          'atrasosRender = saltos (> 2 ms) do atraso do relógio de áudio em relação ao relógio de parede (a thread de áudio não entregou a tempo: buraco na saída); ' +
+          'playoutStats = contadores do Chrome (fallbackFrames = amostras que o dispositivo tocou em silêncio), quando disponíveis.',
+        casos: resultados,
+      },
+      null,
+      2,
+    ),
+  );
+  await freshPage();
+}
+
 async function som() {
   const dir = path.join(out, 'som');
   fs.mkdirSync(dir, { recursive: true });
@@ -787,6 +972,7 @@ async function desempenho() {
 try {
   if (what === 'tudo' || what === 'desempenho') await desempenho();
   if (what === 'tudo' || what === 'jogo') await jogo();
+  if (what === 'tudo' || what === 'som' || what === 'picote') await picote();
   if (what === 'tudo' || what === 'som') await som();
   // a etapa de som troca o AudioContext da página por um OfflineAudioContext: recarregar antes das telas
   if (what === 'tudo') await freshPage();

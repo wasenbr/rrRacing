@@ -1,8 +1,9 @@
 import { Track, type Piece, type TrackDef } from '../sim/track';
 import { THEMES, type Theme } from '../render/themes';
 import { trackTransform } from './trackMap';
+import { canvasToUrl } from '../render/thumbnails';
 
-const cache = new Map<string, string>();
+const cache = new Map<string, Promise<string>>();
 const css = (n: number) => `#${n.toString(16).padStart(6, '0')}`;
 
 /** Clareia (k > 1) ou escurece (k < 1) uma cor #rrggbb. */
@@ -93,9 +94,9 @@ function drawGround(ctx: CanvasRenderingContext2D, t: Theme, w: number, h: numbe
  * Miniatura de uma pista em vista aérea com a identidade do planeta: chão do tema lá embaixo,
  * piso e muretas nas cores do tema, trechos altos mais claros, rampas de salto marcadas com
  * setas amarelas, lombadas em laranja e os vãos abertos (sem piso) com faixas de perigo.
- * @returns data URL PNG
+ * @returns object URL da imagem (PNG)
  */
-export function trackThumbnail(def: TrackDef, width = 200, height = 130): string {
+export function trackThumbnail(def: TrackDef, width = 200, height = 130): Promise<string> {
   const key = `${def.id}|${width}x${height}`;
   const hit = cache.get(key);
   if (hit) return hit;
@@ -112,7 +113,7 @@ export function trackThumbnail(def: TrackDef, width = 200, height = 130): string
   try {
     track = new Track(def);
   } catch {
-    const u = c.toDataURL();
+    const u = canvasToUrl(c, 'image/png');
     cache.set(key, u);
     return u;
   }
@@ -340,7 +341,7 @@ export function trackThumbnail(def: TrackDef, width = 200, height = 130): string
     ctx.fillText(text, tx - tw / 2 + 1.2 * u, ty + 6.5 * u);
     tx -= tw + 4 * u;
   }
-  const url = c.toDataURL('image/png');
+  const url = canvasToUrl(c, 'image/png');
   cache.set(key, url);
   return url;
 }

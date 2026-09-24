@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { isTouchDevice } from '../input/controls';
+import type { Track } from '../sim/track';
 
 export type CameraMode = 'iso' | 'cockpit' | 'chase';
 export const CAMERA_MODES: CameraMode[] = ['iso', 'cockpit', 'chase'];
@@ -16,6 +18,9 @@ export interface CarPose {
   shake: number;
   /** olhos do piloto no espaço do carro */
   eye: THREE.Vector3;
+  /** pista e trecho atual: a vista aérea antecipa pela direção da pista, não pela velocidade */
+  track?: Track;
+  pieceIndex?: number;
 }
 
 // Direção fixa da câmera aérea: olhando "de baixo para cima e da direita", como no original.
@@ -24,6 +29,20 @@ export interface CarPose {
 export const ISO_ELEVATION = (32 * Math.PI) / 180;
 const ISO_DIR = new THREE.Vector3(-1, Math.SQRT2 * Math.tan(ISO_ELEVATION), -1).normalize();
 const ISO_DISTANCE = 120;
+/**
+ * Antecipação da vista aérea (item 40): até ISO_LEAD m na direção da pista à frente (ponto a
+ * ISO_LEAD_LOOK m), seguida devagar (ISO_LEAD_RATE por s) — não vai e volta com a velocidade.
+ */
+const ISO_LEAD = 4.5;
+const ISO_LEAD_LOOK = 12;
+const ISO_LEAD_RATE = 0.6;
+/**
+ * No toque o HUD ocupa o alto da tela e os botões o pé: o carro fica um pouco acima do centro
+ * (fração da altura da tela), no meio da faixa livre entre os dois.
+ */
+const TOUCH_SCREEN_SHIFT = 0.06;
+/** direção "para cima na tela" projetada no chão (para longe da câmera) */
+const ISO_UP_GROUND = new THREE.Vector3(1, 0, 1).normalize();
 /**
  * Olhos um pouco acima e atrás dos do piloto: o capô e os para-lamas (cockpitRig) ocupam a faixa
  * de baixo da tela (~1/4) sem tapar a pista.
@@ -54,6 +73,8 @@ export class CameraRig {
   isoView = 23;
   /** zoom atual (abre um pouco em alta velocidade: sensação de velocidade e mais pista à frente) */
   private zoom = 1;
+  private readonly touch = isTouchDevice();
+  private leadTmp = new THREE.Vector3();
 
   constructor() {
     this.iso = new THREE.OrthographicCamera(-1, 1, 1, -1, 1, 400);
@@ -81,6 +102,11 @@ export class CameraRig {
     this.persp.updateProjectionMatrix();
   }
 
+  /** Próximo update() encaixa a câmera no carro sem transição (largada, troca de pista). */
+  snap(): void {
+    this.first = true;
+  }
+
   cycle(): CameraMode {
     this.mode = CAMERA_MODES[(CAMERA_MODES.indexOf(this.mode) + 1) % CAMERA_MODES.length];
     this.first = true;
@@ -98,16 +124,26 @@ export class CameraRig {
     if (!this.first && this.mode !== 'cockpit' && ref.distanceTo(car.position) > 40) this.first = true;
 
     if (this.mode === 'iso') {
-      // olha à frente do carro, na direção do movimento. A antecipação é suavizada à parte e devagar:
-      // derrapagem, batida ou rodada não jogam a câmera de um lado para o outro (item 40); o carro em
-      // si é seguido de perto, então ele fica parado na tela.
-      const flat = car.velocity.clone().setY(0);
-      const speed = flat.length();
-      const lead = flat.multiplyScalar(0.4);
-      lead.clampLength(0, 12);
+      // olha um pouco à frente do carro, na direção da PISTA (não da velocidade) e com teto baixo; a
+      // antecipação é suavizada à parte e bem devagar: derrapagem, freada, batida ou rodada não jogam
+      // a câmera de um lado para o outro (item 40). O carro em si é seguido de perto.
+      const speed = Math.hypot(car.velocity.x, car.velocity.z);
+      const lead = this.leadTmp.set(0, 0, 0);
+      if (car.track) {
+        const q = car.track.query(car.position.x, car.position.z, car.pieceIndex ?? -1);
+        const a = car.track.pointAtDist(q.dist + ISO_LEAD_LOOK);
+        lead.set(a.x - car.position.x, 0, a.z - car.position.z);
+        // parado ou saindo da largada: antecipa menos
+        lead.setLength(ISO_LEAD * Math.min(1, Math.max(0.3, speed / 15)));
+      }
       if (this.first) this.isoLead.copy(lead);
-      else this.isoLead.lerp(lead, 1 - Math.exp(-dt * 1.5));
+      else this.isoLead.lerp(lead, 1 - Math.exp(-dt * ISO_LEAD_RATE));
       const target = car.position.clone().add(this.isoLead);
+      if (this.touch) {
+        // tira o carro de baixo do HUD/minimapa e dos botões: ponto de mira abaixo do carro na tela
+        const halfView = ((this.aspect < 1 ? this.isoView * 1.5 : this.isoView) / 2) * this.zoom;
+        target.addScaledVector(ISO_UP_GROUND, (-2 * TOUCH_SCREEN_SHIFT * halfView) / Math.sin(ISO_ELEVATION));
+      }
       this.isoTarget.lerp(target, this.first ? 1 : 1 - Math.exp(-dt * 10));
       // zoom abre pouco e devagar com a velocidade (até +12%), sem "respirar" a cada freada
       const wantZoom = 1 + Math.min(1, Math.max(0, (speed - 15) / 25)) * 0.12;

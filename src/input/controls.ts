@@ -287,23 +287,43 @@ export function createTouchControls(root: HTMLElement, controls: Controls): HTML
   // retângulo lido só no toque inicial: ler a cada movimento, logo depois de mexer nas classes e no
   // transform do botão, forçava recálculo de layout (até 120x por segundo no iPad)
   let r = steer.getBoundingClientRect();
-  // volante digital, igual ao teclado: metade esquerda da faixa = esquerda total, metade direita =
-  // direita total, faixa do meio = reto. O jogador dosa a curva tocando/soltando (como nas setas do
-  // PC). O esterço analógico pela posição do polegar dava curva de menos ou de mais sem querer
-  const MID = 0.12; // meia-largura da faixa neutra, em fração da largura
-  const setFrom = (e: PointerEvent) => {
-    setSlideFire(e.clientY < r.top - r.height * 0.35);
-    const rel = (e.clientX - (r.left + r.width / 2)) / r.width;
-    const v = rel < -MID ? -1 : rel > MID ? 1 : 0;
+  const fireBtn = el.querySelector<HTMLElement>('.touch-actions .fire')!;
+  // linha acima da qual o polegar do volante atira: 70% para dentro do botão TIRO (item 55: em tela
+  // pequena, a tremida do polegar para cima disparava a arma e tirava a atenção da direção)
+  let fireLine = -Infinity;
+  // volante digital e relativo ao dedo (itens 46/47): o ponto onde o polegar pousa é o apoio.
+  // Pousou longe do meio da faixa (> 25% da largura)? Já esterça total para aquele lado. Depois,
+  // arrastar além de ±10 px do apoio escolhe o lado (esquerda/direita totais, como as setas do PC);
+  // o apoio acompanha o dedo, então inverter pede só um arrasto curto de volta. Soltar = reto.
+  const LAND_SIDE = 0.25; // fração da largura a partir do meio
+  const FLIP_PX = 10;
+  const LEASH_PX = 14; // folga do apoio atrás do dedo (tremida pequena não inverte)
+  let anchor = 0;
+  let side = 0;
+  const setSide = (v: number) => {
+    if (v === side) return;
+    if (v !== 0) navigator.vibrate?.(8);
+    side = v;
     controls.setTouchSteer(v);
-    knob.style.transform = `translateX(${v * r.width * 0.32}px)`;
+    knob.style.transform = v ? `translateX(${v * r.width * 0.32}px)` : '';
     if (steer.classList.contains('l') !== v < 0) steer.classList.toggle('l', v < 0);
     if (steer.classList.contains('r') !== v > 0) steer.classList.toggle('r', v > 0);
+  };
+  const setFrom = (e: PointerEvent) => {
+    // atirar deslizando: só com o polegar já dentro do botão TIRO
+    setSlideFire(e.clientY < fireLine);
+    const x = e.clientX;
+    if (x > anchor + FLIP_PX) setSide(1);
+    else if (x < anchor - FLIP_PX) setSide(-1);
+    // o apoio segue o dedo no sentido em que ele esterça
+    if (side > 0) anchor = Math.max(anchor, x - LEASH_PX);
+    else if (side < 0) anchor = Math.min(anchor, x + LEASH_PX);
   };
   const release = (e: PointerEvent) => {
     if (e.pointerId !== steerPointer) return;
     steerPointer = -1;
     setSlideFire(false);
+    setSide(0);
     controls.setTouchSteer(0);
     knob.style.transform = '';
     steer.classList.remove('l', 'r', 'sharp', 'held');
@@ -313,8 +333,13 @@ export function createTouchControls(root: HTMLElement, controls: Controls): HTML
     if (steerPointer !== -1) return;
     steerPointer = e.pointerId;
     r = steer.getBoundingClientRect();
+    const f = fireBtn.getBoundingClientRect();
+    fireLine = f.height ? f.bottom - f.height * 0.7 : -Infinity;
     steer.classList.add('held');
     steer.setPointerCapture(e.pointerId);
+    anchor = e.clientX;
+    const rel = (e.clientX - (r.left + r.width / 2)) / r.width;
+    setSide(rel > LAND_SIDE ? 1 : rel < -LAND_SIDE ? -1 : 0);
     setFrom(e);
   });
   steer.addEventListener('pointermove', (e) => {

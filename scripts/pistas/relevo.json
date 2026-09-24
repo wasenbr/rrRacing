@@ -1,0 +1,44 @@
+{
+  "_leia": [
+    "Relevo transcrito dos mapas completos (referencias/snes/mapas/<Planeta>-DivisionsBA-TrackN.png).",
+    "Chave = id da pista; índices = casa do traçado (0 = largada F, na ordem da corrida, como em tracado.json).",
+    "pecas: U rampa subindo, D rampa descendo, B lombada, J salto (só em reta S; J/G do traçado já vêm de construir.py).",
+    "setas: '>' seta vermelha no sentido da corrida (warp), '<' seta contra o sentido (warp reverso, só num lado).",
+    "pocas: casas com poça fixa do planeta (gosma verde em Drakonis, água em Bogmire, óleo em New Mojave, neve em Nho, lava em Inferno).",
+    "Leitura das rampas: no mapa isométrico a faixa de piso mais clara é rampa que sobe para o fundo da tela;",
+    "o sentido da corrida diz se é U ou D. Dinheiro/blindagem não aparecem nos mapas (continuam espalhados pela pista).",
+    "Pistas sem entrada aqui usam o sorteio por planeta de gerar.py."
+  ],
+  "chem6-1": {
+    "pecas": { "4": "U", "5": "U", "12": "D", "13": "D", "20": "D", "25": "U" },
+    "nota": "Duas rampas subindo no lado de cima-esquerda, duas descendo no de cima-direita, degrau descendo no de baixo-direita e subindo antes da largada."
+  },
+  "drakonis-1": {
+    "pecas": { "12": "D", "22": "D", "24": "U", "25": "U" },
+    "pocas": [8, 20],
+    "nota": "Rampas de subida do mapa ficam nas casas 25 e 27; recuadas para 24-25 porque 26-27 são o grid de largada."
+  },
+  "bogmire-1": {
+    "pecas": { "5": "U", "8": "U", "14": "D", "15": "D", "34": "D", "37": "U" },
+    "setas": { "4": ">", "30": ">", "37": ">" },
+    "pocas": [6, 7, 8, 32, 33],
+    "nota": "Platô alto no laço de cima (9-13); descida para o miolo em 14-15 lida pela altura dos paredões. Rampa e seta do mapa na casa 38 recuadas para 37 (38-39 são o grid)."
+  },
+  "newmojave-3": {
+    "pecas": { "5": "U", "8": "U", "11": "D", "17": "D", "28": "U", "34": "D" },
+    "setas": { "3": ">", "18": ">" },
+    "pocas": [13, 26, 27, 28, 29, 33],
+    "nota": "Seta antes do salto 19J sobre o vão 20G; manchas de óleo no trecho do meio (26-29)."
+  },
+  "nho-3": {
+    "pecas": { "2": "U", "6": "D", "28": "U", "33": "D" },
+    "pocas": [24, 26, 29],
+    "nota": "Saltos em sequência 7J-8G-9J-10G (ilha no meio) vêm do traçado; montes de neve na reta de baixo."
+  },
+  "inferno-5": {
+    "pecas": { "5": "U", "9": "D", "16": "D", "20": "U", "23": "B" },
+    "setas": { "12": ">", "13": "<", "14": ">", "24": "<" },
+    "pocas": [2, 3, 19, 22],
+    "nota": "A segunda rampa do lado de baixo-esquerda (23) virou lombada: o mapa mostra 3 subidas e 2 descidas e a pista precisa fechar na mesma altura."
+  }
+}

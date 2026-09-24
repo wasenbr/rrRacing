@@ -116,10 +116,16 @@ export function buildEnvironment(renderer: THREE.WebGLRenderer, theme: Theme): T
   const scene = new THREE.Scene();
   const top = new THREE.Color(theme.ambientSky).multiplyScalar(0.55);
   const horizon = new THREE.Color(theme.ambientSky).lerp(new THREE.Color(theme.ground), 0.5);
-  scene.add(new THREE.Mesh(new THREE.SphereGeometry(50, 32, 16), skyMaterial(top.getHex(), horizon.getHex(), theme.sun, 0)));
+  const sphere = new THREE.Mesh(new THREE.SphereGeometry(50, 32, 16), skyMaterial(top.getHex(), horizon.getHex(), theme.sun, 0));
+  scene.add(sphere);
   const pmrem = new THREE.PMREMGenerator(renderer);
-  const env = pmrem.fromScene(scene, 0.02).texture;
+  const target = pmrem.fromScene(scene, 0.02);
   pmrem.dispose();
+  sphere.geometry.dispose();
+  (sphere.material as THREE.Material).dispose();
+  // descartar a textura (troca de planeta) libera também o render target que a guarda
+  const env = target.texture;
+  env.addEventListener('dispose', () => target.dispose());
   return env;
 }
 
@@ -417,7 +423,7 @@ function basaltNormal(): THREE.Texture {
 }
 
 /** Fração do albedo do terreno (o chão claro — areia, neve — é o que mais competia com a pista). */
-const GROUND_ALBEDO: Partial<Record<string, number>> = { void: 0.8, sand: 0.2, snow: 0.24, sludge: 0.32, ocean: 0.45 };
+const GROUND_ALBEDO: Partial<Record<string, number>> = { void: 0.8, sand: 0.2, snow: 0.4, sludge: 0.32, ocean: 0.45 };
 
 /**
  * Terreno abaixo das pistas: lodo, vazio com crateras, oceano, deserto, neve ou lava.

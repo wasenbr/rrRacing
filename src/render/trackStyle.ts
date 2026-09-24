@@ -117,7 +117,7 @@ function grime(color: HTMLCanvasElement, height: HTMLCanvasElement, theme: Theme
       a *= 0.45 + 0.55 * grain;
       const i = (y * S + x) * 4;
       const k = 0.7 + grain * 0.55;
-      const m = a * 0.9;
+      const m = a * 0.8;
       let r = d[i] + (dr * k - d[i]) * m;
       let g = d[i + 1] + (dg * k - d[i + 1]) * m;
       let b = d[i + 2] + (db * k - d[i + 2]) * m;
@@ -273,9 +273,17 @@ export function roadMaps(theme: Theme): RoadMaps {
         ctx.moveTo(0, i * cell);
         ctx.lineTo(S, i * cell);
       }
-      // juntas diagonais (mais finas que as das placas; sem brilho, para não poluir as pistas neon)
-      if (ctx !== g)
-        for (let y = 0; y < CELLS; y++)
+      ctx.stroke();
+      // juntas diagonais: finas e escuras (a grade colorida é só a das placas, como no SNES);
+      // sem brilho, para não poluir as pistas neon
+      if (ctx === g) continue;
+      ctx.save();
+      if (ctx === c) {
+        ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+        ctx.lineWidth = 2;
+      }
+      ctx.beginPath();
+      for (let y = 0; y < CELLS; y++)
         for (let x = 0; x < CELLS; x++) {
           const px = x * cell;
           const py = y * cell;
@@ -283,6 +291,7 @@ export function roadMaps(theme: Theme): RoadMaps {
           else ctx.moveTo(px, py), ctx.lineTo(px + cell, py + cell);
         }
       ctx.stroke();
+      ctx.restore();
     }
     c.strokeStyle = 'rgba(0,0,0,0.55)';
     c.lineWidth = 1.5;
@@ -310,15 +319,16 @@ export function roadMaps(theme: Theme): RoadMaps {
       c.fillStyle = grd;
       c.fillRect(0, 0, S, S);
     }
-    c.lineWidth = 2;
-    c.strokeStyle = 'rgba(150,200,255,0.22)';
-    lines(c, 2);
+    c.lineWidth = 2.5;
+    c.strokeStyle = 'rgba(150,210,255,0.5)';
+    lines(c, 2.5);
     c.lineWidth = 3;
     c.strokeStyle = theme.roadGrid;
     lines(c, 0);
+    // grade azul-clara acesa ao lado da junta (a "grade azul" das pistas de Nho no SNES)
     g.lineWidth = 1.5;
-    g.strokeStyle = theme.roadGrid;
-    lines(g, 0);
+    g.strokeStyle = '#3a8aff';
+    lines(g, 2.5);
     h.lineWidth = 7;
     h.strokeStyle = '#303030';
     lines(h, 0);
@@ -424,7 +434,9 @@ export function roadMaps(theme: Theme): RoadMaps {
   }
   // poeira/areia acumulada nas juntas e perto do meio-fio, grão fino e metal gasto (visual alvo)
   h.restore();
-  const dustAmt = theme.roadPattern === 'dirt' ? 0.35 : theme.roadPattern === 'ice' ? 0.75 : theme.roadPattern === 'hex' ? 0.8 : 1;
+  // pouca poeira (≤ ~15% do piso somando esta camada e a de addRoadDirt): a cor do tema manda
+  // (Chem VI preto e vermelho, New Mojave oliva, Nho azul, Inferno escuro); o gelo leva geada
+  const dustAmt = theme.roadPattern === 'dirt' ? 0.35 : theme.roadPattern === 'ice' ? 0.3 : 0.2;
   const rough = grime(color, height, theme, dustAmt);
   h.save();
   h.scale(0.5 * K, 0.5 * K);
@@ -452,7 +464,7 @@ export function roadMaps(theme: Theme): RoadMaps {
   normal.minFilter = THREE.LinearMipmapLinearFilter;
   normal.anisotropy = maxAnisotropy;
   const roughness = theme.roadPattern === 'ice' ? 0.22 : theme.roadPattern === 'dirt' ? 0.95 : 0.55;
-  const metalness = theme.roadPattern === 'dirt' ? 0 : theme.roadPattern === 'scales' ? 0.4 : 0.3;
+  const metalness = theme.roadPattern === 'dirt' ? 0 : theme.roadPattern === 'scales' ? 0.4 : theme.roadPattern === 'ice' ? 0.5 : 0.3;
   const roughMap = grayCanvasTexture(rough, S * K, (d) => (theme.roadPattern === 'dirt' ? 0.95 : theme.roadPattern === 'ice' ? 0.2 + d * 0.7 : theme.roadPattern === 'scales' ? 0.58 + d * 0.4 : 0.45 + d * 0.55));
   return { map: tex(color), emissive: theme.roadGlow > 0 ? tex(glow) : null, normal, roughness, metalness, roughnessMap: roughMap };
 }
@@ -487,7 +499,7 @@ function dirtNoise(): THREE.DataTexture {
  * a repetição da textura do piso some. Custa uma leitura de textura por pixel (serve no celular).
  */
 export function addRoadDirt(mat: THREE.MeshStandardMaterial, theme: Theme): void {
-  const amount = theme.roadPattern === 'dirt' ? 0.35 : theme.roadPattern === 'ice' ? 0.55 : 0.9;
+  const amount = theme.roadPattern === 'dirt' ? 0.35 : theme.roadPattern === 'ice' ? 0.3 : 0.25;
   const dust = new THREE.Color(theme.dust);
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.dirtMap = { value: dirtNoise() };

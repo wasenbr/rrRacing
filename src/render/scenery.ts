@@ -96,7 +96,7 @@ export function buildScenery(track: Track, theme: Theme, themeId: ThemeId, shado
   const leaf = std(0x2a8a24, 0.8);
   const pineMat = std(0x1e5a2c, 0.9);
   const snowMat = std(0xf2f6ff, 0.6);
-  const ice = std(0x8ab8ff, 0.1, 0.1, { emissive: 0x10306a, transparent: true, opacity: 0.92 });
+  const ice = std(0x9ac8ff, 0.08, 0.15, { emissive: 0x1a4ab0, transparent: true, opacity: 0.9 });
   const rockMat = new THREE.MeshStandardMaterial({ map: rockTexture(c0), roughness: 0.95 });
   const rockMat2 = new THREE.MeshStandardMaterial({ map: rockTexture(c2 ?? c1), roughness: 0.95 });
   const hellStone = std(0x4a1208, 0.6, 0.2, { emissive: 0x3a0800 });
@@ -335,7 +335,7 @@ export function buildScenery(track: Track, theme: Theme, themeId: ThemeId, shado
   }
   // Nho: aglomerados de cristais azuis na base dos paredões (como no SNES)
   if (themeId === 'nho') {
-    const want = dense ? 150 : 70;
+    const want = dense ? 220 : 110;
     for (let i = 0, tries = 0; i < want && tries < 6000; tries++) {
       const x = b.minX - 8 + rng() * (b.maxX - b.minX + 16);
       const z = b.minZ - 8 + rng() * (b.maxZ - b.minZ + 16);
@@ -345,7 +345,7 @@ export function buildScenery(track: Track, theme: Theme, themeId: ThemeId, shado
       i++;
       const n = 2 + Math.floor(rng() * 3);
       for (let k = 0; k < n; k++) {
-        const h = 1.2 + rng() * 3.2;
+        const h = 1.5 + rng() * 4;
         batch.add(new THREE.OctahedronGeometry(0.5, 0), ice, x + (rng() - 0.5) * 1.4, G + h / 2, z + (rng() - 0.5) * 1.4, rng() * 3, 0.7 + rng() * 0.4, h, 0.7 + rng() * 0.4, (rng() - 0.5) * 0.6, (rng() - 0.5) * 0.6);
       }
     }

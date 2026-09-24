@@ -17,7 +17,39 @@ let camera: THREE.PerspectiveCamera | null = null;
 let envTex: THREE.Texture | null = null;
 let itemRig: THREE.Group | null = null;
 let carRig: { group: THREE.Group; rimL: THREE.DirectionalLight; rimR: THREE.DirectionalLight; key: THREE.DirectionalLight } | null = null;
-const cache = new Map<string, string>();
+const cache = new Map<string, Promise<string>>();
+
+/**
+ * Codifica o canvas em imagem e devolve um object URL (blob). `toBlob` tira a foto do canvas na
+ * hora (o canvas pode ser reaproveitado logo depois) e codifica fora da thread principal — ao
+ * contrário de `toDataURL`, que trava a tela e gera uma string base64 enorme.
+ */
+export function canvasToUrl(cv: HTMLCanvasElement, type = 'image/webp', quality = 0.9): Promise<string> {
+  if (typeof cv.toBlob !== 'function' || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
+    try {
+      return Promise.resolve(cv.toDataURL(type, quality));
+    } catch {
+      return Promise.resolve('');
+    }
+  }
+  return new Promise((resolve) => {
+    try {
+      // sem suporte ao tipo pedido, o navegador devolve PNG
+      cv.toBlob((b) => resolve(b ? URL.createObjectURL(b) : ''), type, quality);
+    } catch {
+      resolve('');
+    }
+  });
+}
+
+/** Guarda a promessa no cache e tira de lá se falhar (a próxima tela tenta de novo). */
+function remember(key: string, p: Promise<string>): Promise<string> {
+  cache.set(key, p);
+  void p.then((u) => {
+    if (!u && cache.get(key) === p) cache.delete(key);
+  });
+  return p;
+}
 
 /** Estúdio escuro com softboxes e tiras de luz: dá reflexos longos e nítidos no verniz. */
 function studioEnvironment(): THREE.Scene {
@@ -336,65 +368,10 @@ function drawItemBackdrop(g: CanvasRenderingContext2D, s: number): void {
   g.restore();
 }
 
-/**
- * Fundo de estúdio das miniaturas grandes de armas (aba Armas da loja): ciclorama cinza-azulado
- * que escurece até o piso, foco de luz de cima atrás da peça, brilho quente na cor da arma e
- * linha do horizonte suave onde o piso encontra a parede.
- */
-function drawStudioBackdrop(g: CanvasRenderingContext2D, s: number, horizon: number, tint: string): void {
-  const h = Math.max(s * 0.3, Math.min(s * 0.9, horizon));
-  const wall = g.createLinearGradient(0, 0, 0, h);
-  wall.addColorStop(0, '#0c0d14');
-  wall.addColorStop(0.55, '#262a38');
-  wall.addColorStop(1, '#3a3f50');
-  g.fillStyle = wall;
-  g.fillRect(0, 0, s, h);
-  const floor = g.createLinearGradient(0, h, 0, s);
-  floor.addColorStop(0, '#2c303e');
-  floor.addColorStop(0.35, '#15171f');
-  floor.addColorStop(1, '#07080c');
-  g.fillStyle = floor;
-  g.fillRect(0, h, s, s - h);
-  // foco de luz vindo de cima: cone suave e mancha clara no piso
-  const cone = g.createLinearGradient(0, 0, 0, h);
-  cone.addColorStop(0, 'rgba(255,240,220,0.0)');
-  cone.addColorStop(1, 'rgba(255,240,220,0.16)');
-  g.fillStyle = cone;
-  g.beginPath();
-  g.moveTo(s * 0.44, 0);
-  g.lineTo(s * 0.56, 0);
-  g.lineTo(s * 0.86, h);
-  g.lineTo(s * 0.14, h);
-  g.closePath();
-  g.fill();
-  let rg = g.createRadialGradient(s * 0.5, h * 0.8, 0, s * 0.5, h * 0.8, s * 0.55);
-  rg.addColorStop(0, tint.replace('A', '0.42'));
-  rg.addColorStop(0.5, tint.replace('A', '0.12'));
-  rg.addColorStop(1, tint.replace('A', '0'));
-  g.fillStyle = rg;
-  g.fillRect(0, 0, s, s);
-  g.save();
-  g.translate(s * 0.5, h + (s - h) * 0.35);
-  g.scale(1, 0.28);
-  rg = g.createRadialGradient(0, 0, 0, 0, 0, s * 0.5);
-  rg.addColorStop(0, 'rgba(255,236,210,0.28)');
-  rg.addColorStop(1, 'rgba(255,236,210,0)');
-  g.fillStyle = rg;
-  g.fillRect(-s, -s * 2, s * 2, s * 4);
-  g.restore();
-  // horizonte: filete de luz onde o piso encontra o ciclorama
-  const hl = g.createLinearGradient(0, 0, s, 0);
-  hl.addColorStop(0, 'rgba(200,210,255,0)');
-  hl.addColorStop(0.5, 'rgba(200,210,255,0.22)');
-  hl.addColorStop(1, 'rgba(200,210,255,0)');
-  g.fillStyle = hl;
-  g.fillRect(0, h - 1, s, Math.max(1, s * 0.006));
-}
-
-/** Cor do brilho de fundo de cada arma na vitrine (rgba com 'A' no lugar do alfa). */
-const ITEM_TINT: Partial<Record<string, string>> = {
-  laser: 'rgba(90,200,255,A)', missile: 'rgba(255,120,40,A)', sundog: 'rgba(255,210,60,A)', oil: 'rgba(120,150,255,A)',
-  mine: 'rgba(255,60,40,A)', scatter: 'rgba(255,150,40,A)', nitro: 'rgba(90,200,255,A)', jump: 'rgba(255,160,50,A)',
+/** Cor do brilho, do neon e das luzes de recorte de cada arma na vitrine (card como o dos carros). */
+const ITEM_COLOR: Partial<Record<string, number>> = {
+  laser: 0x5ac8ff, missile: 0xff7828, sundog: 0xffd23c, oil: 0x7896ff,
+  mine: 0xff3c28, scatter: 0xff9628, nitro: 0x5ac8ff, jump: 0xffa032,
 };
 
 /**
@@ -413,19 +390,19 @@ export const SHOWROOM_COLOR: Record<string, number> = {
 export type CarThumbStyle = 'card' | 'transparent';
 
 /**
- * Imagem PNG (data URL) do carro em 3/4.
+ * Imagem do carro em 3/4 (object URL, WebP no card e PNG no transparente).
  * - `card` (padrão): card de veículo com fundo escuro, neon, piso espelhado e sombra.
  * - `transparent`: mesma luz de estúdio, fundo transparente (só a sombra de contato).
  * `size` é o lado do quadrado em pixels CSS (padrão 256); a imagem sai com até 2× de densidade
  * em telas retina. Retorna '' se não houver WebGL.
  */
-export function carThumbnail(vehicleId: string, color: number, size = 256, style: CarThumbStyle = 'card'): string {
+export function carThumbnail(vehicleId: string, color: number, size = 256, style: CarThumbStyle = 'card'): Promise<string> {
   const dpr = typeof window !== 'undefined' ? Math.min(2, Math.max(1, window.devicePixelRatio || 1)) : 1;
   const px = Math.round(size * dpr);
   const key = `${vehicleId}|${color}|${px}|${style}`;
   const hit = cache.get(key);
   if (hit !== undefined) return hit;
-  let url = '';
+  let url: Promise<string> | null = null;
   const extras: THREE.Object3D[] = [];
   let car: ReturnType<typeof createCarMesh> | null = null;
   try {
@@ -476,13 +453,19 @@ export function carThumbnail(vehicleId: string, color: number, size = 256, style
       drawBackdrop(g, px, color, vehicleId, ((1 - horizon.y) / 2) * px);
       g.drawImage(renderer.domElement, 0, 0);
       drawVignette(g, px);
-      url = cv.toDataURL('image/webp', 0.9);
-      if (!url.startsWith('data:image/webp')) url = cv.toDataURL('image/png');
+      url = canvasToUrl(cv);
     } else {
-      url = renderer.domElement.toDataURL('image/png');
+      // copia para um canvas 2D na hora: o buffer do WebGL não sobrevive até a codificação
+      composeCanvas ??= document.createElement('canvas');
+      const cv = composeCanvas;
+      cv.width = cv.height = px;
+      const g = cv.getContext('2d')!;
+      g.clearRect(0, 0, px, px);
+      g.drawImage(renderer.domElement, 0, 0);
+      url = canvasToUrl(cv, 'image/png');
     }
   } catch {
-    url = '';
+    url = null;
   } finally {
     for (const e of extras) scene?.remove(e);
     // o espelho compartilha geometrias e materiais com o carro: só descarta o piso
@@ -492,8 +475,7 @@ export function carThumbnail(vehicleId: string, color: number, size = 256, style
       disposeTree(car.root);
     }
   }
-  if (url) cache.set(key, url); // falha não fica no cache: tenta de novo na próxima tela
-  return url;
+  return url ? remember(key, url) : Promise.resolve('');
 }
 
 /** Itens da loja com miniatura 3D: armas do original e as quatro melhorias. */
@@ -599,11 +581,11 @@ function buildItem(item: ShopItem): THREE.Group {
 }
 
 /** Miniatura 3D de uma arma ou melhoria da loja (luz de estúdio sobre fundo escuro). Em cache por item e tamanho. */
-export function itemThumbnail(item: ShopItem, size = 96): string {
+export function itemThumbnail(item: ShopItem, size = 96): Promise<string> {
   const key = `item|${item}|${size}`;
   const hit = cache.get(key);
   if (hit !== undefined) return hit;
-  let url = '';
+  let url: Promise<string> | null = null;
   try {
     const { renderer, scene, camera } = setup();
     const dpr = typeof window !== 'undefined' ? Math.min(2, Math.max(1, window.devicePixelRatio || 1)) : 1;
@@ -618,12 +600,14 @@ export function itemThumbnail(item: ShopItem, size = 96): string {
     obj.rotation.y = -0.6;
     scene.add(obj);
     const pts = visiblePoints(obj);
-    // vitrine (miniaturas grandes): piso espelhado, sombra de contato e fundo de estúdio
+    // vitrine (miniaturas grandes): o mesmo card dos carros — ângulo heroico baixo em 3/4, piso
+    // espelhado, sombra de contato, brilho na cor da arma, neon e linhas de velocidade
     const studio = size >= 140;
     const box = new THREE.Box3().setFromPoints(pts);
     const center = box.getCenter(new THREE.Vector3());
-    frame(pts, camera, studio ? new THREE.Vector3(1, 0.42, 1.1) : new THREE.Vector3(0.9, 0.62, 1), studio ? 0.86 : 0.8, studio ? -0.08 : 0);
-    placeStudioLights(camera, center, 0xff7a20);
+    const tint = ITEM_COLOR[item] ?? 0xff7a20;
+    frame(pts, camera, studio ? new THREE.Vector3(1, 0.34, 1.15) : new THREE.Vector3(0.9, 0.62, 1), 0.8, studio ? -0.14 : 0);
+    placeStudioLights(camera, center, tint);
     const extras: THREE.Object3D[] = [];
     if (studio) {
       const groundY = box.min.y - 0.02;
@@ -640,26 +624,25 @@ export function itemThumbnail(item: ShopItem, size = 96): string {
     cv.width = cv.height = px;
     const g = cv.getContext('2d')!;
     if (studio) {
-      const hz = new THREE.Vector3(center.x, box.min.y, center.z - 1.5).project(camera);
-      drawStudioBackdrop(g, px, ((1 - hz.y) / 2) * px, ITEM_TINT[item] ?? 'rgba(255,140,40,A)');
+      const hz = new THREE.Vector3(center.x, box.min.y, center.z).project(camera);
+      drawBackdrop(g, px, tint, item, ((1 - hz.y) / 2) * px);
     } else drawItemBackdrop(g, px);
     g.drawImage(renderer.domElement, 0, 0);
     drawVignette(g, px);
-    url = cv.toDataURL('image/webp', 0.9);
-    if (!url.startsWith('data:image/webp')) url = cv.toDataURL('image/png');
+    url = canvasToUrl(cv);
     for (const e of extras) scene.remove(e);
     if (extras[0]) disposeTree(extras[0]);
     scene.remove(obj);
     disposeTree(obj);
   } catch {
-    url = '';
+    url = null;
   }
-  if (url) cache.set(key, url); // falha não fica no cache: tenta de novo na próxima tela
-  return url;
+  return url ? remember(key, url) : Promise.resolve('');
 }
 
 /** Descarta o renderizador fora da tela e o cache de imagens. */
 export function disposeThumbnails(): void {
+  for (const p of cache.values()) void p.then((u) => u.startsWith('blob:') && URL.revokeObjectURL(u));
   cache.clear();
   envTex?.dispose();
   envTex = null;

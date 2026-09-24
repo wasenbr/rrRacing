@@ -166,6 +166,10 @@
 .rh-center.m-count { font-size: 120px; }
 /* "VOLTA N": menor e no alto, para não tapar a pista à frente do carro */
 .rh-center.m-lap { font-size: 38px; top: 9%; }
+/* cockpit: o retrovisor ocupa o alto do meio da tela (8 px + 26% da largura dele, que é
+   min(360 px, 36% da tela)); a faixa "VOLTA N" e as mensagens descem para logo abaixo dele */
+.rh:has(.rh-mirror[style*="block"]) .rh-center { top: max(15%, calc(18px + min(360px, 36vw) * 0.26)); }
+.rh:has(.rh-mirror[style*="block"]) .rh-center.m-lap { top: calc(14px + min(360px, 36vw) * 0.26); }
 .rh-center.m-go { background-image: linear-gradient(180deg, #fff 0%, #7aff6a 45%, #0a8a10 100%); }
 .rh-center.m-warn { background-image: linear-gradient(180deg, #fff 0%, #ff7a5a 45%, #a00a00 100%); font-size: 52px; }
 

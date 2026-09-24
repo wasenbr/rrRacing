@@ -30,7 +30,14 @@ export interface QualitySettings {
 
 export const QUALITY_LABELS: Record<QualityPref, string> = { auto: 'Automática', baixo: 'Baixa', medio: 'Média', alto: 'Alta' };
 
+let gpuCache: string | null = null;
+
 function gpuName(): string {
+  if (gpuCache === null) gpuCache = readGpuName();
+  return gpuCache;
+}
+
+function readGpuName(): string {
   try {
     const gl = document.createElement('canvas').getContext('webgl');
     if (!gl) return '';
@@ -50,8 +57,9 @@ export function detectQuality(touch: boolean): QualityLevel {
   const gpu = gpuName();
   if (/swiftshader|llvmpipe|software|basic render/.test(gpu)) return 'baixo';
   // iPhone/iPad: o Safari esconde memória e núcleos (os números "baixos" caíam no nível baixo, com
-  // 1 pixel por ponto numa tela 3x: tudo pixelado); a GPU da Apple aguenta o nível alto
-  if (touch && /apple/.test(gpu)) return 'alto';
+  // 1 pixel por ponto numa tela 3x: tudo pixelado). O nível alto (sombra 1024 + luzes dos clarões)
+  // esquentava e engasgava nos modelos mais antigos: médio, com teto de 2x de densidade
+  if (touch && /apple/.test(gpu)) return 'medio';
   if (touch) return mem <= 3 || cores <= 4 || /mali-[gt]?[0-7]\d\b|adreno \(tm\) [1-5]\d\d|powervr/.test(gpu) ? 'baixo' : 'medio';
   if (mem <= 4 || cores <= 2) return 'baixo';
   if (/intel|uhd|hd graphics|iris|mali|adreno/.test(gpu) || cores <= 4) return 'medio';
@@ -71,12 +79,12 @@ export function resolveQuality(pref: QualityPref, touch: boolean): QualitySettin
   // 1,5x se o aparelho aguentar: a resolução era metade do custo de GPU medido. No PC (GPU integrada)
   // começa em 0,8x: em 1,0x engasgava 1 quadro em 10; sobe sozinha se houver folga
   if (level === 'medio')
-    return { level, antialias: !touch, shadows: !touch, shadowMapSize: 1024, bloom: false, maxPixelRatio: 1.5, dense: false, particles: 0.75, anisotropy: 4, flashLights: false, minScale: 0.5, startScale: touch ? 0.67 : 0.8 };
+    return { level, antialias: !touch, shadows: !touch, shadowMapSize: 1024, bloom: false, maxPixelRatio: touch && /apple/.test(gpuName()) ? 2 : 1.5, dense: false, particles: 0.75, anisotropy: 4, flashLights: false, minScale: 0.5, startScale: touch ? 0.67 : 0.8 };
   return { level, antialias: false, shadows: false, shadowMapSize: 512, bloom: false, maxPixelRatio: 1, dense: false, particles: 0.4, anisotropy: 2, flashLights: false, minScale: 0.5, startScale: 1 };
 }
 
 /**
- * Resolução dinâmica: mede o tempo de quadro e baixa a escala (até `min`) quando o fps cai,
+ * Resolução dinâmica: mede o custo dos quadros desenhados e baixa a escala (até `min`) quando o fps cai,
  * subindo devagar quando sobra folga. Além da média, conta os quadros perdidos (> 25 ms): numa GPU
  * integrada o jogo fica perto do limite e engasga em 1 de cada 10 quadros sem a média passar de
  * 1/50 s — a média sozinha não reagia e o jogo seguia travando.
@@ -97,12 +105,16 @@ export class DynamicResolution {
 
   constructor(public min = 0.6) {}
 
-  /** Retorna true quando a escala mudou (é hora de chamar setPixelRatio). */
-  update(frameDt: number): boolean {
+  /**
+   * Chamada a cada quadro DESENHADO. `frameDt` = tempo desde o último quadro desenhado (anda os
+   * relógios); `cost` = custo do quadro já normalizado para o orçamento de 60 qps (trabalho do quadro
+   * ou o intervalo, o maior). Retorna true quando a escala mudou (é hora de chamar setPixelRatio).
+   */
+  update(frameDt: number, cost = frameDt): boolean {
     if (!this.enabled || frameDt <= 0 || frameDt > 0.25) return false;
     this.clock += frameDt;
-    this.avg += (frameDt - this.avg) * 0.05;
-    this.slow += ((frameDt > 0.025 ? 1 : 0) - this.slow) * 0.02;
+    this.avg += (cost - this.avg) * 0.05;
+    this.slow += ((cost > 0.025 ? 1 : 0) - this.slow) * 0.02;
     this.cooldown -= frameDt;
     if (this.cooldown > 0) return false;
     let next = this.scale;

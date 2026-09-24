@@ -239,10 +239,12 @@ export function createWorld(track: Track, entries: RacerEntry[], laps: number, s
 
   // poças de gosma fixas (Drakonis e outros planetas), só em retas e fora da largada
   const hazards: Hazard[] = [];
-  const spots = track.pieces.filter((p) => (p.code === 'S' || p.code === 'B') && p.index > 1);
-  const count = Math.min(track.def.slime ?? 0, spots.length);
+  // (casas fixas do mapa original quando a pista tem `puddles`)
+  const fixed = track.def.puddles?.map((i) => track.pieces[i]).filter((p) => p && p.code !== 'G');
+  const spots = fixed ?? track.pieces.filter((p) => (p.code === 'S' || p.code === 'B') && p.index > 1);
+  const count = fixed ? fixed.length : Math.min(track.def.slime ?? 0, spots.length);
   for (let i = 0; i < count; i++) {
-    const p = spots[Math.floor(((i + 0.5) * spots.length) / count)];
+    const p = fixed ? fixed[i] : spots[Math.floor(((i + 0.5) * spots.length) / count)];
     const side = i % 2 === 0 ? 1 : -1;
     const pt = track.pointAtDist(p.startDist + p.length / 2);
     hazards.push({ id: id++, kind: PLANET_HAZARD[track.def.theme] ?? 'slime', owner: -1, x: pt.x + leftX(pt.heading) * side * track.halfWidth * 0.4, y: pt.h, z: pt.z + leftZ(pt.heading) * side * track.halfWidth * 0.4, age: 0 });

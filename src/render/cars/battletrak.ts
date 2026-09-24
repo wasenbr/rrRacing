@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { carFrame, cockpitRig, Kit, polyShape, sideProfile, type CarVisual } from './common';
+import { carFrame, cockpitRig, Kit, polyShape, sideProfile, wheelTravel, type CarVisual } from './common';
 
 const TL = 4.5; // comprimento das esteiras
 const TR = 0.75; // raio das pontas das esteiras (altura = 2 * TR = 1,5 m): ~25% mais altas que o casco
@@ -108,7 +108,7 @@ function treadPlates(): THREE.CanvasTexture {
  * Scatterpack na traseira.
  */
 export function createBattleTrak(color: number, shadows: boolean): CarVisual {
-  const { root, body, ext } = carFrame();
+  const { root, body, ext, chassis } = carFrame();
   const k = new Kit(color, shadows, ext);
   const blackGlass = new THREE.MeshPhysicalMaterial({ color: 0x06080c, metalness: 0.8, roughness: 0.04, clearcoat: 1, clearcoatRoughness: 0.01, envMapIntensity: 3 });
   // casco central CLARO (prata com um toque da cor do time): destaca das esteiras pretas, como o
@@ -121,12 +121,16 @@ export function createBattleTrak(color: number, shadows: boolean): CarVisual {
   const rimMat = new THREE.MeshStandardMaterial({ color: 0xf2f4f7, metalness: 0.5, roughness: 0.25, envMapIntensity: 1.4 });
   const spikeMat = new THREE.MeshStandardMaterial({ color: 0x9a8cff, emissive: 0x3a2aa0, emissiveIntensity: 0.6, metalness: 0.6, roughness: 0.22 });
   const blockMat = new THREE.MeshStandardMaterial({ color: 0x101114, metalness: 0.35, roughness: 0.45 });
+  const sideMat = new THREE.MeshStandardMaterial({ color: 0x17181c, metalness: 0.45, roughness: 0.4 });
+  const linkMat = new THREE.MeshStandardMaterial({ color: 0x8c8f96, metalness: 0.6, roughness: 0.35 });
 
   // esteiras: laço de placas segmentadas que rola, bem à mostra
   const tread = treadPlates();
   tread.repeat.set(1, 2);
   const treadMat = new THREE.MeshStandardMaterial({ map: tread, roughness: 0.42, metalness: 0.35 });
   const sprockets: THREE.Mesh[] = [];
+  // tudo das esteiras (laço, roletes, rodas, espinhos, blocos) vai para o chassi no fim
+  const beforeTreads = new Set(ext.children);
   for (const sx of [-1, 1]) {
     const geo = sideProfile(trackShape(TL, TR), TW, 0.05, 22);
     const pos = geo.attributes.position;
@@ -135,22 +139,22 @@ export function createBattleTrak(color: number, shadows: boolean): CarVisual {
     for (let i = 0; i < pos.count; i++) uv.setXY(i, pos.getX(i) / TW + 0.5, pos.getZ(i) / TL + pos.getY(i) * 0.22);
     uv.needsUpdate = true;
     k.add(geo, treadMat, sx * TX, 0, 0);
-    // flancos escuros dos elos (cobrem as tampas do laço), painel na cor do carro por fora
+    // flancos escuros dos elos (cobrem as tampas do laço) e painel grafite por fora: de lado a
+    // esteira é um bloco preto de placas, sem rodas à mostra (tank.webp)
     k.add(sideProfile(trackShape(TL - 0.1, TR - 0.05, 0.1), TW + 0.03, 0.015, 20), k.trim, sx * TX, 0.05, 0);
     const inner = trackShape(TL - 0.36, TR - 0.16, 0.08);
-    k.add(sideProfile(inner, 0.08, 0.035, 18), k.paint, sx * (TX + TW / 2 - 0.01), 0.16, 0);
+    k.add(sideProfile(inner, 0.08, 0.035, 18), sideMat, sx * (TX + TW / 2 - 0.01), 0.16, 0);
     k.add(sideProfile(inner, 0.05, 0.02, 12), k.trim, sx * (TX - TW / 2 - 0.01), 0.16, 0);
-    // roletes ao longo de baixo
-    for (let i = 0; i < 5; i++) {
-      const z = -1.2 + i * 0.6;
-      k.add(new THREE.CylinderGeometry(0.2, 0.2, 0.07, 16).rotateZ(Math.PI / 2), k.gunMetal, sx * (TX + TW / 2 + 0.06), 0.33, z);
-      k.add(new THREE.CylinderGeometry(0.08, 0.08, 0.1, 10).rotateZ(Math.PI / 2), k.chrome, sx * (TX + TW / 2 + 0.08), 0.33, z);
+    // elos: frisos verticais cinza no painel, como as placas segmentadas vistas de lado
+    for (let i = 0; i < 9; i++) {
+      const z = -1.72 + i * 0.43;
+      k.add(new THREE.BoxGeometry(0.02, 2 * TR - 0.5, 0.05), linkMat, sx * (TX + TW / 2 + 0.035), TR + 0.08, z);
     }
-    // rodas motriz e tensora nas pontas (giram)
+    // cubos das rodas motriz e tensora nas pontas (giram), pequenos e escuros
     for (const z of [-TL / 2 + TR, TL / 2 - TR]) {
-      const w = k.add(new THREE.CylinderGeometry(TR * 0.54, TR * 0.54, 0.07, 20).rotateZ(Math.PI / 2), k.steel, sx * (TX + TW / 2 + 0.07), TR + (z > 0 ? 0.1 : 0), z);
+      const w = k.add(new THREE.CylinderGeometry(TR * 0.36, TR * 0.36, 0.07, 18).rotateZ(Math.PI / 2), k.gunMetal, sx * (TX + TW / 2 + 0.07), TR + (z > 0 ? 0.1 : 0), z);
       for (let i = 0; i < 3; i++) {
-        const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.08, TR * 0.86, 0.09), k.trim);
+        const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.06, TR * 0.6, 0.07), k.trim);
         spoke.rotation.x = (i / 3) * Math.PI;
         w.add(spoke);
       }
@@ -184,6 +188,9 @@ export function createBattleTrak(color: number, shadows: boolean): CarVisual {
     ext.add(g);
     treadTops.push(g);
   }
+  // esteiras no chassi: o casco balança por cima delas (suspensão), elas ficam no chão
+  for (const o of ext.children.filter((c) => !beforeTreads.has(c))) chassis.add(o);
+  const travel = wheelTravel(0.1);
 
   // casco central largo e facetado, na cor do carro
   const shell = k.add(facet(sideProfile(hullShape(), HW, 0.07, 4)), hullMat, 0, 0, 0);
@@ -232,12 +239,13 @@ export function createBattleTrak(color: number, shadows: boolean): CarVisual {
   return {
     root,
     body,
-    cabin: [ext],
+    cabin: [ext, chassis],
     cockpit,
     steeringWheel,
     flames,
     eye,
     animate(a) {
+      chassis.position.y = travel(a);
       tread.offset.y = -a.spin * 0.1;
       // blocos de cima andam para trás na velocidade da esteira
       const off = (((-a.spin * 0.45) % PLATE) + PLATE) % PLATE;

@@ -79,19 +79,87 @@ export function newCarSetup(vehicleId: string): CarSetup {
 }
 
 /**
- * Como no original: esteiras (Battle Trak) não usam pneus; o aerodeslizador (Havac)
- * não usa pneus nem amortecedores.
+ * Como no original: esteiras (Battle Trak) não usam pneus; o aerodeslizador (Havac) não usa pneus
+ * nem amortecedores — no lugar deles vêm os Estabilizadores (ocupam o espaço dos amortecedores no save).
  */
 export function upgradeAvailable(vehicleId: string, kind: UpgradeKind): boolean {
   if (kind === 'tires') return vehicleId !== 'battletrak' && vehicleId !== 'havac';
-  if (kind === 'shocks') return vehicleId !== 'havac';
   return true;
+}
+
+/** O Havac troca os amortecedores pelos Estabilizadores (aderência, giro e pouso). */
+function isStabilizer(vehicleId: string, kind: UpgradeKind): boolean {
+  return vehicleId === 'havac' && kind === 'shocks';
+}
+
+const STABILIZER_NAMES = ['Hover Skirts', 'Gyro Stabs', 'Vector Fins', 'Atlas Power Gyros'];
+/** Custam como os pneus (fazem o papel de pneus e amortecedores juntos). */
+const STABILIZER_PRICES = [30000, 50000, 70000];
+
+/** Nome do tipo de melhoria para este carro ("Estabilizadores" no Havac). */
+export function upgradeLabel(vehicleId: string, kind: UpgradeKind): string {
+  return isStabilizer(vehicleId, kind) ? 'Estabilizadores' : UPGRADE_LABEL[kind];
+}
+
+export function upgradeHelp(vehicleId: string, kind: UpgradeKind): string {
+  return isStabilizer(vehicleId, kind) ? 'Mais aderência e giro nas curvas, pouso mais firme e menos rodadas no óleo' : UPGRADE_HELP[kind];
+}
+
+/** Nome da peça de cada nível (0 = de fábrica) para este carro. */
+export function upgradeName(vehicleId: string, kind: UpgradeKind, level: number): string | undefined {
+  return (isStabilizer(vehicleId, kind) ? STABILIZER_NAMES : UPGRADE_NAMES[kind])[level];
+}
+
+/**
+ * Classe de cada carro: quanto motor e blindagem rendem nele (um chassi melhor aguenta peças maiores).
+ * Assim o máximo de cada carro supera o do anterior (Dirt Devil < Marauder ≈ Air Blade < Battle Trak
+ * < Havac), como no original. Os preços das peças são os do original para todos.
+ */
+export interface CarPotential {
+  /** quanto o motor rende em velocidade final */
+  speed: number;
+  /** quanto o motor rende em arranque (e no turbo) */
+  accel: number;
+  armor: number;
+}
+
+export const CAR_POTENTIAL: Record<string, CarPotential> = {
+  dirtdevil: { speed: 0.55, accel: 0.55, armor: 0.7 },
+  marauder: { speed: 0.85, accel: 0.85, armor: 0.85 },
+  // o Air Blade já sai de fábrica com o melhor arranque: o motor rende mais em final que em arranque
+  airblade: { speed: 0.8, accel: 0.3, armor: 0.8 },
+  battletrak: { speed: 1.1, accel: 1.1, armor: 1.1 },
+  havac: { speed: 1.3, accel: 1.3, armor: 1.3 },
+};
+
+function carClass(vehicleId: string): CarPotential {
+  return CAR_POTENTIAL[vehicleId] ?? { speed: 1, accel: 1, armor: 1 };
 }
 
 export function upgradePrice(setup: CarSetup, kind: UpgradeKind): number | null {
   const level = setup.upgrades[kind];
   if (level >= MAX_UPGRADE || !upgradeAvailable(setup.vehicleId, kind)) return null;
-  return UPGRADE_PRICES[kind][level];
+  return isStabilizer(setup.vehicleId, kind) ? STABILIZER_PRICES[level] : UPGRADE_PRICES[kind][level];
+}
+
+/** Custo total para levar um carro de fábrica ao máximo (todas as peças que ele aceita). */
+export function maxUpgradeCost(vehicleId: string): number {
+  const setup = newCarSetup(vehicleId);
+  let sum = 0;
+  for (const k of UPGRADE_KINDS) {
+    for (let p = upgradePrice(setup, k); p !== null; p = upgradePrice(setup, k)) {
+      sum += p;
+      setup.upgrades[k]++;
+    }
+  }
+  return sum;
+}
+
+/** Carro com todas as melhorias que ele aceita no nível máximo. */
+export function maxedSetup(vehicleId: string): CarSetup {
+  const setup = newCarSetup(vehicleId);
+  for (const k of UPGRADE_KINDS) if (upgradeAvailable(vehicleId, k)) setup.upgrades[k] = MAX_UPGRADE;
+  return setup;
 }
 
 /** Arma/assistência de cada slot de carga. */
@@ -116,30 +184,66 @@ export function chargePrice(setup: CarSetup, kind: ChargeKind, base?: VehicleSpe
   return CHARGE_PRICE[weapon] ?? 20000;
 }
 
-/**
- * Valor de troca do carro atual. No original não dava para vender nada e as melhorias se
- * perdem ao trocar de carro; aqui a concessionária aceita o carro por metade do preço
- * (as melhorias e cargas continuam perdidas).
- */
-export function tradeInValue(setup: CarSetup, _base?: VehicleSpec): number {
-  return Math.round(CAR_PRICES[setup.vehicleId].price / 2 / 500) * 500;
+/** Quanto já foi gasto em melhorias neste carro. */
+export function upgradesSpent(setup: CarSetup): number {
+  const probe = newCarSetup(setup.vehicleId);
+  let sum = 0;
+  for (const k of UPGRADE_KINDS) {
+    for (let lv = 0; lv < setup.upgrades[k]; lv++) {
+      probe.upgrades[k] = lv;
+      sum += upgradePrice(probe, k) ?? 0;
+    }
+  }
+  return sum;
 }
 
-/** Ficha final do carro: base + melhorias + bônus do piloto. */
+/** Parte do preço das peças que a concessionária devolve na troca. */
+export const UPGRADE_RESALE = 0.25;
+
+/**
+ * Valor de troca (revenda) do carro atual. No original não dava para vender nada; aqui a
+ * concessionária fica com o carro por metade do preço mais 1/4 do que foi gasto em peças
+ * (as peças e as cargas extras ficam com o carro velho).
+ */
+export function tradeInValue(setup: CarSetup, _base?: VehicleSpec): number {
+  const value = CAR_PRICES[setup.vehicleId].price / 2 + UPGRADE_RESALE * upgradesSpent(setup);
+  return Math.round(value / 500) * 500;
+}
+
+/**
+ * Quanto custa trocar o carro atual por outro: preço do novo menos a revenda do atual.
+ * Negativo = a revenda passa do preço e a diferença volta para o jogador.
+ */
+export function carSwapCost(setup: CarSetup, vehicleId: string): number {
+  return CAR_PRICES[vehicleId].price - tradeInValue(setup);
+}
+
+/**
+ * Ficha final do carro: base + melhorias + bônus do piloto. Motor e blindagem rendem conforme a classe
+ * do carro (CAR_CLASS); peças que o carro não aceita (pneus no Battle Trak/Havac) não contam.
+ */
 export function buildSpec(base: VehicleSpec, setup: CarSetup, character?: Character): VehicleSpec {
-  const u = setup.upgrades;
+  const lv = (k: UpgradeKind) => (upgradeAvailable(base.id, k) ? setup.upgrades[k] : 0);
+  const pot = carClass(base.id);
+  const speed = lv('engine') * pot.speed;
+  const engine = lv('engine') * pot.accel;
+  const armor = lv('armor') * pot.armor;
+  const tires = lv('tires');
+  // no Havac o espaço dos amortecedores são os Estabilizadores: seguram o casco nas curvas e no pouso
+  const stab = isStabilizer(base.id, 'shocks') ? lv('shocks') : 0;
+  const shocks = lv('shocks');
   const b = character?.bonus ?? {};
   return {
     ...base,
-    maxSpeed: base.maxSpeed * (1 + 0.05 * u.engine + 0.04 * (b.topSpeed ?? 0)),
-    accel: base.accel * (1 + 0.07 * u.engine + 0.08 * (b.accel ?? 0)),
-    nitroAccel: base.nitroAccel * (1 + 0.05 * u.engine),
+    maxSpeed: base.maxSpeed * (1 + 0.05 * speed + 0.04 * (b.topSpeed ?? 0)),
+    accel: base.accel * (1 + 0.07 * engine + 0.08 * (b.accel ?? 0)),
+    nitroAccel: base.nitroAccel * (1 + 0.05 * engine),
     // como no original, motor mais forte deixa o carro mais arisco (o Battle Trak turbinado derrapa)
-    grip: base.grip * (1 + 0.12 * u.tires + 0.1 * (b.cornering ?? 0) - 0.05 * u.engine),
-    steerRate: base.steerRate * (1 + 0.04 * u.tires + 0.05 * (b.cornering ?? 0)),
-    armor: Math.round(base.armor * (1 + 0.2 * u.armor)),
-    landingLoss: Math.max(0.04, 0.25 - 0.06 * u.shocks - 0.07 * (b.jumping ?? 0)),
-    spinResist: Math.min(0.75, 0.2 * u.shocks + 0.12 * (b.jumping ?? 0)),
+    grip: base.grip * (1 + 0.12 * tires + 0.14 * stab + 0.1 * (b.cornering ?? 0) - 0.05 * lv('engine')),
+    steerRate: base.steerRate * (1 + 0.04 * tires + 0.05 * stab + 0.05 * (b.cornering ?? 0)),
+    armor: Math.round(base.armor * (1 + 0.2 * armor)),
+    landingLoss: Math.max(0.04, 0.25 - 0.06 * shocks - 0.07 * (b.jumping ?? 0)),
+    spinResist: Math.min(0.75, 0.2 * shocks + 0.12 * (b.jumping ?? 0)),
     frontCharges: Math.min(MAX_CHARGES, base.frontCharges + setup.charges.front),
     rearCharges: Math.min(MAX_CHARGES, base.rearCharges + setup.charges.rear),
     nitroCharges: Math.min(MAX_CHARGES, base.nitroCharges + setup.charges.nitro),

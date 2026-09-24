@@ -149,7 +149,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .touch .fire span, .touch .fire2 span { font-size: 13px; }
 .touch-left {
   position: absolute; left: max(10px, env(safe-area-inset-left)); bottom: max(10px, env(safe-area-inset-bottom));
-  display: flex; flex-direction: column; align-items: flex-start; gap: 10px;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 20px;
 }
 .touch-actions { display: flex; align-items: flex-end; gap: 10px; margin-left: 34px; }
 .touch-actions .act { width: 64px; height: 64px; }
@@ -160,6 +160,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
   width: 210px; height: 78px; border-radius: 40px; display: flex; align-items: center; justify-content: space-between; padding: 0 16px;
   background: linear-gradient(90deg, rgba(255, 255, 255, 0.14), rgba(20, 16, 28, 0.3) 35%, rgba(20, 16, 28, 0.3) 65%, rgba(255, 255, 255, 0.14));
 }
+/* área de toque do volante maior que o desenho: pega metade do vão até as armas, as laterais e a
+   borda de baixo da tela, então o polegar que pousa um pouco fora ainda esterça (item 55) */
+.touch .steer::before { content: ''; position: absolute; top: -9px; bottom: -12px; left: -12px; right: -12px; }
 .steer .arrow { font-size: 26px; opacity: 0.8; pointer-events: none; }
 .steer .knob {
   position: absolute; left: calc(50% - 26px); top: calc(50% - 26px); width: 52px; height: 52px; border-radius: 50%;
@@ -207,15 +210,17 @@ button { font: inherit; color: inherit; cursor: pointer; }
 /* com toque, a velocidade vai para o centro de baixo (os cantos são dos polegares) */
 .touch ~ .hud .hud-bl, .hud:has(~ .touch) .hud-bl { left: 50%; bottom: max(8px, env(safe-area-inset-bottom)); transform: translateX(-50%); }
 @media (max-height: 460px) {
-  .touch-actions { margin-left: 20px; gap: 8px; }
-  .touch-actions .act { width: 58px; height: 58px; }
-  .touch-actions .fire { width: 70px; height: 70px; }
-  .touch .steer { width: 186px; height: 66px; }
+  .touch-left { gap: 18px; }
+  .touch-actions { margin-left: 20px; gap: 10px; }
+  .touch-actions .act { width: 62px; height: 62px; }
+  .touch-actions .fire { width: 76px; height: 76px; }
+  .touch .steer { width: 190px; height: 70px; }
+  .touch .steer::before { top: -8px; }
   .steer .knob { width: 44px; height: 44px; left: calc(50% - 22px); top: calc(50% - 22px); }
-  .touch-right .brake { width: 64px; height: 64px; }
-  .touch-right .sharp { width: 58px; height: 58px; }
-  .touch-rcol { gap: 6px; }
-  .touch-right .gas { width: 92px; height: 92px; }
+  .touch-right .brake { width: 68px; height: 68px; }
+  .touch-right .sharp { width: 62px; height: 62px; }
+  .touch-rcol { gap: 8px; }
+  .touch-right .gas { width: 96px; height: 96px; }
   .touch-top { top: 138px; }
   .touch-top button { width: 40px; height: 40px; font-size: 16px; }
 }
@@ -229,22 +234,26 @@ button { font: inherit; color: inherit; cursor: pointer; }
   .touch .fire .t-ic, .touch .fire2 .t-ic { width: 22px; height: 22px; }
   .touch button[data-a] span { font-size: 9px; letter-spacing: 0; }
   .touch .fire span, .touch .fire2 span { font-size: 11px; }
-  .touch-left { gap: 6px; }
-  .touch-actions { margin-left: 14px; gap: 6px; }
-  .touch-actions .act { width: 56px; height: 56px; }
-  .touch-actions .fire { width: 64px; height: 64px; }
-  .touch .steer { width: 150px; height: 56px; padding: 0 10px; }
-  .steer .arrow { font-size: 20px; }
-  .steer .knob { width: 38px; height: 38px; left: calc(50% - 19px); top: calc(50% - 19px); }
-  .touch-right { gap: 8px; }
-  .touch-right .brake { width: 58px; height: 58px; }
-  .touch-right .sharp { width: 56px; height: 56px; }
+  /* iPhone pequeno deitado (item 55): botões ≥ 60 px e vão de 16 px entre volante e armas */
+  .touch-left { gap: 16px; }
+  .touch-actions { margin-left: 14px; gap: 10px; }
+  .touch-actions .act { width: 60px; height: 60px; }
+  .touch-actions .fire { width: 72px; height: 72px; }
+  .touch .steer { width: 176px; height: 64px; padding: 0 12px; }
+  .touch .steer::before { top: -7px; bottom: -10px; }
+  .steer .arrow { font-size: 22px; }
+  .steer .knob { width: 44px; height: 44px; left: calc(50% - 22px); top: calc(50% - 22px); }
+  .touch-right { gap: 10px; }
+  .touch-rcol { gap: 8px; }
+  .touch-right .brake { width: 64px; height: 64px; }
+  .touch-right .sharp { width: 60px; height: 60px; }
   .touch-right .sharp span { font-size: 8px; }
-  .touch-right .gas { width: 76px; height: 76px; font-size: 13px; }
-  .touch.auto-gas .brake { width: 62px; height: 62px; }
-  .touch-right .fire2 { width: 72px; height: 72px; font-size: 13px; }
-  .touch.tilt .touch-actions .act { width: 60px; height: 60px; }
-  .touch.tilt .touch-actions .fire { width: 70px; height: 70px; }
+  .touch-right .gas { width: 86px; height: 86px; font-size: 14px; }
+  .touch.auto-gas .brake { width: 70px; height: 70px; }
+  .touch-right .fire2 { width: 80px; height: 80px; font-size: 13px; }
+  .touch.tilt .touch-actions .act { width: 66px; height: 66px; }
+  .touch.tilt .touch-actions .fire { width: 80px; height: 80px; }
+  .touch-top { top: max(118px, calc(env(safe-area-inset-top) + 118px)); }
 }
 /* botão flutuante de tela cheia nos menus (celular) */
 .fs-float {
@@ -780,7 +789,7 @@ h3 {
 .weapon-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; padding: 4px 0 10px; }
 .weapon-card { display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: 12px;
   background: linear-gradient(180deg, rgba(0, 0, 0, 0.32), rgba(0, 0, 0, 0.45)); border: 1px solid rgba(255, 255, 255, 0.1); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06); }
-.weapon-img { position: relative; border-radius: 9px; overflow: hidden; border: 2px solid #5e5c66; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.6); aspect-ratio: 1; background: #1a1c24; }
+.weapon-img { position: relative; border-radius: 10px; overflow: hidden; border: 1px solid rgba(255, 255, 255, 0.14); box-shadow: 0 6px 16px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(0, 0, 0, 0.4); aspect-ratio: 1; background: #07050c; }
 .weapon-img .item-img { display: block; width: 100%; max-width: none; margin: 0; aspect-ratio: 1; }
 .weapon-slot { position: absolute; left: 8px; top: 8px; padding: 2px 8px; border-radius: 3px; font-family: var(--display); font-size: 12px; letter-spacing: 1px; color: #1a0e04; background: linear-gradient(#ffd070, #ff9a1a); transform: skewX(-8deg); }
 .weapon-card .grow b { display: block; font-size: 16px; margin-bottom: 4px; }

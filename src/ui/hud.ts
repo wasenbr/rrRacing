@@ -57,7 +57,17 @@ export interface HudData {
   front: HudSlot;
   rear: HudSlot;
   assist: HudSlot;
-  cars: { x: number; z: number; heading?: number; color: string; me: boolean }[];
+  /** carros vivos (a lista é reaproveitada entre quadros: vale só até `carCount`) */
+  cars: HudCar[];
+  carCount: number;
+}
+
+export interface HudCar {
+  x: number;
+  z: number;
+  heading?: number;
+  color: string;
+  me: boolean;
 }
 
 const ORD = ['', '1º', '2º', '3º', '4º', '5º', '6º'];
@@ -179,8 +189,8 @@ export class Hud {
       this.armor.querySelectorAll('i').forEach((dot, k) => dot.classList.toggle('on', k < lit));
     }
 
-    const d = [data.front, data.rear, data.assist];
-    const wkey = d.map((x) => `${x.icon}${x.n}${x.active ? 1 : 0}${x.label}`).join('|');
+    const f = data.front, r = data.rear, a = data.assist;
+    const wkey = `${f.icon}${f.n}${f.active ? 1 : 0}${f.label}|${r.icon}${r.n}${r.active ? 1 : 0}${r.label}|${a.icon}${a.n}${a.active ? 1 : 0}${a.label}`;
     if (this.weaponsKey === wkey) return this.minimapTick(dt, data);
     this.weaponsKey = wkey;
     const slot = (s: HudSlot, cls: string) =>
@@ -207,10 +217,16 @@ export class Hud {
     ctx.drawImage(this.mapBase, 0, 0);
     // tamanhos em pixels de tela (o canvas é reduzido pelo CSS): rivais com ~8 px e contorno
     // preto; o jogador é uma seta apontando para onde o carro vai
-    const k = this.minimap.width / Math.max(40, this.minimap.clientWidth || this.minimap.width);
-    for (const c of [...data.cars].sort((a, b) => Number(a.me) - Number(b.me))) {
+    // escala do canvas lida uma vez por redimensionamento (ler clientWidth a cada quadro força layout)
+    if (this.mapK <= 0) this.mapK = this.minimap.width / Math.max(40, this.minimap.clientWidth || this.minimap.width);
+    const k = this.mapK;
+    ctx.lineJoin = 'round';
+    // rivais primeiro, o jogador por cima (duas passadas, sem copiar e ordenar a lista)
+    for (let pass = 0; pass < 2; pass++)
+    for (let i = 0; i < data.carCount; i++) {
+      const c = data.cars[i];
+      if (c.me !== (pass === 1)) continue;
       const [x, y] = this.mapTransform(c.x, c.z);
-      ctx.lineJoin = 'round';
       if (c.me) {
         const h = c.heading ?? 0;
         const [fx, fy] = this.mapTransform(c.x + Math.sin(h), c.z + Math.cos(h));
@@ -248,6 +264,13 @@ export class Hud {
   }
 
   private mapTimer = 0;
+  /** pixels do canvas por pixel de tela no minimapa (0 = medir de novo) */
+  private mapK = 0;
+
+  /** A tela mudou de tamanho: o minimapa remede a escala no próximo desenho. */
+  resize(): void {
+    this.mapK = 0;
+  }
 
   private tickToast(dt: number): void {
     if (this.toastTimer > 0) {
@@ -289,6 +312,7 @@ export class Hud {
 
   setVisible(v: boolean): void {
     this.el.style.display = v ? '' : 'none';
+    if (v) this.mapK = 0;
   }
 }
 

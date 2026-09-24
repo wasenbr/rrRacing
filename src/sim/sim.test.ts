@@ -44,18 +44,18 @@ describe('veículo', () => {
   });
 
   it('esterço forte seguro em alta velocidade derrapa; devagar não', () => {
-    const slip = (speed: number, steps = 45) => {
+    const slip = (speed: number, steps = 45, throttle = 1) => {
       const v = createVehicleState(spec, 0, 4, 0);
       v.vz = speed;
       let max = 0;
       for (let i = 0; i < steps; i++) {
-        stepVehicle(v, spec, { ...emptyInput(), throttle: 1, steer: 1 }, flat, DT);
+        stepVehicle(v, spec, { ...emptyInput(), throttle, steer: 1 }, flat, DT);
         max = Math.max(max, v.drift);
       }
       return max;
     };
     expect(slip(spec.maxSpeed * 0.95)).toBeGreaterThan(0.5);
-    expect(slip(spec.maxSpeed * 0.3)).toBe(0);
+    expect(slip(spec.maxSpeed * 0.3, 45, 0)).toBe(0);
     // curva comum (esterço solto antes de ~0,4 s) não derrapa (itens 38/41)
     expect(slip(spec.maxSpeed * 0.95, 22)).toBe(0);
   });
@@ -84,6 +84,31 @@ describe('veículo', () => {
       const q = track.query(v.x, v.z, v.pieceIndex);
       expect(Math.abs(q.lateral)).toBeLessThanOrEqual(track.halfWidth - spec.halfWidth + 1e-6);
     }
+  });
+
+  it('raspão na mureta custa pouco; pancada custa mais', () => {
+    const reta = new Track({ id: 'reta', name: 'reta', planet: 'x', theme: 'chem6', laps: 1, layout: 'F ' + 'S '.repeat(20) + 'R S S S R ' + 'S '.repeat(20) + 'R S S S R' });
+    const loss = (ang: number) => {
+      const s = VEHICLES.dirtdevil;
+      const v = createVehicleState(s, 0, 4, 0);
+      v.vz = 40;
+      for (let i = 0; i < 60; i++) stepVehicle(v, s, { ...emptyInput(), throttle: 1 }, reta, DT);
+      v.heading = reta.query(v.x, v.z, v.pieceIndex).heading + ang;
+      const s0 = Math.hypot(v.vx, v.vz);
+      v.vx = Math.sin(v.heading) * s0;
+      v.vz = Math.cos(v.heading) * s0;
+      let min = s0;
+      let hit = false;
+      for (let i = 0; i < 90; i++) {
+        stepVehicle(v, s, { ...emptyInput(), throttle: 1 }, reta, DT);
+        hit ||= v.wallImpact > 0;
+        min = Math.min(min, Math.hypot(v.vx, v.vz));
+      }
+      expect(hit).toBe(true);
+      return 1 - min / s0;
+    };
+    expect(loss(0.12)).toBeLessThan(0.07); // raspão de ~7°
+    expect(loss(0.5)).toBeGreaterThan(0.15); // pancada de ~30°
   });
 
   it('decola no salto', () => {

@@ -5,15 +5,17 @@ import { planetThumbnail } from '../render/planetThumbs';
 import type { ThemeId } from '../sim/track';
 import {
   canAdvanceEarly, CAMPAIGN_PRIZES, carsForSale, DIVISIONS, PLANETS, POINTS, seasonInfo, START_MONEY, type CampaignState, type OpponentSetup, type PlanetDef,
-  type RaceOutcome,
+  type RaceOutcome, RIVALS, CHAMPION_BONUS, seasonSchedule,
 } from '../sim/campaign';
 import {
-  armamentText, ATTRIBUTE_LABEL, attributeTags, buildSpec, CAR_PRICES, carAttributes, CHARACTERS, CHARGE_KINDS, chargePrice, chargeWeapon, MAX_UPGRADE, maxExtraCharges,
-  tradeInValue, UPGRADE_HELP, UPGRADE_KINDS, UPGRADE_LABEL, UPGRADE_NAMES, upgradeAvailable, upgradePrice, type CarAttributes, type CarSetup, type Character,
+  armamentText, ATTRIBUTE_LABEL, buildSpec, CAR_PRICES, carAttributes, CHARACTERS, CHARGE_KINDS, chargePrice, chargeWeapon, MAX_UPGRADE, maxExtraCharges,
+  carSwapCost, tradeInValue, UPGRADE_KINDS, upgradeAvailable, upgradeHelp, upgradeLabel, upgradeName, upgradePrice, upgradesSpent, type CarAttributes, type CarSetup, type Character,
   type ChargeKind, type UpgradeKind,
 } from '../sim/garage';
 import type { Track, TrackDef } from '../sim/track';
+import { trackById } from '../data/tracks';
 import { WEAPON_NAMES, type VehicleSpec } from '../sim/vehicle';
+import { VEHICLES } from '../data/vehicles';
 import { DIFFICULTIES, DIFFICULTY_LABEL, type Difficulty } from '../sim/world';
 import type { SlotInfo } from '../core/storage';
 import { formatTime } from './hud';
@@ -21,6 +23,7 @@ import { setTiltSteering, tiltSteeringEnabled, tiltSupported } from '../input/co
 import { portraitSvg, warmPortraits } from './portraits';
 import { trackThumbnail } from './trackThumb';
 import { icon, iconizeHtml } from './icons';
+import { idleJob, idleJobsUrgent } from './idleQueue';
 import { APP_VERSION } from '../version';
 
 /** Nome curto das armas (HUD/menus), a partir dos nomes do original. */
@@ -184,23 +187,50 @@ export interface CampaignReport {
 const ATTRS = Object.keys(ATTRIBUTE_LABEL) as (keyof CarAttributes)[];
 
 /**
- * Barras segmentadas dos atributos (0..1, faixas fixas definidas na simulação em garage.ts),
- * com a maior força e a maior fraqueza de cada carro marcadas.
+ * Faixa de cada atributo entre os 5 carros de fábrica (escala de `carAttributes`). As barras vão do
+ * pior (2 segmentos) ao melhor carro (10): as diferenças entre eles aparecem de verdade (item 13).
+ */
+const STOCK_RANGE = Object.fromEntries(
+  ATTRS.map((k) => {
+    const vals = Object.values(VEHICLES).map((v) => carAttributes(v)[k]);
+    return [k, [Math.min(...vals), Math.max(...vals)]];
+  }),
+) as Record<keyof CarAttributes, [number, number]>;
+
+/**
+ * Atributo na escala das barras (0..1 = 0..10 segmentos): pior carro de fábrica em 0,2, melhor em 1.
+ * Melhorias e piloto podem passar de 1 (a barra fica cheia). Diferença desprezível entre os carros
+ * (< 4% da escala absoluta) fica no meio para todos.
+ */
+function barScale(k: keyof CarAttributes, a: number): number {
+  const [lo, hi] = STOCK_RANGE[k];
+  const t = hi - lo < 0.04 ? 0.6 + (a - hi) * 2.5 : 0.2 + (0.8 * (a - lo)) / (hi - lo);
+  return Math.max(0.05, t);
+}
+
+/**
+ * Barras segmentadas dos atributos, normalizadas entre os carros de fábrica (2–10 segmentos), com o
+ * maior atributo do carro marcado FORTE e o menor FRACO.
  */
 function statBars(v: VehicleSpec, withPilot?: VehicleSpec): string {
   const a = carAttributes(v);
-  const vals = ATTRS.map((k) => a[k]);
-  // forte/fraco só quando o carro se destaca de fato dos outros (ver attributeTags)
-  const tags = attributeTags(v);
+  const vals = ATTRS.map((k) => barScale(k, a[k]));
+  // forte/fraco: sempre o maior e o menor atributo deste carro, na escala das barras
+  let good = 0;
+  let bad = 0;
+  vals.forEach((x, i) => {
+    if (x > vals[good]) good = i;
+    if (x < vals[bad]) bad = i;
+  });
   // bônus do piloto: segmentos a mais (ou a menos) em azul, por cima da base igual à da loja
   const p = withPilot ? carAttributes(withPilot) : a;
   let anyBonus = false;
   const bars = ATTRS.map((k, i) => {
-    const n = Math.max(1, Math.round(vals[i] * 10));
-    const t = Math.max(1, Math.min(10, Math.round(p[k] * 10)));
+    const n = Math.max(1, Math.min(10, Math.round(vals[i] * 10)));
+    const t = Math.max(1, Math.min(10, Math.round(barScale(k, p[k]) * 10)));
     if (t !== n) anyBonus = true;
-    const tag = tags[k] === 'good' ? '<em class="st-good">forte</em>' : tags[k] === 'bad' ? '<em class="st-bad">fraco</em>' : '';
-    const cls = tags[k] === 'good' || n >= 8 ? 'hi' : tags[k] === 'bad' || n <= 2 ? 'lo' : 'mid';
+    const tag = good === bad ? '' : i === good ? '<em class="st-good">forte</em>' : i === bad ? '<em class="st-bad">fraco</em>' : '';
+    const cls = (i === good && good !== bad) || n >= 8 ? 'hi' : (i === bad && good !== bad) || n <= 3 ? 'lo' : 'mid';
     const seg = (j: number) =>
       j < Math.min(n, t) ? '<b class="on"></b>' : j < t ? `<b class="on" style="${PILOT_UP}"></b>` : j < n ? `<b style="${PILOT_DOWN}"></b>` : '<b></b>';
     return `<div class="stat ${cls}"><span>${ATTRIBUTE_LABEL[k]}</span><i>${Array.from({ length: 10 }, (_, j) => seg(j)).join('')}</i>${tag}</div>`;
@@ -220,8 +250,11 @@ function upgradePreview(base: VehicleSpec, car: CarSetup, k: UpgradeKind): strin
   if (lvl >= MAX_UPGRADE) return '';
   const cur = buildSpec(base, car);
   const nxt = buildSpec(base, { ...car, upgrades: { ...car.upgrades, [k]: lvl + 1 } });
-  const ca = carAttributes(cur);
-  const na = carAttributes(nxt);
+  const ca0 = carAttributes(cur);
+  const na0 = carAttributes(nxt);
+  // mesma escala das barras (statBars); a prévia fica limitada à barra cheia
+  const ca = Object.fromEntries(ATTRS.map((a) => [a, barScale(a, ca0[a])])) as Record<keyof CarAttributes, number>;
+  const na = Object.fromEntries(ATTRS.map((a) => [a, barScale(a, na0[a])])) as Record<keyof CarAttributes, number>;
   const handling = (s: VehicleSpec) => s.steerRate * Math.pow(s.grip, 0.25);
   const raw: Record<string, [number, number]> = {
     accel: [cur.accel, nxt.accel], speed: [cur.maxSpeed, nxt.maxSpeed], handling: [handling(cur), handling(nxt)], armor: [cur.armor, nxt.armor],
@@ -229,7 +262,7 @@ function upgradePreview(base: VehicleSpec, car: CarSetup, k: UpgradeKind): strin
   const rows: [string, number, number, number][] = [];
   for (const a of ATTRS) {
     if (!raw[a] || Math.abs(na[a] - ca[a]) < 0.004) continue;
-    rows.push([ATTRIBUTE_LABEL[a], ca[a], na[a], (raw[a][1] / raw[a][0] - 1) * 100]);
+    rows.push([ATTRIBUTE_LABEL[a], Math.min(1, ca[a]), Math.min(1, na[a]), (raw[a][1] / raw[a][0] - 1) * 100]);
   }
   // amortecedores: embalo guardado no pouso (a perda cai de 25% até 7%)
   if (k === 'shocks') {
@@ -273,7 +306,7 @@ function itemImg(item: string, size = 96): string {
 function carImg(id: string, color: number, size = 200, style: CarThumbStyle = 'card'): string {
   const key = `${id}|${color}|${size}|${style}`;
   const url = thumbReady.get(key);
-  return `<img class="car-img${style === 'card' ? ' card-img' : ''}${url ? '' : ' loading'}" data-thumb="${key}" src="${url ?? BLANK}" alt="" draggable="false"/>`;
+  return `<img class="car-img${style === 'card' ? ' card-img' : ''}${url ? '' : ' loading'}" data-thumb="${esc(key)}" src="${url ?? BLANK}" alt="" draggable="false"/>`;
 }
 
 /** Tema (planeta) de cada nome de planeta usado nas pistas e na campanha. */
@@ -295,62 +328,71 @@ function planetRoute(current: number, champion = false): string {
   }).join('<i class="pr-link"></i>')}</div>`;
 }
 
-let fillToken = 0;
+/** Pistas conhecidas pela chave `track|id|w|h` (para gerar a miniatura na fila). */
+const trackDefs = new Map<string, TrackDef>();
+/** Miniaturas em geração (a imagem é codificada fora da thread principal). */
+const thumbPending = new Set<string>();
 
-/** Gera (uma vez) a miniatura 3D de uma chave `id|cor|tamanho|estilo`, `planet|tema|tam` ou `item|...`. */
-function makeThumb(key: string): string {
-  let url = thumbReady.get(key);
-  if (!url) {
-    const [id, color, size, style] = key.split('|');
-    url =
-      id === 'item'
-        ? itemThumbnail(color as ShopItem, Number(size))
-        : id === 'planet'
-          ? planetThumbnail(color as ThemeId, Number(size))
-          : carThumbnail(id, Number(color), Number(size), (style as CarThumbStyle) || 'card');
-    url ||= BLANK;
-    thumbReady.set(key, url);
-  }
-  return url;
+/** Coloca a imagem pronta em todas as `<img>` que esperam por ela (em qualquer menu aberto). */
+function applyThumb(key: string, url: string): void {
+  if (typeof document === 'undefined') return;
+  document.querySelectorAll<HTMLImageElement>('img.loading[data-thumb]').forEach((el) => {
+    if (el.dataset.thumb !== key) return;
+    el.src = url || BLANK;
+    el.classList.remove('loading');
+  });
 }
 
 /**
- * Gera miniaturas antes de abrirem a tela (no menu principal, nos intervalos livres): ao abrir a
- * corrida rápida no celular elas já estão prontas, sem imagens surgindo durante a rolagem.
- * Para assim que outro menu é aberto.
+ * Gera (uma vez) a miniatura de uma chave `id|cor|tamanho|estilo`, `planet|tema|tam`, `item|...` ou
+ * `track|id|w|h`. O desenho é síncrono (um por intervalo livre, ver idleQueue); a codificação
+ * (`toBlob`) termina depois e troca o `src` das imagens que esperam.
+ */
+function makeThumb(key: string): void {
+  if (thumbReady.has(key) || thumbPending.has(key)) return;
+  const [id, a, b, c] = key.split('|');
+  let p: Promise<string>;
+  if (id === 'item') p = itemThumbnail(a as ShopItem, Number(b));
+  else if (id === 'planet') p = planetThumbnail(a as ThemeId, Number(b));
+  else if (id === 'track') {
+    const def = trackDefs.get(key);
+    if (!def) return;
+    p = trackThumbnail(def, Number(b), Number(c));
+  } else p = carThumbnail(id, Number(a), Number(b), (c as CarThumbStyle) || 'card');
+  thumbPending.add(key);
+  void p.then((url) => {
+    thumbPending.delete(key);
+    if (url) thumbReady.set(key, url); // falha não fica guardada: a próxima tela tenta de novo
+    applyThumb(key, url);
+  });
+}
+
+/**
+ * Pré-gera miniaturas (a partir do menu principal) nos intervalos livres, uma por vez e nunca
+ * durante a rolagem: ao abrir a corrida rápida no celular elas já estão prontas. Continua mesmo
+ * depois de trocar de menu (o que a tela aberta mostra passa na frente, ver fillThumbs).
  */
 function warmThumbs(keys: string[]): void {
-  const token = fillToken;
-  const idle = (window as unknown as { requestIdleCallback?: (f: () => void, o?: { timeout: number }) => void }).requestIdleCallback ?? ((f: () => void) => setTimeout(f, 60));
-  const next = () => {
-    if (token !== fillToken) return;
-    const key = keys.shift();
-    if (!key) return;
-    makeThumb(key);
-    idle(next);
-  };
-  idle(next);
+  for (const key of keys) if (!thumbReady.has(key)) idleJob(`thumb:${key}`, () => makeThumb(key));
 }
-/** Gera as miniaturas que faltam, uma por vez, sem travar a abertura do menu. */
+
+/** Põe na frente da fila as miniaturas que faltam na tela aberta, na ordem em que aparecem. */
 function fillThumbs(root: HTMLElement): void {
-  const token = ++fillToken;
-  const next = () => {
-    if (token !== fillToken) return; // outro menu foi aberto: recomeça por lá
-    const img = root.querySelector<HTMLImageElement>('img[data-thumb].loading');
-    if (!img) return;
-    const key = img.dataset.thumb!;
-    const url = makeThumb(key);
-    root.querySelectorAll<HTMLImageElement>(`img.loading[data-thumb="${key}"]`).forEach((el) => {
-      el.src = url || BLANK;
-      el.classList.remove('loading');
-    });
-    setTimeout(next, 0);
-  };
-  requestAnimationFrame(() => setTimeout(next, 0));
+  const keys = [...new Set(Array.from(root.querySelectorAll<HTMLImageElement>('img[data-thumb].loading'), (el) => el.dataset.thumb!))];
+  idleJobsUrgent(keys.filter((k) => !thumbReady.has(k)).map((key) => ({ key: `thumb:${key}`, run: () => makeThumb(key) })));
+}
+
+/** Chave da miniatura de pista (registra a pista para a fila poder gerá-la). */
+function trackKey(def: TrackDef, w = 200, h = 130): string {
+  const key = `track|${def.id}|${w}|${h}`;
+  trackDefs.set(key, def);
+  return key;
 }
 
 function trackImg(def: TrackDef, w = 200, h = 130): string {
-  return `<img class="trk-img" src="${trackThumbnail(def, w, h)}" alt="" draggable="false"/>`;
+  const key = trackKey(def, w, h);
+  const url = thumbReady.get(key);
+  return `<img class="trk-img${url ? '' : ' loading'}" data-thumb="${esc(key)}" src="${url ?? BLANK}" style="aspect-ratio:${w}/${h}" alt="" draggable="false"/>`;
 }
 
 function dateLabel(ms: number): string {
@@ -500,6 +542,8 @@ export class Menus {
     this.hasSave = hasSave;
     // retratos da escolha de piloto já prontos (PNG) quando o jogador abrir a tela: rolagem lisa
     warmPortraits(CHARACTERS.map((c) => c.id), [120, 208]);
+    // e os das outras telas (logo, resultados, slots, garagem, rivais)
+    warmPortraits([...CHARACTERS.map((c) => c.id), ...Object.keys(RIVALS)], [48, 56, 64, 72, 76]);
     // sempre visível fora do app instalado: sem o convite do navegador, mostra o passo a passo
     const install = this.app.installed ? '' : `<button class="install" data-act="install">${icon('install')} Instalar o jogo</button>`;
     // no celular deitado os botões secundários vão em duas colunas; com número ímpar, o primeiro
@@ -528,8 +572,33 @@ export class Menus {
         <p class="version">versão ${esc(APP_VERSION)}</p>
       </div>`);
     // corrida rápida: planetas e carros já prontos quando o jogador abrir a tela
+    this.warmAll();
+  }
+
+  /**
+   * Pré-gera, nos intervalos livres, as miniaturas de todos os menus: primeiro o que a corrida rápida
+   * mostra (carros na cor atual, abas de planeta, pistas do planeta aberto), depois o resto das
+   * pistas, os planetas da campanha, os carros nas outras cores e as listas pequenas, e a loja.
+   */
+  private warmAll(): void {
     const themes = [...new Set(this.tracks.map((t) => PLANET_THEME[t.planet] ?? t.theme))];
-    warmThumbs([...themes.map((th) => `planet|${th}|64`), ...this.allCars.map((v) => `${v.id}|${this.quick.color}|200|card`)]);
+    const allThemes = [...new Set([...themes, ...PLANETS.map((p) => p.theme)])];
+    const cars = this.allCars;
+    const open = this.tracks.find((t) => t.id === this.quick.trackId)?.planet ?? this.quickPlanet;
+    const tracks = [...this.tracks.filter((t) => t.planet === open), ...this.tracks.filter((t) => t.planet !== open)];
+    const colors = [this.quick.color, ...COLORS.filter((c) => c !== this.quick.color)];
+    const weapons = [...new Set(cars.flatMap((v) => [v.front, v.rear, v.assist]))];
+    warmThumbs([
+      ...cars.map((v) => `${v.id}|${this.quick.color}|200|card`),
+      ...themes.map((th) => `planet|${th}|64`),
+      ...tracks.map((t) => trackKey(t)),
+      ...allThemes.flatMap((th) => [32, 48, 72].map((sz) => `planet|${th}|${sz}`)),
+      ...colors.slice(1).flatMap((c) => cars.map((v) => `${v.id}|${c}|200|card`)),
+      ...colors.flatMap((c) => cars.map((v) => `${v.id}|${c}|96|transparent`)),
+      ...cars.map((v) => `${v.id}|${SHOWROOM_COLOR[v.id] ?? COLORS[0]}|200|card`),
+      ...UPGRADE_KINDS.map((k) => `item|${k}|96`),
+      ...weapons.map((w) => `item|${w}|200`),
+    ]);
   }
 
   private helpBlock(): string {
@@ -579,10 +648,7 @@ export class Menus {
         <h2>CORRIDA RÁPIDA</h2>
         <h3>Pista</h3>
         <div class="tabs planet-tabs">${planets.map((p) => `<button class="tab" data-qplanet="${esc(p)}">${planetImg(PLANET_THEME[p] ?? this.tracks.find((t) => t.planet === p)?.theme, 64)}<span>${esc(p)}</span></button>`).join('')}</div>
-        <div class="tracks track-row">${this.tracks
-          .filter((t) => t.planet === this.quickPlanet)
-          .map((t) => `<button class="trk" data-track="${t.id}">${trackImg(t)}<b>${esc(t.name)}</b></button>`)
-          .join('')}</div>
+        <div class="tracks track-row">${this.quickTracks()}</div>
         <h3>Piloto</h3>
         ${this.charPick('quick')}
         <h3>Carro</h3>
@@ -595,6 +661,28 @@ export class Menus {
         <button class="go" data-act="quick-start">CORRER!</button>
         <button data-act="main">← Voltar</button>
       </div>`);
+  }
+
+  /** Pistas do planeta aberto na corrida rápida. */
+  private quickTracks(): string {
+    return this.tracks
+      .filter((t) => t.planet === this.quickPlanet)
+      .map((t) => `<button class="trk" data-track="${t.id}">${trackImg(t)}<b>${esc(t.name)}</b></button>`)
+      .join('');
+  }
+
+  /** Troca o `src` das miniaturas de carro da lista para a cor escolhida (sem refazer o menu). */
+  private recolorCars(): void {
+    this.el.querySelectorAll<HTMLButtonElement>('.cars .car[data-vehicle]').forEach((b) => {
+      const img = b.querySelector<HTMLImageElement>('img[data-thumb]');
+      if (!img) return;
+      const key = `${b.dataset.vehicle}|${this.quick.color}|200|card`;
+      const url = thumbReady.get(key);
+      img.dataset.thumb = key;
+      img.src = url ?? BLANK;
+      img.classList.toggle('loading', !url);
+    });
+    fillThumbs(this.el);
   }
 
   /* ---------------- nova campanha ---------------- */
@@ -733,6 +821,7 @@ export class Menus {
         </div>
         ${planetRoute(s.planet, s.champion)}
         <div class="points"><span>Pontos: <b>${s.points}</b> / ${season.promote} para subir</span><div class="bar"><i style="width:${pct}%"></i></div></div>
+        ${this.seasonCalendar(s)}
         ${notice ? `<div class="notice">${iconizeHtml(notice)}</div>` : ''}
         ${early ? `<div class="notice promoted">Você já tem os pontos! Continue correndo aqui para ganhar dinheiro ou <button class="inline-go" data-act="advance">subir agora ${icon('arrowRight')}</button></div>` : ''}
         <div class="hub-grid">
@@ -752,7 +841,7 @@ export class Menus {
             <div class="me-row">${portraitSvg(d.character.id, 72)}<div><b>${esc(d.character.name)}</b><div class="skills">${this.bonusText(d.character)}</div></div></div>
             <div class="mycar">${base ? this.carCard(base, s.color, '', buildSpec(base, s.car), d.spec) : this.carCard(d.spec, s.color)}</div>
             <ul class="upg-list">
-              ${UPGRADE_KINDS.filter((k) => upgradeAvailable(s.car.vehicleId, k)).map((k) => `<li><span>${UPGRADE_LABEL[k]} <small>${UPGRADE_NAMES[k][u[k]]}</small></span> ${pips(u[k], MAX_UPGRADE)}</li>`).join('')}
+              ${UPGRADE_KINDS.filter((k) => upgradeAvailable(s.car.vehicleId, k)).map((k) => `<li><span>${upgradeLabel(s.car.vehicleId, k)} <small>${upgradeName(s.car.vehicleId, k, u[k])}</small></span> ${pips(u[k], MAX_UPGRADE)}</li>`).join('')}
             </ul>
             <p class="small-note">${d.spec.frontCharges}× ${weaponFull(d.spec.front)} · ${d.spec.rearCharges}× ${weaponFull(d.spec.rear)} · ${d.spec.nitroCharges}× ${weaponFull(d.spec.assist)}</p>
           </div>
@@ -766,6 +855,24 @@ export class Menus {
           <button data-act="main">Menu</button>
         </div>
       </div>`);
+  }
+
+  /** Calendário da divisão: as pistas das corridas, com as já disputadas marcadas e a próxima em destaque. */
+  private seasonCalendar(s: CampaignState): string {
+    const races = seasonSchedule(s)
+      .map((r, i) => {
+        let name = r.trackId;
+        try {
+          name = trackById(r.trackId).name;
+        } catch {
+          /* pista sem definição: mostra o id */
+        }
+        const mark = r.done ? '✓ ' : r.current ? '▶ ' : '';
+        const style = r.done ? 'opacity:.55' : r.current ? 'color:var(--accent);font-weight:800' : '';
+        return `<li style="${style}">${mark}${i + 1}. ${esc(name)}</li>`;
+      })
+      .join('');
+    return `<details class="season-cal small-note"><summary>Calendário — ${esc(PLANETS[s.planet].name)}, Divisão ${DIVISIONS[s.division]} (${seasonSchedule(s).length} corridas)</summary><ol style="list-style:none;padding:0;margin:6px 0;columns:2;font-size:12px">${races}</ol></details>`;
   }
 
   /* ---------------- loja ---------------- */
@@ -783,11 +890,12 @@ export class Menus {
         UPGRADE_KINDS.map((k) => {
           const lvl = s.car.upgrades[k];
           if (!upgradeAvailable(s.car.vehicleId, k)) {
-            return `<div class="shop-row na"><div class="upg-icon">${itemImg(k)}</div><div class="grow"><b>${UPGRADE_LABEL[k]}</b><small>Não se aplica a este carro (${s.car.vehicleId === 'havac' ? 'aerodeslizador' : 'esteiras'}).</small></div><span class="maxed">—</span></div>`;
+            return `<div class="shop-row na"><div class="upg-icon">${itemImg(k)}</div><div class="grow"><b>${upgradeLabel(s.car.vehicleId, k)}</b><small>Não se aplica a este carro (${s.car.vehicleId === 'havac' ? 'aerodeslizador' : 'esteiras'}).</small></div><span class="maxed">—</span></div>`;
           }
           const price = upgradePrice(s.car, k);
-          const next = UPGRADE_NAMES[k][lvl + 1];
-          return `<div class="shop-row"><div class="upg-icon">${itemImg(k)}</div><div class="grow"><b>${UPGRADE_LABEL[k]}: ${UPGRADE_NAMES[k][lvl]}</b> ${pips(lvl, MAX_UPGRADE)}<small>${UPGRADE_HELP[k]}${next ? ` · próximo: <b class="upg-next">${next}</b>` : ''}</small>${vbase ? upgradePreview(vbase, s.car, k) : ''}</div>
+          const vid = s.car.vehicleId;
+          const next = upgradeName(vid, k, lvl + 1);
+          return `<div class="shop-row"><div class="upg-icon">${itemImg(k)}</div><div class="grow"><b>${upgradeLabel(vid, k)}: ${upgradeName(vid, k, lvl)}</b> ${pips(lvl, MAX_UPGRADE)}<small>${upgradeHelp(vid, k)}${next ? ` · próximo: <b class="upg-next">${next}</b>` : ''}</small>${vbase ? upgradePreview(vbase, s.car, k) : ''}</div>
             ${price === null ? '<span class="maxed">MÁXIMO</span>' : `<button class="buy" data-upgrade="${k}" ${price > s.money ? 'disabled' : ''}>${money(price)}</button>`}</div>`;
         }).join('');
     } else if (this.shopTab === 'weapons') {
@@ -803,19 +911,24 @@ export class Menus {
       body = `<div class="weapon-cards">${body}</div>`;
     } else {
       const trade = tradeInValue(s.car, d.vehicles[s.car.vehicleId]);
+      const spent = upgradesSpent(s.car);
+      const myName = d.vehicles[s.car.vehicleId]?.name ?? s.car.vehicleId;
       body =
-        `<p class="small-note">Ao trocar de carro, o atual (com melhorias) entra como parte do pagamento: <b>${money(trade)}</b>.</p>` +
+        `<p class="small-note">Na troca, a loja fica com o seu ${esc(myName)} e paga <b>${money(trade)}</b> de revenda ` +
+        `(metade do preço do carro${spent ? ` + 1/4 dos ${money(spent)} gastos em peças` : ''}). As peças e as cargas extras vão junto com ele: o carro novo sai de fábrica.</p>` +
         `<div class="shop-cars">${this.allCars
           .map((v) => {
             const mine = v.id === s.car.vehicleId;
             const forSale = carsForSale(s).includes(v.id);
-            const net = Math.max(0, CAR_PRICES[v.id].price - trade);
+            const net = carSwapCost(s.car, v.id);
+            const netText = net > 0 ? `Você paga ${money(net)}` : net < 0 ? `Você recebe ${money(-net)}` : 'Troca sem custo';
             const action = mine
               ? '<span class="maxed">SEU CARRO</span>'
               : !forSale
                 ? `<span class="maxed">${icon('lock')} NÃO VENDIDO NESTE PLANETA</span>`
-                : `<button class="buy" data-buycar="${v.id}" ${net > s.money ? 'disabled' : ''}>${net === 0 ? 'TROCAR' : money(net)}</button>`;
-            return `<div class="shop-carcard ${mine ? 'mine' : ''} ${forSale || mine ? '' : 'locked'}"><div class="car">${this.carCard(v, mine ? s.color : SHOWROOM_COLOR[v.id] ?? s.color, `<small>Preço: ${money(CAR_PRICES[v.id].price)}</small>`)}</div>${action}</div>`;
+                : `<button class="buy" data-buycar="${v.id}" data-buyinfo="${esc(`${netText}?`)}" ${net > s.money ? 'disabled' : ''}>${net > 0 ? money(net) : net < 0 ? `+${money(-net)}` : 'TROCAR'}</button>`;
+            const priceLine = mine || !forSale ? `Preço: ${money(CAR_PRICES[v.id].price)}` : `Preço ${money(CAR_PRICES[v.id].price)} − revenda ${money(trade)} · ${netText}`;
+            return `<div class="shop-carcard ${mine ? 'mine' : ''} ${forSale || mine ? '' : 'locked'}"><div class="car">${this.carCard(v, mine ? s.color : SHOWROOM_COLOR[v.id] ?? s.color, `<small>${priceLine}</small>`)}</div>${action}</div>`;
           })
           .join('')}</div>`;
     }
@@ -953,7 +1066,7 @@ export class Menus {
     const slots = Array.from({ length: v.max }, (_, i) => {
       const p = v.players[i];
       return p
-        ? `<li>${carImg(p.vehicleId, p.color, 96, 'transparent')}<div><b style="color:${hex(p.color)}">${esc(p.name)}</b><small>${esc(this.vehicles[p.vehicleId]?.name ?? '')}${i === 0 ? ' · host' : ''}${p.me ? ' · você' : ''}</small></div></li>`
+        ? `<li>${carImg(p.vehicleId, p.color, 96, 'transparent')}<div><b style="color:${esc(hex(p.color))}">${esc(p.name)}</b><small>${esc(this.vehicles[p.vehicleId]?.name ?? '')}${i === 0 ? ' · host' : ''}${p.me ? ' · você' : ''}</small></div></li>`
         : `<li class="empty"><div><small>${v.host && this.fillCpu ? 'CPU' : 'vago'}</small></div></li>`;
     }).join('');
     const canShare = typeof navigator.share === 'function';
@@ -995,6 +1108,32 @@ export class Menus {
       </div>`);
   }
 
+  /** Tela de campeão da galáxia: rota completa, estatísticas da campanha, fala do locutor e recompensa. */
+  showChampion(d: HubData): void {
+    this.lastHub = d;
+    const s = d.state;
+    const st = s.stats;
+    const winPct = st.races ? Math.round((st.wins / st.races) * 100) : 0;
+    const diff = s.difficulty ?? 'normal';
+    const stat = (label: string, value: string) => `<div><small>${label}</small><b>${value}</b></div>`;
+    this.show(`
+      <div class="card wide champion-card">
+        <h2>${icon('trophy')} CAMPEÃO DA GALÁXIA!</h2>
+        ${planetRoute(PLANETS.length, true)}
+        <div class="me-row">${portraitSvg(d.character.id, 96)}<div><b>${esc(d.character.name)}</b><small>${esc(d.character.homeworld)} · ${esc(DIFFICULTY_LABEL[diff])}</small></div>${carImg(s.car.vehicleId, s.color, 160, 'transparent')}</div>
+        <div class="notice champion"><b>Loudmouth Larry:</b> “${esc(d.character.name)} passou por Chem VI, Drakonis, Bogmire, New Mojave, Nho e Inferno e não sobrou ninguém de pé! Temos um novo campeão — e que venha o rock!”</div>
+        <div class="hub-head">
+          ${stat('CORRIDAS', String(st.races))}
+          ${stat('VITÓRIAS', `${st.wins} (${winPct}%)`)}
+          ${stat('ABATES', String(st.kills))}
+          ${stat('GANHOS', money(st.earnings))}
+        </div>
+        <div class="notice promoted">Recompensa: troféu da galáxia e <b class="gold">${money(CHAMPION_BONUS)}</b> de prêmio (saldo: ${money(s.money)}). A garagem continua aberta: corra no Inferno para gastar o prêmio.</div>
+        <button class="go" data-act="hub">Voltar à garagem ${icon('arrowRight')}</button>
+        <button data-act="main">Menu principal</button>
+      </div>`);
+  }
+
   showResults(rows: ResultRow[], lapTimes: number[], report: CampaignReport | null, online = false): void {
     const best = lapTimes.length ? Math.min(...lapTimes) : 0;
     const me = rows.find((r) => r.me);
@@ -1013,7 +1152,7 @@ export class Menus {
       .sort((a, b) => a.place - b.place)
       .map(
         (r) => `<div class="res-row ${r.me ? 'me' : ''} p${r.place}"><span class="res-place">${r.place}º</span>${portraitSvg(r.pilot ?? r.name, 48)}
-          <div class="res-name"><b style="color:${r.color}">${esc(r.name)}</b><small>${r.time !== null ? formatTime(r.time) : '—'} · ${r.kills} abate(s)</small></div>
+          <div class="res-name"><b style="color:${esc(r.color)}">${esc(r.name)}</b><small>${r.time !== null ? formatTime(r.time) : '—'} · ${r.kills} abate(s)</small></div>
           ${r.vehicleId ? carImg(r.vehicleId, parseInt(r.color.slice(1), 16), 96, 'transparent') : ''}<span class="gold">${money(r.prize)}</span></div>`,
       )
       .join('');
@@ -1112,30 +1251,20 @@ export class Menus {
     }
     if (d.color) {
       if (d.group === 'new') this.newChar.color = Number(d.color);
-      else if (d.group === 'online') {
-        this.quick.color = Number(d.color);
-        this.nick = this.el.querySelector<HTMLInputElement>('.nick')?.value ?? this.nick;
-        const code = this.el.querySelector<HTMLInputElement>('.room[type="hidden"]')?.value ?? '';
-        const scroll = this.el.scrollTop;
-        this.showOnline(code);
-        this.el.scrollTop = scroll;
-        return;
-      }
       else {
+        // corrida rápida e online: só as miniaturas dos carros trocam (sem refazer o menu)
         this.quick.color = Number(d.color);
-        // miniaturas dos carros na nova cor
-        const scroll = this.el.scrollTop;
-        this.showQuick();
-        this.el.scrollTop = scroll;
-        return;
+        this.recolorCars();
       }
     }
     if (d.qplanet) {
+      // troca só a linha de pistas
       this.quickPlanet = d.qplanet;
-      const scroll = this.el.scrollTop;
-      this.showQuick();
-      this.el.scrollTop = scroll;
-      return;
+      const row = this.el.querySelector<HTMLElement>('.track-row');
+      if (row) {
+        row.innerHTML = this.quickTracks();
+        fillThumbs(row);
+      }
     }
     if (d.tab && this.lastHub) {
       this.shopTab = d.tab as typeof this.shopTab;
@@ -1158,7 +1287,11 @@ export class Menus {
     }
     if (d.upgrade) this.actions.buyUpgrade(d.upgrade as UpgradeKind);
     if (d.charge) this.actions.buyCharge(d.charge as ChargeKind);
-    if (d.buycar) this.actions.buyCar(d.buycar);
+    if (d.buycar) {
+      // trocar de carro perde as peças: pede um segundo toque com o valor da troca
+      if (!this.confirmClick(t, `Trocar? ${d.buyinfo ?? ''}`.trim())) return;
+      return this.actions.buyCar(d.buycar);
+    }
     if (d.save) {
       const occupied = this.actions.listSlots().some((x) => x.slot === Number(d.save) && !x.empty);
       if (occupied && !this.confirmClick(t, 'Substituir?')) return;

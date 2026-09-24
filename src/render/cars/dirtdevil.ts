@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
-import { carFrame, carveTires, cockpitRig, Kit, sideProfile, tireSpan, wheel, type CarVisual, type TireSpot } from './common';
+import { carFrame, carveTires, cockpitRig, Kit, sideProfile, tireSpan, wheel, wheelTravel, type CarVisual, type TireSpot } from './common';
 
 const WR = 0.82; // rodas de monster truck, como no sprite do original
 const WX = 0.94; // meia-bitola
@@ -86,7 +86,7 @@ function lamp(k: Kit, x: number, y: number, z: number, r: number, lens: THREE.Ma
  * VK Plasma Rifles no capô, BF's Slipsauce atrás e Locust Jump Jets sob o assoalho.
  */
 export function createDirtDevil(color: number, shadows: boolean): CarVisual {
-  const { root, body, ext } = carFrame();
+  const { root, body, ext, chassis } = carFrame();
   const k = new Kit(color, shadows, ext);
   const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
   // pintura lisa e brilhante (sem textura de desgaste: as superfícies curvas esticariam o UV em listras)
@@ -211,8 +211,8 @@ export function createDirtDevil(color: number, shadows: boolean): CarVisual {
 
   // ---- suspensão aparente: eixos rígidos, diferencial e amortecedores amarelos com mola cromada
   for (const sz of [-1, 1]) {
-    bar(k, V(-WX + 0.22, WR, sz * WZ), V(WX - 0.22, WR, sz * WZ), 0.075, k.gunMetal);
-    k.add(new THREE.SphereGeometry(0.2, 16, 10), k.gunMetal, 0, WR, sz * WZ);
+    chassis.add(bar(k, V(-WX + 0.22, WR, sz * WZ), V(WX - 0.22, WR, sz * WZ), 0.075, k.gunMetal));
+    k.add(new THREE.SphereGeometry(0.2, 16, 10), k.gunMetal, 0, WR, sz * WZ, chassis);
     bar(k, V(0, WR, sz * WZ), V(0, BOT - 0.06, sz * (WZ - 0.6)), 0.06, k.gunMetal);
     for (const sx of [-1, 1]) {
       // topo preso na bandeja, por dentro da caixa de roda (o pneu esterçado passa por fora)
@@ -240,9 +240,11 @@ export function createDirtDevil(color: number, shadows: boolean): CarVisual {
       c.position.x = sx * 0.28;
       c.scale.x = sx;
       w.spin.add(ring, c);
+      chassis.add(w.pivot);
       return { sz, ...w };
     }),
   );
+  const travel = wheelTravel(0.26);
 
   const eye = new THREE.Vector3(0, 2.4, -0.2);
   const { cockpit, steeringWheel } = cockpitRig(k, { eye, halfWidth: 0.78, weapon: 'plasma', hoodLength: 1.8 }, body);
@@ -251,12 +253,13 @@ export function createDirtDevil(color: number, shadows: boolean): CarVisual {
   return {
     root,
     body,
-    cabin: [ext],
+    cabin: [ext, chassis],
     cockpit,
     steeringWheel,
     flames,
     eye,
     animate(a) {
+      chassis.position.y = travel(a);
       for (const w of wheels) {
         w.spin.rotation.x = a.spin;
         if (w.sz > 0) w.pivot.rotation.y = -a.steer * STEER;

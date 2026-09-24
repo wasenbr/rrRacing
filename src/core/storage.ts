@@ -63,7 +63,10 @@ function readSlot(i: number): { state: CampaignState; savedAt: number } | null {
 
 /** Slot em uso (o último salvo/carregado); -1 se nenhum. */
 export function activeSlot(): number {
-  const n = Number(read(ACTIVE_KEY));
+  const raw = read(ACTIVE_KEY);
+  // (Number(null) é 0: sem esta checagem, apagar o slot ativo fazia o slot 1 virar o ativo)
+  if (raw === null || raw === '') return -1;
+  const n = Number(raw);
   return Number.isInteger(n) && n >= 0 && n < SLOT_COUNT && read(SLOT_KEY(n)) ? n : -1;
 }
 
@@ -107,7 +110,7 @@ export function loadFromSlot(i: number): CampaignState | null {
 
 export function deleteSlot(i: number): void {
   write(SLOT_KEY(i), null);
-  if (Number(read(ACTIVE_KEY)) === i) write(ACTIVE_KEY, null);
+  if (read(ACTIVE_KEY) === String(i)) write(ACTIVE_KEY, null);
 }
 
 /** Primeiro slot vazio (ou -1 se todos ocupados). */
@@ -126,10 +129,19 @@ function migrateLegacy(): void {
   write(LEGACY_KEY, null);
 }
 
-/** Campanha do slot ativo (para "Continuar"). */
+/** Slot salvo mais recentemente (-1 se todos vazios). */
+export function latestSlot(): number {
+  let best = -1;
+  let at = -Infinity;
+  for (const s of listSlots()) if (!s.empty && s.savedAt > at) (best = s.slot), (at = s.savedAt);
+  return best;
+}
+
+/** Campanha do slot ativo (para "Continuar"); sem slot ativo (apagado), a salva mais recente. */
 export function loadCampaign(): CampaignState | null {
   migrateLegacy();
-  const i = activeSlot();
+  let i = activeSlot();
+  if (i < 0) i = latestSlot();
   return i >= 0 ? loadFromSlot(i) : null;
 }
 

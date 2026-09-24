@@ -1,10 +1,10 @@
 """
 Gera src/data/tracks/index.ts a partir do traçado extraído dos minimapas (construir.py).
 
-O traçado (retas, curvas, cruzamentos e vãos) é o do original. Os mapas mostram também relevo
-(rampas, blocos em alturas diferentes, lombadas, setas de warp), mas a vista isométrica não dá
-para transcrever com precisão; o relevo é colocado por regras de cada planeta, de forma
-determinística (mesma saída sempre), respeitando:
+O traçado (retas, curvas, cruzamentos e vãos) é o do original. O relevo (rampas, lombadas, setas
+de warp e poças fixas) vem de scripts/pistas/relevo.json, transcrito à mão dos mapas completos.
+Pistas ainda sem transcrição caem no sorteio por regras de cada planeta, de forma determinística
+(mesma saída sempre), respeitando:
   - cruzamentos (X) ficam no nível base (as duas passagens precisam da mesma altura);
   - vãos (G) só depois de rampa de salto (J), com casa de pouso;
   - largada e as 3 casas antes dela (grid) ficam planas.
@@ -110,16 +110,54 @@ def decorate(codes, planet, race):
     return ' '.join(c + m for c, m in zip(codes, mods))
 
 
+RELEVO = 'scripts/pistas/relevo.json'
+
+
+def transcribed(codes, key, rel):
+    """Aplica o relevo transcrito de uma pista; confere que é possível e que o circuito fecha."""
+    n = len(codes)
+    mods = [''] * n
+    flat = {0, n - 1, n - 2}  # largada e grid (os carros largam até ~25 m antes da linha)
+    for k, c in rel.get('pecas', {}).items():
+        i = int(k)
+        if c not in 'UDBJ' or len(c) != 1:
+            raise SystemExit(f'{key}: peça inválida {c} na casa {i}')
+        if codes[i] != 'S':
+            raise SystemExit(f'{key}: casa {i} é {codes[i]}, relevo só em reta (S)')
+        if i in flat:
+            raise SystemExit(f'{key}: casa {i} é largada/grid, precisa ficar plana')
+        if c == 'J' and codes[(i + 1) % n] != 'G':
+            raise SystemExit(f'{key}: salto J na casa {i} sem vão depois')
+        codes[i] = c
+    if codes.count('U') != codes.count('D'):
+        raise SystemExit(f"{key}: {codes.count('U')} subidas e {codes.count('D')} descidas, o circuito não fecha")
+    for k, m in rel.get('setas', {}).items():
+        i = int(k)
+        if m not in ('>', '<') or codes[i] not in 'SUDB' or i in flat:
+            raise SystemExit(f'{key}: seta {m} inválida na casa {i} ({codes[i]})')
+        mods[i] = m
+    puddles = sorted(set(rel.get('pocas', [])))
+    for i in puddles:
+        if codes[i] in 'GJ' or i in flat:
+            raise SystemExit(f'{key}: poça na casa {i} ({codes[i]})')
+    return ' '.join(c + m for c, m in zip(codes, mods)), puddles
+
+
 def main():
     data = json.load(open(sys.argv[1] if len(sys.argv) > 1 else 'scripts/pistas/tracado.json', encoding='utf8'))
+    relevo = {k: v for k, v in json.load(open(RELEVO, encoding='utf8')).items() if not k.startswith('_')}
     rows = []
     for t in data:
         if 'layout' not in t:
             raise SystemExit(f"pista sem traçado: {t['planet']} {t['race']}: {t.get('erro')}")
         codes = t['layout'].split()
-        layout = decorate(codes, t['planet'], t['race'])
         p = t['planet']
-        rows.append((p, t['race'], NAMES[p][t['race'] - 1], layout, CFG[p]['slime']))
+        key = f"{p}-{t['race']}"
+        if key in relevo:
+            layout, puddles = transcribed(codes, key, relevo[key])
+        else:
+            layout, puddles = decorate(codes, p, t['race']), None
+        rows.append((p, t['race'], NAMES[p][t['race'] - 1], layout, len(puddles) if puddles is not None else CFG[p]['slime'], puddles))
     out = []
     out.append("""import type { ThemeId, TrackDef } from '../../sim/track';
 
@@ -130,11 +168,12 @@ def main():
  *  - traçado (retas, curvas, cruzamentos X e vãos G com rampa J) extraído dos minimapas do jogo
  *    (referencias/snes/mapas/Tracks(In-GameMaps).png) por scripts/pistas/construir.py, com o
  *    sentido da corrida lido da seta de cada mapa completo (VGMaps);
- *  - relevo (rampas U/D, saltos J, lombadas B, setas de warp `>` e warp reverso `<`) colocado por
- *    regras de cada planeta, inspirado nos mapas, porque a vista isométrica não dá cota exata.
+ *  - relevo (rampas U/D, lombadas B, setas de warp `>` e warp reverso `<`, poças fixas) transcrito
+ *    dos mapas completos em scripts/pistas/relevo.json; pistas ainda sem transcrição usam regras
+ *    de cada planeta (sorteio determinístico).
  * Todas são verificadas por teste: o circuito precisa fechar.
  */
-const t = (planet: ThemeId, order: number, name: string, layout: string, slime = 0): TrackDef => ({
+const t = (planet: ThemeId, order: number, name: string, layout: string, slime = 0, puddles?: number[]): TrackDef => ({
   id: `${planet}-${order}`,
   name,
   planet: PLANET_NAMES[planet],
@@ -143,6 +182,7 @@ const t = (planet: ThemeId, order: number, name: string, layout: string, slime =
   layout,
   slime,
   order,
+  ...(puddles ? { puddles } : {}),
 });
 
 export const PLANET_NAMES: Record<ThemeId, string> = {
@@ -156,11 +196,13 @@ export const PLANET_NAMES: Record<ThemeId, string> = {
 
 export const TRACKS: TrackDef[] = [""")
     last = None
-    for p, race, name, layout, slime in rows:
+    for p, race, name, layout, slime, puddles in rows:
         if p != last:
             out.append(f'  // {PLANET_NAME[p]}')
             last = p
-        extra = f', {slime}' if slime else ''
+        extra = f', {slime}' if slime or puddles else ''
+        if puddles:
+            extra += f", [{', '.join(map(str, puddles))}]"
         out.append(f"  t('{p}', {race}, '{name}', '{layout}'{extra}),")
     out.append("""];
 

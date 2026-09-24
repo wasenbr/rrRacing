@@ -247,6 +247,188 @@ function coinTexture(): THREE.CanvasTexture {
 }
 
 /**
+ * Texturas das poças (geradas uma vez): contorno irregular com gotas soltas em volta, bolhas e
+ * menisco na borda. `alpha` recorta a forma, `normal` dá relevo às bolhas/borda (o reflexo do
+ * ambiente "quebra" nelas), `detail` é o tom em escala de cinza (tingido pela cor de cada líquido)
+ * e `sheen` é o furta-cor do óleo.
+ */
+function puddleTextures(): { alpha: THREE.CanvasTexture; normal: THREE.CanvasTexture; detail: THREE.CanvasTexture; sheen: THREE.CanvasTexture } {
+  const S = 256;
+  const C = S / 2;
+  let seed = 11;
+  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  // contorno: raio médio 0,4 × S com ondulações de várias frequências
+  const waves = Array.from({ length: 6 }, (_, i) => ({ k: 2 + i * 2 + Math.floor(rnd() * 2), a: (0.1 / (1 + i * 0.6)) * (0.6 + rnd() * 0.8), p: rnd() * 6.28 }));
+  const radius = (a: number) => S * 0.37 * (1 + waves.reduce((s, w) => s + w.a * Math.sin(w.k * a + w.p), 0));
+  const drops = Array.from({ length: 7 }, () => {
+    const a = rnd() * 6.28;
+    const r = radius(a) + 6 + rnd() * 14;
+    return { x: C + Math.cos(a) * r, y: C + Math.sin(a) * r, r: 3 + rnd() * 7 };
+  });
+  const bubbles = Array.from({ length: 16 }, () => {
+    const a = rnd() * 6.28;
+    const d = Math.sqrt(rnd()) * S * 0.3;
+    return { x: C + Math.cos(a) * d, y: C + Math.sin(a) * d, r: 2.5 + rnd() * rnd() * 11 };
+  });
+  const blob = (ctx: CanvasRenderingContext2D, grow: number) => {
+    ctx.beginPath();
+    for (let i = 0; i <= 96; i++) {
+      const a = (i / 96) * Math.PI * 2;
+      const r = radius(a) + grow;
+      if (i) ctx.lineTo(C + Math.cos(a) * r, C + Math.sin(a) * r);
+      else ctx.moveTo(C + r, C);
+    }
+    ctx.closePath();
+    ctx.fill();
+    for (const d of drops) {
+      ctx.beginPath();
+      ctx.arc(d.x, d.y, Math.max(0.5, d.r + grow * 0.5), 0, Math.PI * 2);
+      ctx.fill();
+    }
+  };
+  // altura: platô com borda arredondada (menisco) + domos das bolhas
+  const hc = document.createElement('canvas');
+  hc.width = hc.height = S;
+  const h = hc.getContext('2d')!;
+  h.fillStyle = '#000';
+  h.fillRect(0, 0, S, S);
+  for (const [grow, v] of [[0, 60], [-3, 110], [-6, 150], [-10, 170]] as const) {
+    h.fillStyle = `rgb(${v},${v},${v})`;
+    blob(h, grow);
+  }
+  for (const b of bubbles) {
+    const g = h.createRadialGradient(b.x, b.y, 0, b.x, b.y, b.r);
+    g.addColorStop(0, 'rgba(255,255,255,1)');
+    g.addColorStop(0.7, 'rgba(255,255,255,0.55)');
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    h.fillStyle = g;
+    h.beginPath();
+    h.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+    h.fill();
+  }
+  const hd = h.getImageData(0, 0, S, S).data;
+  const H = (x: number, y: number) => hd[(((y + S) % S) * S + ((x + S) % S)) * 4] / 255;
+  const normal = canvasTexture(S, S, (ctx) => {
+    const img = ctx.createImageData(S, S);
+    for (let y = 0; y < S; y++)
+      for (let x = 0; x < S; x++) {
+        const dx = (H(x + 1, y) - H(x - 1, y)) * 3.2;
+        const dy = (H(x, y + 1) - H(x, y - 1)) * 3.2;
+        const l = Math.hypot(dx, dy, 1);
+        const o = (y * S + x) * 4;
+        img.data[o] = Math.round((-dx / l) * 127 + 128);
+        img.data[o + 1] = Math.round((dy / l) * 127 + 128);
+        img.data[o + 2] = Math.round((1 / l) * 127 + 128);
+        img.data[o + 3] = 255;
+      }
+    ctx.putImageData(img, 0, 0);
+  }, false);
+  // recorte: forma com a borda levemente esfumada
+  const alpha = canvasTexture(S, S, (ctx) => {
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, S, S);
+    ctx.filter = 'blur(1.5px)';
+    ctx.fillStyle = '#fff';
+    blob(ctx, 0);
+    ctx.filter = 'none';
+  }, false);
+  // tom: centro mais escuro (fundo), borda clara (menisco), brilho nas bolhas
+  const detail = canvasTexture(S, S, (ctx) => {
+    ctx.fillStyle = '#bdbdbd';
+    ctx.fillRect(0, 0, S, S);
+    const g = ctx.createRadialGradient(C, C, 0, C, C, S * 0.42);
+    g.addColorStop(0, 'rgba(40,40,40,0.55)');
+    g.addColorStop(0.7, 'rgba(40,40,40,0.2)');
+    g.addColorStop(1, 'rgba(255,255,255,0.35)');
+    ctx.fillStyle = g;
+    blob(ctx, 0);
+    for (const b of bubbles) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.r * 0.8, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      ctx.beginPath();
+      ctx.arc(b.x - b.r * 0.3, b.y - b.r * 0.3, Math.max(0.8, b.r * 0.22), 0, Math.PI * 2);
+      ctx.fill();
+    }
+  });
+  // óleo: preto com manchas furta-cor (roxo, verde-azulado, dourado) em faixas tortas
+  const sheen = canvasTexture(S, S, (ctx) => {
+    ctx.fillStyle = '#060608';
+    ctx.fillRect(0, 0, S, S);
+    ctx.globalCompositeOperation = 'lighter';
+    const cols = ['rgba(130,40,210,0.28)', 'rgba(20,170,150,0.24)', 'rgba(210,160,30,0.2)', 'rgba(210,50,120,0.18)'];
+    for (let i = 0; i < 9; i++) {
+      ctx.strokeStyle = cols[i % cols.length];
+      ctx.lineWidth = 5 + rnd() * 9;
+      ctx.beginPath();
+      const r0 = S * (0.08 + rnd() * 0.28);
+      for (let k = 0; k <= 40; k++) {
+        const a = (k / 40) * Math.PI * 2;
+        const r = r0 * (1 + 0.25 * Math.sin(a * 3 + i));
+        const x = C + Math.cos(a) * r * 1.15 + (rnd() - 0.5) * 3;
+        const y = C + Math.sin(a) * r * 0.85 + (rnd() - 0.5) * 3;
+        if (k) ctx.lineTo(x, y);
+        else ctx.moveTo(x, y);
+      }
+      ctx.stroke();
+    }
+    ctx.globalCompositeOperation = 'source-over';
+    for (const b of bubbles) {
+      ctx.fillStyle = 'rgba(255,255,255,0.55)';
+      ctx.beginPath();
+      ctx.arc(b.x - b.r * 0.3, b.y - b.r * 0.3, Math.max(0.8, b.r * 0.2), 0, Math.PI * 2);
+      ctx.fill();
+    }
+  });
+  for (const t of [alpha, normal, detail, sheen]) t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+  return { alpha, normal, detail, sheen };
+}
+
+/** Marca queimada no chão: centro preto fosco, borda irregular em raios e fuligem esfumada. */
+function scorchTexture(): THREE.CanvasTexture {
+  const tex = canvasTexture(128, 128, (ctx) => {
+    ctx.clearRect(0, 0, 128, 128);
+    let seed = 23;
+    const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 60);
+    g.addColorStop(0, 'rgba(8,6,5,0.95)');
+    g.addColorStop(0.45, 'rgba(14,11,9,0.85)');
+    g.addColorStop(0.8, 'rgba(30,24,20,0.35)');
+    g.addColorStop(1, 'rgba(30,24,20,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 128, 128);
+    // raios de fuligem saindo do centro
+    ctx.translate(64, 64);
+    for (let i = 0; i < 22; i++) {
+      ctx.rotate((Math.PI * 2) / 22 + (rnd() - 0.5) * 0.2);
+      const len = 34 + rnd() * 28;
+      const w = 3 + rnd() * 6;
+      const lg = ctx.createLinearGradient(0, 0, len, 0);
+      lg.addColorStop(0, 'rgba(10,8,6,0.7)');
+      lg.addColorStop(1, 'rgba(10,8,6,0)');
+      ctx.fillStyle = lg;
+      ctx.beginPath();
+      ctx.moveTo(0, -w);
+      ctx.lineTo(len, 0);
+      ctx.lineTo(0, w);
+      ctx.fill();
+    }
+    // brasas quase apagadas no meio
+    for (let i = 0; i < 10; i++) {
+      ctx.fillStyle = `rgba(${150 + Math.round(rnd() * 80)},${40 + Math.round(rnd() * 30)},10,0.5)`;
+      ctx.beginPath();
+      ctx.arc((rnd() - 0.5) * 36, (rnd() - 0.5) * 36, 0.8 + rnd() * 1.6, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  });
+  tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+  return tex;
+}
+
+/**
  * Cor "quente" (acima de 1: brilha no bloom). Guardada em cache: as partículas só leem as cores,
  * então o mesmo objeto serve para todas (antes eram 2 objetos novos por partícula).
  */
@@ -347,31 +529,37 @@ export class Effects {
   private scatterSpike = new THREE.ConeGeometry(0.04, 0.16, 4);
   private darkMetal = new THREE.MeshStandardMaterial({ color: 0x1a1a1e, metalness: 0.8, roughness: 0.3 });
   /** poças: óleo (brilho furta-cor), gosma, água, neve, lava */
-  private oilGeo = new THREE.CircleGeometry(1, 32).rotateX(-Math.PI / 2);
-  private oilMat = new THREE.MeshStandardMaterial({
-    map: canvasTexture(128, 128, (ctx) => {
-      ctx.fillStyle = '#050507';
-      ctx.fillRect(0, 0, 128, 128);
-      for (const [r, col] of [[52, 'rgba(120,40,200,0.35)'], [40, 'rgba(30,160,140,0.3)'], [26, 'rgba(200,160,40,0.25)']] as const) {
-        ctx.strokeStyle = col;
-        ctx.lineWidth = 6;
-        ctx.beginPath();
-        ctx.ellipse(64, 64, r, r * 0.8, 0.4, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-    }),
-    roughness: 0.04,
-    metalness: 0.9,
-    transparent: true,
-    opacity: 0.95,
-    polygonOffset: true,
-    polygonOffsetFactor: -2,
-  });
-  private slimeMat = new THREE.MeshStandardMaterial({ color: 0x4ac818, emissive: 0x1a6a04, roughness: 0.15, metalness: 0.2, transparent: true, opacity: 0.92, polygonOffset: true, polygonOffsetFactor: -2 });
-  private waterMat = new THREE.MeshStandardMaterial({ color: 0x1a4aff, emissive: 0x041a60, roughness: 0.05, metalness: 0.3, transparent: true, opacity: 0.88, polygonOffset: true, polygonOffsetFactor: -2 });
-  private tarMat = new THREE.MeshStandardMaterial({ color: 0x0a0a0c, roughness: 0.05, metalness: 0.8, transparent: true, opacity: 0.95, polygonOffset: true, polygonOffsetFactor: -2 });
+  // quadrado 2,6 x 2,6 m: a forma (raio médio ~1 m) vem do recorte da textura, não da malha
+  private oilGeo = new THREE.PlaneGeometry(2.6, 2.6).rotateX(-Math.PI / 2);
+  private puddleTex = puddleTextures();
+  /** material de poça: recorte irregular, relevo (bolhas/menisco) e reflexo do ambiente */
+  private liquid(o: THREE.MeshStandardMaterialParameters): THREE.MeshStandardMaterial {
+    const t = this.puddleTex;
+    return new THREE.MeshStandardMaterial({
+      map: t.detail, alphaMap: t.alpha, normalMap: t.normal, normalScale: new THREE.Vector2(1.2, 1.2),
+      transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, envMapIntensity: 1.6,
+      ...o,
+    });
+  }
+  private oilMat = this.liquid({ map: this.puddleTex.sheen, roughness: 0.03, metalness: 0.7, envMapIntensity: 2 });
+  private slimeMat = this.liquid({ color: 0x5ad820, emissive: 0x1a6a04, roughness: 0.12, metalness: 0.15 });
+  private waterMat = this.liquid({ color: 0x3a6aff, emissive: 0x041a50, roughness: 0.03, metalness: 0.35, opacity: 0.9 });
+  private tarMat = this.liquid({ color: 0x1a1a1e, roughness: 0.06, metalness: 0.7 });
   private snowMat = new THREE.MeshStandardMaterial({ color: 0xf4f8ff, roughness: 0.75 });
-  private lavaMat = new THREE.MeshStandardMaterial({ color: 0xff5010, emissive: 0xff3a00, emissiveIntensity: 1.8, roughness: 0.6, polygonOffset: true, polygonOffsetFactor: -2 });
+  private snowPatchMat = this.liquid({ color: 0xf4f8ff, roughness: 0.8, metalness: 0, envMapIntensity: 0.6, normalScale: new THREE.Vector2(2.5, 2.5) });
+  private lavaMat = this.liquid({ color: 0xff5010, emissive: 0xff3a00, emissiveMap: this.puddleTex.detail, emissiveIntensity: 2, roughness: 0.55, metalness: 0 });
+  private lavaBubbleMat = new THREE.MeshBasicMaterial({ color: HOT(0xffa040, 3) });
+  /** LEDs das minas e do scatterpack e o miolo do sundog: um só de cada (antes, um por disparo) */
+  private ledMineGeo = new THREE.SphereGeometry(0.11, 8, 6);
+  private ledScatterGeo = new THREE.SphereGeometry(0.06, 6, 4);
+  private sunSpriteMat = new THREE.SpriteMaterial({ map: this.sunTex, color: HOT(0xffffff, 2.5), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true });
+  private sunCoreMat = new THREE.MeshBasicMaterial({ color: HOT(0xfff0c0, 5) });
+  /** marcas queimadas das explosões (~8 s no chão), pool reaproveitado */
+  private scorchGeo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+  private scorches: { mesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>; life: number }[] = [];
+  private static readonly SCORCH_LIFE = 8;
+  /** última pista vista em update(): altura do chão para as marcas queimadas */
+  private world: World | null = null;
   private coinGeo = new THREE.CylinderGeometry(0.7, 0.7, 0.14, 24).rotateX(Math.PI / 2);
   private coinMat: THREE.Material[];
   private armorMat = new THREE.MeshStandardMaterial({ color: 0x20c060, emissive: 0x0a6a2a, metalness: 0.4, roughness: 0.3 });
@@ -415,23 +603,39 @@ export class Effects {
     const blastTex = canvasTexture(128, 128, (ctx) => {
       ctx.clearRect(0, 0, 128, 128);
       const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
-      g.addColorStop(0, 'rgba(255,255,240,1)');
-      g.addColorStop(0.2, 'rgba(255,220,140,0.9)');
-      g.addColorStop(0.5, 'rgba(255,140,40,0.35)');
+      g.addColorStop(0, 'rgba(255,236,170,1)');
+      g.addColorStop(0.2, 'rgba(255,190,80,0.85)');
+      g.addColorStop(0.5, 'rgba(255,110,20,0.3)');
       g.addColorStop(1, 'rgba(255,80,0,0)');
       ctx.fillStyle = g;
       ctx.fillRect(0, 0, 128, 128);
     });
+    // anéis de choque e marcas queimadas: pools criados uma vez (antes, um material por explosão)
     for (let i = 0; i < 4; i++) {
-      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: blastTex, color: HOT(0xffffff, 2), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, fog: false }));
+      const mesh = new THREE.Mesh(this.ringGeo, new THREE.MeshBasicMaterial({ color: HOT(0xff8a30, 1.1), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+      mesh.visible = false;
+      this.group.add(mesh);
+      this.rings.push({ mesh, life: 0 });
+    }
+    const scorchMap = scorchTexture();
+    for (let i = 0; i < 8; i++) {
+      const mesh = new THREE.Mesh(this.scorchGeo, new THREE.MeshBasicMaterial({ map: scorchMap, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3 }));
+      mesh.visible = false;
+      mesh.renderOrder = 1;
+      this.group.add(mesh);
+      this.scorches.push({ mesh, life: 0 });
+    }
+    for (let i = 0; i < 4; i++) {
+      // clarão alaranjado e contido (o branco estourado tapava a cena)
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: blastTex, color: HOT(0xffc070, 1.3), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, fog: false }));
       sprite.visible = false;
       sprite.renderOrder = 4;
       this.group.add(sprite);
       this.blasts.push({ sprite, life: 0, max: 0.1, size: 1 });
     }
     // lascas irregulares de metal escuro
-    const chunk = new THREE.DodecahedronGeometry(0.22, 0);
-    chunk.scale(1.4, 0.55, 1);
+    const chunk = new THREE.DodecahedronGeometry(0.3, 0);
+    chunk.scale(1.5, 0.5, 1.1);
     this.debris = new THREE.InstancedMesh(chunk, new THREE.MeshStandardMaterial({ color: 0x3a3634, metalness: 0.6, roughness: 0.45, emissive: 0x240800 }), Effects.DEBRIS);
     this.debris.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.debris.count = 0;
@@ -476,6 +680,41 @@ export class Effects {
   clearSkids(): void {
     this.skids.count = 0;
     this.skidNext = 0;
+  }
+
+  /**
+   * Limpa tudo que pertence à corrida anterior (chamado em createRace): tiros, minas, poças,
+   * prêmios, marcas de pneu e queimadas, destroços, fumaça e clarões. Sem isso, poças de uma pista
+   * reapareciam na seguinte. Geometrias e materiais são compartilhados: nada a liberar.
+   */
+  reset(): void {
+    for (const map of [this.projectiles, this.hazards, this.pickups]) {
+      for (const o of map.values()) this.group.remove(o);
+      map.clear();
+    }
+    this.clearSkids();
+    this.columns.length = 0;
+    this.debrisItems.length = 0;
+    this.debris.count = 0;
+    for (const r of this.rings) {
+      r.life = 0;
+      r.mesh.visible = false;
+    }
+    for (const s of this.scorches) {
+      s.life = 0;
+      s.mesh.visible = false;
+    }
+    for (const b of this.blasts) {
+      b.life = 0;
+      b.sprite.visible = false;
+    }
+    for (const f of this.flashes) {
+      f.life = 0;
+      f.light.intensity = 0;
+    }
+    this.fire.clear();
+    this.smoke.clear();
+    this.world = null;
   }
 
   /** Marca de pneu num ponto do chão (x, y, z) com a direção do carro. */
@@ -538,72 +777,85 @@ export class Effects {
   /* ---------- emissores ---------- */
 
   explosion(x: number, y: number, z: number, big = true): void {
-    // explosão grande ~1,5x a antiga; pequena (mina/tiro) um pouco maior que antes
     const s = big ? 1.5 : 0.75;
-    // clarão aditivo curtíssimo (~0,1 s): o "estalo" da explosão
+    // clarão curto e contido (~0,1 s), alaranjado: o "estalo" sem estourar a tela de branco
     const b = this.blasts.reduce((a, c) => (a.life < c.life ? a : c));
-    b.sprite.position.set(x, y + 1.2 * s, z);
-    b.max = b.life = big ? 0.13 : 0.09;
-    b.size = (big ? 5 : 3.5) * s;
+    b.sprite.position.set(x, y + 1.1 * s, z);
+    b.max = b.life = big ? 0.11 : 0.08;
+    b.size = (big ? 2.6 : 2.2) * s;
     b.sprite.visible = true;
-    // núcleo da bola de fogo: poucas esferas grandes e muito quentes
-    for (let i = 0; i < (big ? 12 : 5); i++) {
+    // núcleo colorido: amarelo no centro, laranja em volta, esfriando para vermelho-escuro
+    for (let i = 0; i < (big ? 9 : 4); i++) {
       this.fire.emit({
-        x: x + (Math.random() - 0.5) * 1.4 * s, y: y + 1 + Math.random() * s, z: z + (Math.random() - 0.5) * 1.4 * s,
-        vx: (Math.random() - 0.5) * 3 * s, vy: 2 + Math.random() * 3, vz: (Math.random() - 0.5) * 3 * s,
-        life: 0.5 + Math.random() * 0.4, size0: 2.4 * s, size1: 3.6 * s,
-        c0: HOT(0xffd070, 2), c1: HOT(0xc02800, 0.5), gravity: -2, drag: 2.5,
+        x: x + (Math.random() - 0.5) * 1.1 * s, y: y + 0.9 + Math.random() * s, z: z + (Math.random() - 0.5) * 1.1 * s,
+        vx: (Math.random() - 0.5) * 2.5 * s, vy: 2 + Math.random() * 2.5, vz: (Math.random() - 0.5) * 2.5 * s,
+        life: 0.45 + Math.random() * 0.35, size0: 1.7 * s, size1: 2.8 * s,
+        c0: i % 3 === 0 ? HOT(0xffe070, 1.25) : HOT(0xff9a28, 1.15), c1: HOT(0xa01800, 0.45), gravity: -2, drag: 2.5,
       });
     }
-    const n = big ? 46 : 18;
+    // línguas de fogo laranja saindo para os lados
+    const n = big ? 30 : 12;
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2;
       const up = Math.random();
-      const sp = (4 + Math.random() * 11) * s;
+      const sp = (4 + Math.random() * 10) * s;
       this.fire.emit({
         x, y: y + 0.8, z,
-        vx: Math.cos(a) * sp * (1 - up * 0.5), vy: up * sp * 1.2, vz: Math.sin(a) * sp * (1 - up * 0.5),
-        life: 0.35 + Math.random() * 0.5, size0: 1.6 * s, size1: 0.4,
-        c0: HOT(0xffa040, 1.5), c1: HOT(0xd02000, 0.5), gravity: 4, drag: 3,
+        vx: Math.cos(a) * sp * (1 - up * 0.5), vy: up * sp * 1.1, vz: Math.sin(a) * sp * (1 - up * 0.5),
+        life: 0.3 + Math.random() * 0.45, size0: 1.2 * s, size1: 0.3,
+        c0: HOT(0xff8a20, 1.2), c1: HOT(0xb01800, 0.45), gravity: 4, drag: 3,
       });
     }
-    // detritos sólidos (6–10), com gravidade, giro e quique no chão (menos no celular)
-    const pieces = Math.max(3, Math.round((big ? 10 : 6) * Math.max(0.5, this.debrisDensity)));
+    // destroços sólidos maiores (6–10), com gravidade, giro e quique no chão (menos no celular)
+    const pieces = Math.max(3, Math.round((big ? 10 : 5) * Math.max(0.5, this.debrisDensity)));
     for (let i = 0; i < pieces; i++) {
       const a = Math.random() * Math.PI * 2;
-      const sp = (4 + Math.random() * 6) * (big ? 1.2 : 0.9);
+      const sp = (4 + Math.random() * 6) * (big ? 1.15 : 0.85);
       if (this.debrisItems.length >= Effects.DEBRIS) this.debrisItems.shift();
       this.debrisItems.push({
         x, y: y + 0.8, z, vx: Math.cos(a) * sp, vy: 5 + Math.random() * 7, vz: Math.sin(a) * sp, floor: y,
-        rx: Math.random() * 6, ry: Math.random() * 6, rz: Math.random() * 6, spin: 6 + Math.random() * 10,
-        s: (0.6 + Math.random() * 0.9) * (big ? 1.2 : 0.8), life: 1.6 + Math.random() * 0.8,
+        rx: Math.random() * 6, ry: Math.random() * 6, rz: Math.random() * 6, spin: 5 + Math.random() * 8,
+        s: (0.9 + Math.random() * 1.1) * (big ? 1.35 : 0.8), life: 2.2 + Math.random() * 1.2,
       });
     }
-    // coluna de fumaça escura: carro destruído solta fumaça por ~2,2 s (sobe e dura até ~4 s)
-    this.columns.push({ x, y, z, s, t: big ? 2.2 : 0.6, acc: 0, rate: big ? 30 : 18 });
+    // coluna de fumaça escura: carro destruído solta fumaça por ~1,8 s, que sobe e dura 3–4 s
+    this.columns.push({ x, y, z, s, t: big ? 1.8 : 0.5, acc: 0, rate: big ? 26 : 16 });
     // fumaça baixa que se espalha pelo chão
-    const low = big ? 12 : 5;
+    const low = big ? 10 : 5;
     for (let i = 0; i < low; i++) {
       const a = (i / low) * Math.PI * 2;
       this.smoke.emit({
         x: x + Math.cos(a), y: y + 0.4, z: z + Math.sin(a),
         vx: Math.cos(a) * 5 * s, vy: 0.6, vz: Math.sin(a) * 5 * s,
-        life: 0.9 + Math.random() * 0.5, size0: 1.2 * s, size1: 3.5 * s,
-        c0: HOT(0x4a3e34), c1: HOT(0x2a2a2a), gravity: -0.2, drag: 2.5,
+        life: 1.2 + Math.random() * 0.6, size0: 1.2 * s, size1: 3.5 * s,
+        c0: HOT(0x2e2620), c1: HOT(0x121110), gravity: -0.2, drag: 2.5,
       });
     }
-    this.sparks(x, y + 0.8, z, big ? 40 : 14);
-    // luz pontual temporária: reaproveita a luz do pool que está mais perto de apagar
+    this.sparks(x, y + 0.8, z, big ? 30 : 12);
+    // luz pontual temporária, mais fraca: reaproveita a luz do pool que está mais perto de apagar
     const flash = this.flashes.reduce((a, c) => (a.life < c.life ? a : c));
     flash.light.position.set(x, y + 2, z);
-    flash.light.color.set(0xff8a30);
-    flash.life = big ? 0.55 : 0.3;
-    flash.light.intensity = big ? 320 : 110;
-    const ring = new THREE.Mesh(this.ringGeo, new THREE.MeshBasicMaterial({ color: HOT(0xff9040, 1.4), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
-    ring.position.set(x, y + 0.2, z);
-    ring.scale.setScalar(big ? 1.2 : 0.6);
-    this.group.add(ring);
-    this.rings.push({ mesh: ring, life: 0.45 });
+    flash.light.color.set(0xff7a20);
+    flash.life = big ? 0.45 : 0.25;
+    flash.light.intensity = big ? 170 : 60;
+    // anel de choque rente ao chão (pool)
+    const ring = this.rings.reduce((a, c) => (a.life < c.life ? a : c));
+    ring.life = 0.45;
+    ring.mesh.visible = true;
+    ring.mesh.position.set(x, y + 0.2, z);
+    ring.mesh.userData.s0 = big ? 1.1 : 0.55;
+    ring.mesh.scale.setScalar(ring.mesh.userData.s0);
+    // marca queimada no chão (~8 s)
+    const ground = this.world ? this.world.track.query(x, z).height : y;
+    if (Math.abs(ground - y) < 2.5) {
+      const sc = this.scorches.reduce((a, c) => (a.life < c.life ? a : c));
+      sc.life = Effects.SCORCH_LIFE;
+      sc.mesh.visible = true;
+      sc.mesh.position.set(x, ground + 0.05, z);
+      sc.mesh.rotation.y = Math.random() * Math.PI * 2;
+      sc.mesh.scale.setScalar((big ? 4.6 : 2.4) * (0.9 + Math.random() * 0.2));
+      sc.mesh.material.opacity = 0.9;
+    }
   }
 
   sparks(x: number, y: number, z: number, n: number): void {
@@ -727,10 +979,10 @@ export class Effects {
       g.add(flame);
       g.scale.setScalar(1.25);
     } else if (kind === 'sundog') {
-      const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.sunTex, color: HOT(0xffffff, 2.5), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
+      const spr = new THREE.Sprite(this.sunSpriteMat);
       spr.name = 'sun';
       spr.scale.setScalar(2.4);
-      g.add(spr, new THREE.Mesh(this.plasmaCore, new THREE.MeshBasicMaterial({ color: HOT(0xfff0c0, 5) })));
+      g.add(spr, new THREE.Mesh(this.plasmaCore, this.sunCoreMat));
     } else {
       g.add(new THREE.Mesh(this.plasmaTrail, this.plasmaTrailMat), new THREE.Mesh(this.plasmaGlow, this.plasmaGlowMat), new THREE.Mesh(this.plasmaCore, this.plasmaCoreMat));
     }
@@ -755,7 +1007,7 @@ export class Effects {
         return disc(theme === 'newmojave' ? this.tarMat : this.waterMat, radius('puddle', 2.3));
       case 'snow': {
         const g = new THREE.Group();
-        g.add(disc(this.snowMat, radius('snow', 2.4)));
+        g.add(disc(this.snowPatchMat, radius('snow', 2.4)));
         for (let k = 0; k < 6; k++) {
           const a = (k / 6) * Math.PI * 2 + id;
           const lump = new THREE.Mesh(this.plasmaGlow, this.snowMat);
@@ -768,7 +1020,7 @@ export class Effects {
       case 'lava': {
         const g = new THREE.Group();
         g.add(disc(this.lavaMat, radius('lava', 2.2)));
-        const bubble = new THREE.Mesh(this.plasmaCore, new THREE.MeshBasicMaterial({ color: HOT(0xffa040, 3) }));
+        const bubble = new THREE.Mesh(this.plasmaCore, this.lavaBubbleMat);
         bubble.name = 'bubble';
         bubble.position.set(0.4, 0.1, -0.3);
         g.add(bubble);
@@ -783,7 +1035,7 @@ export class Effects {
           sp.quaternion.setFromUnitVectors(UP, new THREE.Vector3(x, y, z));
           g.add(sp);
         }
-        const led = new THREE.Mesh(new THREE.SphereGeometry(0.06, 6, 4), this.ledMat);
+        const led = new THREE.Mesh(this.ledScatterGeo, this.ledMat);
         led.position.y = 0.26;
         led.name = 'led';
         g.add(led);
@@ -800,7 +1052,7 @@ export class Effects {
           claw.quaternion.setFromUnitVectors(UP, new THREE.Vector3(Math.cos(a), 1.2, Math.sin(a)).normalize());
           g.add(claw);
         }
-        const led = new THREE.Mesh(new THREE.SphereGeometry(0.11, 8, 6), this.ledMat);
+        const led = new THREE.Mesh(this.ledMineGeo, this.ledMat);
         led.position.y = 0.2;
         led.name = 'led';
         g.add(led);
@@ -830,8 +1082,8 @@ export class Effects {
     for (const k of ['laser', 'missile', 'sundog']) g.add(this.makeProjectile(k));
     for (const k of ['oil', 'slime', 'puddle', 'snow', 'lava', 'scatter', 'mine']) g.add(this.makeHazard(k, 0, theme));
     g.add(this.makePickup('money'), this.makePickup('armor'));
-    const ring = new THREE.Mesh(this.ringGeo, new THREE.MeshBasicMaterial({ color: HOT(0xff9040, 1.4), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
-    g.add(ring);
+    for (const r of this.rings) r.mesh.visible = true;
+    for (const sc of this.scorches) sc.mesh.visible = true;
     this.debris.count = 1;
     for (const b of this.blasts) b.sprite.visible = true;
     scene.add(g);
@@ -850,7 +1102,8 @@ export class Effects {
       await renderer.compileAsync(scene, camera);
     } finally {
       scene.remove(g);
-      ring.material.dispose();
+      for (const r of this.rings) r.mesh.visible = r.life > 0;
+      for (const sc of this.scorches) sc.mesh.visible = sc.life > 0;
       this.debris.count = this.debrisItems.length;
       for (const b of this.blasts) b.sprite.visible = b.life > 0;
     }
@@ -864,20 +1117,23 @@ export class Effects {
 
   /* ---------- sincronização com a simulação ---------- */
 
+  private syncStamp = 0;
+
   private syncMap<T extends { id: number }>(map: Map<number, THREE.Object3D>, items: T[], create: (it: T) => THREE.Object3D, update: (o: THREE.Object3D, it: T) => void): void {
-    const seen = new Set<number>();
+    // marca de "visto" por chamada no próprio objeto (sem alocar um Set a cada quadro)
+    const stamp = ++this.syncStamp;
     for (const it of items) {
-      seen.add(it.id);
       let o = map.get(it.id);
       if (!o) {
         o = create(it);
         map.set(it.id, o);
         this.group.add(o);
       }
+      o.userData.syncSeen = stamp;
       update(o, it);
     }
     for (const [id, o] of map) {
-      if (!seen.has(id)) {
+      if (o.userData.syncSeen !== stamp) {
         this.group.remove(o);
         map.delete(id);
       }
@@ -887,6 +1143,9 @@ export class Effects {
   /** `ahead` = tempo desde o último passo da simulação, para extrapolar projéteis rápidos. */
   update(world: World, dt: number, ahead: number): void {
     this.time += dt;
+    this.world = world;
+    // o sol do sundog gira igual em todos os disparos (um material só)
+    this.sunSpriteMat.rotation = this.time * 6;
 
     this.syncMap(
       this.projectiles,
@@ -907,10 +1166,7 @@ export class Effects {
           if (fl) fl.scale.set(1, 1, 0.8 + Math.random() * 0.6);
         } else if (kind === 'sundog') {
           const spr = o.getObjectByName('sun') as THREE.Sprite | undefined;
-          if (spr) {
-            spr.material.rotation = this.time * 6;
-            spr.scale.setScalar(2.4 + Math.sin(this.time * 20) * 0.25);
-          }
+          if (spr) spr.scale.setScalar(2.4 + Math.sin(this.time * 20 + p.id) * 0.25);
           if (Math.random() < 0.6) this.glowBit(p.x, p.y, p.z, 0xffc040);
         } else {
           // plasma: faíscas verdes soltas no caminho
@@ -963,18 +1219,21 @@ export class Effects {
         if (f.life <= 0) f.light.intensity = 0;
       }
     }
-    this.rings = this.rings.filter((r) => {
+    for (const r of this.rings) {
+      if (r.life <= 0) continue;
       r.life -= dt;
-      const t = 1 - r.life / 0.45;
-      r.mesh.scale.setScalar((r.mesh.userData.s0 ??= r.mesh.scale.x) * (1 + t * 9));
-      (r.mesh.material as THREE.MeshBasicMaterial).opacity = Math.max(0, 1 - t);
-      if (r.life <= 0) {
-        this.group.remove(r.mesh);
-        (r.mesh.material as THREE.Material).dispose();
-        return false;
-      }
-      return true;
-    });
+      const t = Math.min(1, 1 - r.life / 0.45);
+      r.mesh.scale.setScalar(r.mesh.userData.s0 * (1 + t * 8));
+      (r.mesh.material as THREE.MeshBasicMaterial).opacity = Math.max(0, 0.8 * (1 - t));
+      if (r.life <= 0) r.mesh.visible = false;
+    }
+    // marcas queimadas: somem aos poucos nos últimos 2 s
+    for (const sc of this.scorches) {
+      if (sc.life <= 0) continue;
+      sc.life -= dt;
+      sc.mesh.material.opacity = 0.9 * Math.min(1, Math.max(0, sc.life) / 2);
+      if (sc.life <= 0) sc.mesh.visible = false;
+    }
 
     for (const b of this.blasts) {
       if (b.life <= 0) continue;
@@ -994,8 +1253,8 @@ export class Effects {
         this.smoke.emit({
           x: c.x + Math.cos(a) * r, y: c.y + 0.8 + Math.random() * 0.6, z: c.z + Math.sin(a) * r,
           vx: Math.cos(a) * 0.5, vy: 3 + Math.random() * 2.5, vz: Math.sin(a) * 0.5,
-          life: 1.4 + Math.random() * 0.9, size0: 1.1 * c.s, size1: 3.6 * c.s,
-          c0: HOT(0x3a3029), c1: HOT(0x121212), gravity: -0.4, drag: 0.9,
+          life: 1.6 + Math.random() * 0.6, size0: 1.1 * c.s, size1: 3.8 * c.s,
+          c0: HOT(0x241e1a), c1: HOT(0x0c0c0c), gravity: -0.4, drag: 0.9,
         });
       }
       if (c.s > 1 && Math.random() < dt * 14) this.flame(c.x + (Math.random() - 0.5) * 1.2, c.y + 0.5, c.z + (Math.random() - 0.5) * 1.2);

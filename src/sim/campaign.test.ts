@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { trackById } from '../data/tracks';
+import { trackById, TRACKS } from '../data/tracks';
 import { VEHICLES } from '../data/vehicles';
 import {
-  advanceEarly, applyRaceResult, canAdvanceEarly, currentTrackId, decodeSave, encodeSave, newCampaign, opponentsFor, PLANETS, planetTracks, playerSpec, prizesFor,
+  advanceEarly, applyRaceResult, CAMPAIGN_PRIZES, canAdvanceEarly, carsForSale, CHAMPION_BONUS, currentTrackId, decodeSave, encodeSave, newCampaign, opponentsFor, PLANETS, planetTracks, playerSpec,
+  prizesFor, RIVAL_LEVEL, rivalAggression, rivalExtraCharges, rivalLevel, RIVALS, seasonSchedule, START_MONEY, tier,
 } from './campaign';
-import { attributeTags, buildSpec, carAttributes, chargePrice, maxExtraCharges, newCarSetup, tradeInValue, upgradeAvailable, upgradePrice } from './garage';
-import { MAX_CHARGES } from './vehicle';
+import {
+  attributeTags, buildSpec, carAttributes, carSwapCost, chargePrice, maxedSetup, maxExtraCharges, newCarSetup, tradeInValue, UPGRADE_KINDS, upgradeAvailable, upgradeLabel, upgradeName,
+  upgradePrice,
+} from './garage';
+import { Track } from './track';
+import { MAX_CHARGES, type VehicleSpec } from './vehicle';
+import { createWorld, PRIZES, stepWorld } from './world';
 
 describe('garagem', () => {
   it('melhorias deixam o carro melhor e ficam mais caras', () => {
@@ -34,12 +40,35 @@ describe('garagem', () => {
     expect(chargePrice(setup, 'rear', VEHICLES.havac)).toBeNull();
   });
 
-  it('esteiras e aerodeslizador não usam pneus; Havac também não usa amortecedores', () => {
+  it('esteiras e aerodeslizador não usam pneus; o Havac tem Estabilizadores no lugar dos amortecedores', () => {
     expect(upgradeAvailable('battletrak', 'tires')).toBe(false);
     expect(upgradeAvailable('havac', 'tires')).toBe(false);
-    expect(upgradeAvailable('havac', 'shocks')).toBe(false);
     expect(upgradeAvailable('marauder', 'tires')).toBe(true);
     expect(upgradePrice(newCarSetup('havac'), 'tires')).toBeNull();
+    expect(upgradeLabel('havac', 'shocks')).toBe('Estabilizadores');
+    expect(upgradeLabel('marauder', 'shocks')).toBe('Amortecedores');
+    expect(upgradeName('havac', 'shocks', 3)).not.toBe(upgradeName('marauder', 'shocks', 3));
+    // estabilizadores seguram o casco: mais aderência e giro, pouso melhor
+    const h0 = buildSpec(VEHICLES.havac, newCarSetup('havac'));
+    const st = newCarSetup('havac');
+    st.upgrades.shocks = 3;
+    const h3 = buildSpec(VEHICLES.havac, st);
+    expect(h3.grip).toBeGreaterThan(h0.grip);
+    expect(h3.steerRate).toBeGreaterThan(h0.steerRate);
+    expect(h3.landingLoss!).toBeLessThan(h0.landingLoss!);
+    // pneus que o carro não aceita (setup de rival) não contam
+    st.upgrades.tires = 3;
+    expect(buildSpec(VEHICLES.havac, st).grip).toBe(h3.grip);
+  });
+
+  it('revenda: metade do carro + 1/4 das peças; a troca pode devolver dinheiro', () => {
+    const s = newCarSetup('battletrak');
+    expect(tradeInValue(s)).toBe(55000);
+    s.upgrades.engine = 2;
+    expect(tradeInValue(s)).toBe(55000 + (40000 + 70000) / 4);
+    expect(carSwapCost(s, 'havac')).toBe(130000 - tradeInValue(s));
+    s.upgrades = { engine: 3, tires: 0, shocks: 3, armor: 3 };
+    expect(carSwapCost(s, 'havac')).toBeLessThan(0);
   });
 
   it('atributos mostram a personalidade de cada carro sem exagerar diferenças pequenas', () => {
@@ -171,6 +200,22 @@ describe('campanha', () => {
     expect(outcome).toBe('champion');
     expect(s.planet).toBe(PLANETS.length - 1);
     expect(PLANETS.every((p) => p.promote > 0)).toBe(true);
+    // prêmio de campeão; depois as temporadas no Inferno são de exibição (sem novo título)
+    expect(s.money).toBe(START_MONEY + CHAMPION_BONUS);
+    for (let i = 0; i < PLANETS[s.planet].races; i++) outcome = applyRaceResult(s, 1, 0, 0).outcome;
+    expect(outcome).toBe('continue');
+    expect(s.money).toBe(START_MONEY + CHAMPION_BONUS);
+    expect(canAdvanceEarly(s)).toBe(false);
+  });
+
+  it('calendário da divisão marca as corridas feitas e a próxima', () => {
+    const s = newCampaign('jake', 0);
+    applyRaceResult(s, 2, 0, 0);
+    const cal = seasonSchedule(s);
+    expect(cal).toHaveLength(PLANETS[0].races);
+    expect(cal[0].done).toBe(true);
+    expect(cal[1].current).toBe(true);
+    expect(cal[1].trackId).toBe(currentTrackId(s));
   });
 
   it('senha salva e restaura a campanha; senha adulterada é rejeitada', () => {
@@ -207,5 +252,144 @@ describe('campanha', () => {
     ok.division = 1;
     ok.car = { vehicleId: 'havac', upgrades: { engine: 3, tires: 3, shocks: 3, armor: 3 }, charges: { front: 2, rear: 1, nitro: 0 } };
     expect(decodeSave(encodeSave(ok))).toEqual(ok);
+  });
+});
+
+/** Ordem de compra do original: cada carro novo é melhor que o anterior. */
+const CAR_ORDER = ['dirtdevil', 'marauder', 'airblade', 'battletrak', 'havac'];
+
+describe('progressão dos carros', () => {
+  const maxed = (id: string) => buildSpec(VEHICLES[id], maxedSetup(id));
+  const accel = (s: VehicleSpec) => s.accel + 0.15 * s.nitroAccel; // mesma conta das barras (parte do turbo)
+
+  /** Dirt Devil < Marauder ≈ Air Blade < Battle Trak < Havac (Marauder e Air Blade no mesmo degrau). */
+  function expectLadder(f: (id: string) => number, higherIsBetter = true) {
+    const v = Object.fromEntries(CAR_ORDER.map((id) => [id, higherIsBetter ? f(id) : -f(id)]));
+    const mid = [v.marauder, v.airblade];
+    for (const m of mid) expect(m).toBeGreaterThan(v.dirtdevil);
+    expect(v.battletrak).toBeGreaterThan(Math.max(...mid));
+    expect(v.havac).toBeGreaterThan(v.battletrak);
+  }
+
+  it('com todas as melhorias, cada carro supera o anterior em velocidade, aceleração e blindagem', () => {
+    expectLadder((id) => maxed(id).maxSpeed);
+    expectLadder((id) => accel(maxed(id)));
+    expectLadder((id) => maxed(id).armor);
+  });
+
+  it('carros caros não são mais lentos que os baratos (de fábrica)', () => {
+    for (let i = 1; i < CAR_ORDER.length; i++) expect(VEHICLES[CAR_ORDER[i]].maxSpeed).toBeGreaterThanOrEqual(VEHICLES[CAR_ORDER[i - 1]].maxSpeed);
+  });
+
+  it('velocidade efetiva: com todas as melhorias, a volta de cada carro é mais rápida que a do anterior', () => {
+    // uma pista de cada planeta, CPU habilidosa sozinha na pista; média da 2ª volta
+    const defs = PLANETS.map((p) => TRACKS.find((t) => t.theme === p.theme)!).filter(Boolean);
+    const lap = (id: string) => {
+      const spec = maxed(id);
+      let sum = 0;
+      for (const def of defs) {
+        const w = createWorld(new Track(def), [{ name: 'P', color: 0, spec, ai: { skill: 0.9, aggression: 0, lane: 0 } }], 2, 7, PRIZES);
+        w.started = true;
+        const r = w.racers[0];
+        for (let t = 0; r.progress.lapTimes.length < 2 && t < 120; t += 1 / 60) stepWorld(w, {}, 1 / 60);
+        expect(r.progress.lapTimes.length).toBe(2);
+        sum += r.progress.lapTimes[1];
+      }
+      return sum / defs.length;
+    };
+    const times = Object.fromEntries(CAR_ORDER.map((id) => [id, lap(id)]));
+    expectLadder((id) => times[id], false);
+  }, 60000);
+});
+
+describe('rivais e economia da campanha', () => {
+  it('nível dos rivais por tier; peça nível 3 só a partir de Bogmire (local) e Nho (todos)', () => {
+    expect(RIVAL_LEVEL).toEqual([0, 0, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3]);
+    const bogmire = PLANETS.findIndex((p) => p.id === 'bogmire') * 2;
+    for (const d of ['easy', 'normal', 'hard'] as const) {
+      for (let t = 0; t < 12; t++) {
+        for (let i = 0; i < 3; i++) {
+          const lv = rivalLevel(t, i, d);
+          if (t < bogmire) expect(lv).toBeLessThan(3);
+          if (t > 0) expect(lv).toBeGreaterThanOrEqual(rivalLevel(t - 1, i, d));
+        }
+      }
+    }
+    expect(rivalLevel(8, 0)).toBe(2); // New Mojave A: Rip e Shred ainda no 2
+    expect(rivalLevel(9, 0)).toBe(3); // Nho A
+  });
+
+  it('cargas, agressividade e habilidade dos rivais crescem por planeta', () => {
+    const s = newCampaign('jake', 0);
+    let prev: ReturnType<typeof opponentsFor> | null = null;
+    for (let p = 0; p < PLANETS.length; p++) {
+      for (let d = 0; d < 2; d++) {
+        s.planet = p;
+        s.division = d;
+        const ops = opponentsFor(s, VEHICLES);
+        if (prev) {
+          for (let i = 0; i < 3; i++) {
+            expect(ops[i].ai.skill).toBeGreaterThanOrEqual(prev[i].ai.skill);
+            if (ops[i].name === prev[i].name) expect(ops[i].ai.aggression).toBeGreaterThanOrEqual(prev[i].ai.aggression);
+          }
+        }
+        prev = ops;
+      }
+    }
+    expect(rivalExtraCharges(11, 0)).toBeGreaterThan(rivalExtraCharges(0, 0));
+    expect(rivalAggression(RIVALS.Rip.aggression, 11)).toBeGreaterThan(rivalAggression(RIVALS.Rip.aggression, 0));
+    // no Inferno os rivais correm com mais cargas que o carro de fábrica
+    s.planet = PLANETS.length - 1;
+    const inferno = opponentsFor(s, VEHICLES)[0];
+    expect(inferno.spec.frontCharges).toBeGreaterThan(VEHICLES[inferno.spec.id].frontCharges);
+  });
+
+  /**
+   * Jogador mediano (2º, 1º, 3º, 2º, 2º, 1º… e ~$3.000 por corrida em dinheiro da pista e abates):
+   * troca de carro na ordem do original assim que o próximo está à venda e cabe no bolso (guarda
+   * dinheiro para ele), e no resto do tempo compra a peça mais barata do carro atual.
+   */
+  function simulate() {
+    const places = [2, 1, 3, 2, 2, 1];
+    const s = newCampaign('jake', 0);
+    const bought: { id: string; tier: number }[] = [];
+    const money: number[] = [];
+    let havacMaxTier = -1;
+    for (let i = 0; !s.champion && i < 400; i++) {
+      for (;;) {
+        const next = CAR_ORDER[CAR_ORDER.indexOf(s.car.vehicleId) + 1];
+        if (next && carsForSale(s).includes(next)) {
+          const cost = carSwapCost(s.car, next);
+          if (cost > s.money) break; // guardando para o próximo carro
+          s.money -= cost;
+          s.car = newCarSetup(next);
+          bought.push({ id: next, tier: tier(s) });
+          continue;
+        }
+        const opts = UPGRADE_KINDS.map((k) => ({ k, p: upgradePrice(s.car, k) })).filter((o) => o.p !== null && o.p <= s.money);
+        if (!opts.length) break;
+        const o = opts.reduce((a, b) => (b.p! < a.p! ? b : a));
+        s.money -= o.p!;
+        s.car.upgrades[o.k]++;
+      }
+      if (havacMaxTier < 0 && s.car.vehicleId === 'havac' && UPGRADE_KINDS.every((k) => upgradePrice(s.car, k) === null)) havacMaxTier = tier(s);
+      if (s.race === 0) money[tier(s)] ??= s.money;
+      const place = places[i % places.length];
+      applyRaceResult(s, place, CAMPAIGN_PRIZES[place - 1] + 3000, 1);
+    }
+    return { s, bought, money, havacMaxTier };
+  }
+
+  it('jogador mediano troca de carro na ordem do original e só chega ao Havac no máximo perto de Inferno', () => {
+    const { s, bought, havacMaxTier } = simulate();
+    expect(s.champion).toBe(true);
+    expect(bought.map((b) => b.id)).toEqual(CAR_ORDER.slice(1));
+    const planetOf = (id: string) => PLANETS[Math.floor(bought.find((b) => b.id === id)!.tier / 2)].id;
+    expect(['chem6', 'drakonis']).toContain(planetOf('airblade'));
+    expect(['bogmire', 'newmojave']).toContain(planetOf('battletrak'));
+    expect(planetOf('havac')).toBe('nho');
+    // Havac no máximo: não antes do fim de Nho, mas ainda dentro da campanha
+    expect(havacMaxTier).toBeGreaterThanOrEqual(9);
+    expect(havacMaxTier).toBeLessThanOrEqual(11);
   });
 });

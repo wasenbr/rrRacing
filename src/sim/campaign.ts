@@ -1,6 +1,6 @@
 import { TRACKS } from '../data/tracks';
 import type { AiProfile } from './ai';
-import { buildSpec, CHARACTERS, CHARGE_KINDS, MAX_UPGRADE, newCarSetup, UPGRADE_KINDS, type CarSetup } from './garage';
+import { buildSpec, CHARACTERS, CHARGE_KINDS, MAX_UPGRADE, maxExtraCharges, newCarSetup, UPGRADE_KINDS, type CarSetup } from './garage';
 import { VEHICLES } from '../data/vehicles';
 import { MAX_CHARGES } from './vehicle';
 import { clamp } from './math';
@@ -155,27 +155,50 @@ export interface OpponentSetup {
   ai: AiProfile;
 }
 
+/** Nível das peças dos rivais em cada tier (planeta × divisão: Chem VI B = 0 … Inferno A = 11). */
+export const RIVAL_LEVEL = [0, 0, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3];
+/** Peça nível 3 só a partir de Bogmire (piloto local) — Rip e Shred chegam lá em Nho. */
+const LEVEL3_FROM_TIER = 4;
+
+/** Nível de melhoria de cada rival (0 = Rip, 1 = Shred, 2 = piloto local) neste tier. */
+export function rivalLevel(t: number, index: number, difficulty: Difficulty = 'normal'): number {
+  const cap = t < LEVEL3_FROM_TIER ? 2 : 3;
+  // o piloto local tem um nível a mais (é o mais difícil de bater, como no original)
+  return clamp(RIVAL_LEVEL[clamp(t, 0, RIVAL_LEVEL.length - 1)] + DIFFICULTY[difficulty].rivalUpgrade + (index === 2 ? 1 : 0), 0, cap);
+}
+
+/** Cargas extras de cada arma dos rivais: crescem a cada planeta (o local ganha uma a mais a partir de Bogmire). */
+export function rivalExtraCharges(t: number, index: number): number {
+  return Math.floor(t / 3) + (index === 2 && t >= LEVEL3_FROM_TIER ? 1 : 0);
+}
+
+/** Agressividade (vontade de atirar) cresce por planeta: Chem VI ~70 % da personalidade, Inferno no máximo. */
+export function rivalAggression(base: number, t: number): number {
+  return clamp(base * (0.7 + 0.06 * t), 0, 1);
+}
+
 /**
- * Rip, Shred e o piloto local. A cada divisão os rivais ficam mais hábeis e com carros mais
- * melhorados; a dificuldade soma/subtrai um nível de melhoria.
+ * Rip, Shred e o piloto local. A cada divisão os rivais ficam mais hábeis, com carros mais melhorados,
+ * mais cargas e mais agressivos; a dificuldade soma/subtrai um nível de melhoria.
  */
 export function opponentsFor(s: CampaignState, vehicles: Record<string, VehicleSpec>, difficulty: Difficulty = difficultyOf(s)): OpponentSetup[] {
   const t = tier(s);
   const p = currentPlanet(s);
   const names = ['Rip', 'Shred', p.local];
-  const level = clamp(Math.floor((t + 1) / 3) + DIFFICULTY[difficulty].rivalUpgrade, 0, 3);
   return names.map((name, i) => {
     const r = RIVALS[name];
     // na Divisão A, Rip troca o "modelo do ano passado" pelo carro atual do planeta
     const setup = newCarSetup(i === 0 && s.division === 1 ? p.cars[2] : p.cars[i]);
-    // o piloto local tem um nível a mais (é o mais difícil de bater, como no original)
-    const lv = clamp(level + (i === 2 ? 1 : 0), 0, 3);
+    const lv = rivalLevel(t, i, difficulty);
     setup.upgrades = { engine: lv, tires: lv, shocks: lv, armor: lv };
+    const base = vehicles[setup.vehicleId];
+    const extra = rivalExtraCharges(t, i);
+    for (const k of CHARGE_KINDS) setup.charges[k] = Math.min(extra, maxExtraCharges(base, k));
     return {
       name,
       color: r.color,
-      spec: buildSpec(vehicles[setup.vehicleId], setup),
-      ai: { skill: clamp(SKILL_BASE + t * SKILL_STEP + (i === 2 ? 0.05 : i * 0.02), 0, 0.97), aggression: r.aggression, lane: r.lane },
+      spec: buildSpec(base, setup),
+      ai: { skill: clamp(SKILL_BASE + t * SKILL_STEP + (i === 2 ? 0.05 : i * 0.02), 0, 0.97), aggression: rivalAggression(r.aggression, t), lane: r.lane },
     };
   });
 }
@@ -202,19 +225,33 @@ export function applyRaceResult(s: CampaignState, place: number, moneyEarned: nu
 
   let outcome: RaceOutcome = 'continue';
   if (s.race >= planet.races) {
-    if (s.points >= planet.promote) {
-      // como no original, a divisão vai até a última corrida (dinheiro extra) e só então sobe
-      if (s.division < DIVISIONS.length - 1) s.division++;
-      else if (s.planet < PLANETS.length - 1) {
-        s.planet++;
-        s.division = 0;
-      } else s.champion = true;
-      outcome = s.champion ? 'champion' : 'promoted';
-    } else outcome = 'retry'; // não somou pontos: a divisão recomeça (dinheiro e carro continuam)
+    // campeão: as temporadas seguintes no Inferno são de exibição (dinheiro, sem nova promoção)
+    if (s.champion) outcome = 'continue';
+    // como no original, a divisão vai até a última corrida (dinheiro extra) e só então sobe
+    else if (s.points >= planet.promote) outcome = promote(s);
+    else outcome = 'retry'; // não somou pontos: a divisão recomeça (dinheiro e carro continuam)
     s.race = 0;
     s.points = 0;
   }
   return { outcome, pointsEarned, moneyEarned };
+}
+
+/** Prêmio de campeão da galáxia (entra no dinheiro e nos ganhos). */
+export const CHAMPION_BONUS = 100000;
+
+/** Sobe de divisão/planeta; na última divisão do Inferno vira campeão e leva o prêmio. */
+function promote(s: CampaignState): RaceOutcome {
+  if (s.division < DIVISIONS.length - 1) s.division++;
+  else if (s.planet < PLANETS.length - 1) {
+    s.planet++;
+    s.division = 0;
+  } else {
+    s.champion = true;
+    s.money += CHAMPION_BONUS;
+    s.stats.earnings += CHAMPION_BONUS;
+    return 'champion';
+  }
+  return 'promoted';
 }
 
 /** Promoção antecipada (o "Captain Braddock" do original): já tem os pontos, pode subir agora. */
@@ -224,14 +261,17 @@ export function canAdvanceEarly(s: CampaignState): boolean {
 
 export function advanceEarly(s: CampaignState): RaceOutcome {
   if (!canAdvanceEarly(s)) return 'continue';
-  if (s.division < DIVISIONS.length - 1) s.division++;
-  else if (s.planet < PLANETS.length - 1) {
-    s.planet++;
-    s.division = 0;
-  } else s.champion = true;
+  const out = promote(s);
   s.race = 0;
   s.points = 0;
-  return s.champion ? 'champion' : 'promoted';
+  return out;
+}
+
+/** Calendário da divisão atual: pista de cada corrida e quais já foram disputadas. */
+export function seasonSchedule(s: CampaignState): { trackId: string; done: boolean; current: boolean }[] {
+  const p = currentPlanet(s);
+  const ids = planetTracks(p);
+  return Array.from({ length: p.races }, (_, i) => ({ trackId: ids[i % ids.length], done: i < s.race, current: i === s.race }));
 }
 
 /* ---------- senha (save exportável), como as senhas do original ---------- */
