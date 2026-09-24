@@ -3,3 +3,4 @@ dist/
 music/*
 !music/README.md
 .wrangler/
+.tts/

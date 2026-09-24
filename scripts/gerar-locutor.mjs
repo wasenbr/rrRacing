@@ -1,3 +1,4 @@
+// (Substituído por scripts/locutor/gerar.py, que usa Chatterbox com mais emoção. Este gera a voz de referência.)
 // Gera as falas do locutor com TTS neural (Kokoro-82M, Apache-2.0) rodando no Chrome (WASM),
 // no estilo empolgado de locutor de arena, com tratamento de "estádio" e exporta em MP3.
 // Uso: node scripts/gerar-locutor.mjs [--so-faltando]

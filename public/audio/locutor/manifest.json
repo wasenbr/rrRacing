@@ -1,5 +1,5 @@
 {
-  "voice": "Kokoro-82M am_michael",
+  "voice": "Chatterbox (MIT) clonando Kokoro am_michael, exagero 1.1",
   "names": [
     "olaf",
     "ivan",
@@ -21,7 +21,8 @@
     "start": [
       "start_0.mp3",
       "start_1.mp3",
-      "start_2.mp3"
+      "start_2.mp3",
+      "start_3.mp3"
     ],
     "lastLap": [
       "lastLap_0.mp3",

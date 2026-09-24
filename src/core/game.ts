@@ -166,7 +166,7 @@ export class Game {
   private postfx: PostFx | null = null;
   private animated: ((t: number) => void)[] = [];
   private sky: THREE.Mesh | null = null;
-  private shadowGeo = new THREE.PlaneGeometry(2.7 * CAR_SCALE, 5 * CAR_SCALE).rotateX(-Math.PI / 2);
+  private shadowGeo = new THREE.PlaneGeometry(2.6 * CAR_SCALE, 4.4 * CAR_SCALE).rotateX(-Math.PI / 2);
   private clock = 0;
   /** o jogador saiu da tela cheia pelo botão: não forçar de novo */
   private leftFullscreen = false;

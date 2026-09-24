@@ -55,3 +55,22 @@ Cada item precisa ser atendido e verificado pelos avaliadores.
 28. Visual do jogo o mais próximo possível de `referencias/modernizados/como-jogo-deveria-ser.png`:
     pista de placas metálicas com poeira, bordas elevadas claras, vinheta escura e luz dramática,
     carros brilhantes com reflexos e sombra de contato.
+
+# Retorno do usuário (rodada 5, 2026-09-23) — prioridade máxima
+
+29. Refazer as miniaturas dos carros (loja, garagem, seleção) com o novo acabamento dos modelos.
+30. Criar miniaturas para os planetas (seleção de planeta, campanha).
+31. Retratos dos pilotos inspirados em `referencias/ideias/pilotos-modernizados.jpg`: pintura
+    detalhada com fundo temático e placa com o nome em moldura metálica. Snake Sanders = loiro de
+    cabelo longo, bandana, jaqueta de couro; Cyberhawk = robô caveira cromado de olhos vermelhos;
+    Ivanzypher = alienígena verde com tentáculos (tipo polvo), olhos amarelos; Katarina Lyons =
+    gata (felina) em traje espacial; Jake Badlands = moicano azul, óculos escuros, jaqueta com
+    espinhos; Tarquinn = alienígena pálido azul-gelo de orelhas pontudas, fundo de gelo/aurora;
+    Olaf = viking de barba ruiva trançada e capacete com chifres.
+32. Locutor sem emoção ("parece um professor narrando algo chato"). Tem que ser narrador radical,
+    estilo rock and roll: empolgado, gritado, energia de arena/luta livre.
+33. Tudo o que o usuário descrever sobre o jogo vira requisito registrado aqui para os avaliadores.
+34. Tamanho dos carros: o Havac tem o tamanho certo; os outros quatro estão grandes demais e devem
+    ficar do tamanho dele (na pista, na vitrine e nas miniaturas).
+35. O salto dos carros está longo demais, principalmente nas pistas com buraco (vão). Saltos mais
+    curtos e baixos, só o suficiente para vencer o vão com folga.

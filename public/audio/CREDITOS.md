@@ -25,11 +25,12 @@ mono, com silêncio aparado e volume normalizado.
 
 ## Locutor (`locutor/`)
 
-Falas geradas por TTS neural **Kokoro-82M** (hexgrad, licença Apache-2.0,
-https://huggingface.co/hexgrad/Kokoro-82M), modelo ONNX `onnx-community/Kokoro-82M-v1.0-ONNX`
-rodando no navegador via `kokoro-js` (Apache-2.0). Voz `am_michael`. Texto e tratamento de
-"locutor de arena" (grave, presença, saturação, compressão e eco) feitos pelo projeto
-(`scripts/gerar-locutor.mjs`). As frases seguem o estilo do locutor do original, sem usar gravações dele.
+Falas geradas por **Chatterbox TTS** (Resemble AI, licença MIT, https://github.com/resemble-ai/chatterbox)
+com exagero emocional alto (narrador de arena gritando), clonando uma voz de referência gerada pelo
+TTS **Kokoro-82M** (hexgrad, Apache-2.0, voz `am_michael`, `scripts/locutor/voz-referencia.wav`).
+Cada fala é conferida por transcrição (faster-whisper, MIT) e refeita se sair errada. Texto e
+tratamento de arena (compressão, presença e eco curto) feitos pelo projeto (`scripts/locutor/gerar.py`).
+As frases seguem o estilo do locutor do original, sem usar gravações dele.
 
 ## Música
 

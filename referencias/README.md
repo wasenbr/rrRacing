@@ -45,3 +45,12 @@ Origem: [pack de 5 carros de Rock n' Roll Racing (CCamuz3D, Cults3D)](https://cu
 — a página tem bloqueio anti-bot; as imagens acima são as referências salvas. Linha visual do pack:
 formas fiéis aos sprites originais (`carros-original/`), volumes arredondados e lisos, pintura
 brilhante, pneus/esteiras bem marcados.
+
+## ideias/pilotos-modernizados.jpg — alvo dos retratos (pedido do usuário)
+
+Retratos em estilo pintura de card: rosto grande, sombreamento rico, fundo temático por piloto e placa
+de nome em moldura metálica. Identidades: Snake Sanders (loiro, bandana, couro), Cyberhawk (caveira
+robótica cromada, olhos vermelhos), Ivanzypher (alienígena-polvo verde), Katarina Lyons (gata em traje
+espacial), Jake Badlands (moicano azul, óculos, jaqueta com espinhos), Tarquinn (alienígena azul-gelo de
+orelhas pontudas), Olaf (viking de barba ruiva trançada). O card "Vehicle: The Marauder" inspira as
+miniaturas dos carros (fundo neon com linhas de velocidade).

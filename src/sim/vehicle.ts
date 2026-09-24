@@ -1,6 +1,6 @@
 import { clamp, forwardX, forwardZ, leftX, leftZ, wrapAngle } from './math';
 import type { ControlInput } from './input';
-import { JUMP_HEIGHT, TILE, surfaceEffect, WARP_ACCEL, WARP_REVERSE_ACCEL, type Track, type TrackSample } from './track';
+import { GAP_MIN_SPEED, JUMP_HEIGHT, TILE, surfaceEffect, WARP_ACCEL, WARP_REVERSE_ACCEL, type Track, type TrackSample } from './track';
 
 /**
  * Escala dos carros em relação à pista. Com 1,0 cabem ~5 carros lado a lado (pista de 11 m),
@@ -19,16 +19,18 @@ const SHARP_DRAG = 1.1;
 export const GRAVITY = 25; // gravidade "arcade": saltos rápidos e secos
 const GROUND_SNAP = 0.35;
 /**
- * Salto da rampa J: o carro sai no ângulo da rampa (com um leve "chute" do lábio), então quanto
- * mais rápido, mais alto e mais longe voa — física de verdade, previsível para o jogador.
+ * Salto da rampa J: o carro sai no ângulo da rampa, mais rápido = um pouco mais longe, mas com teto
+ * de subida: saltos curtos e secos (pedido do usuário — antes, a 42 m/s o carro voava ~48 m).
  */
 const JUMP_RAMP_SLOPE = JUMP_HEIGHT / (0.45 * TILE);
-const JUMP_LAUNCH_KICK = 1.15;
+const JUMP_LAUNCH_KICK = 0.8;
+/** Teto da velocidade vertical ao sair da rampa (m/s): ~0,7 m acima do lábio e ~32 m de voo a 42 m/s. */
+const JUMP_VY_MAX = 6;
 /** Abaixo disto (m/s) a rampa J não lança: o carro só desce a borda. */
 const JUMP_LAUNCH_MIN_SPEED = 15;
-/** Correção máxima do alcance pelo "ímã de pouso" (fração) e folga depois do vão (m). */
-const JUMP_ASSIST = 0.3;
-const JUMP_LAND_MARGIN = 3;
+/** Folga de pouso depois do vão (m) e quanto ela cresce por m/s acima de GAP_MIN_SPEED. */
+const JUMP_LAND_MARGIN = 4;
+const JUMP_LAND_PER_SPEED = 0.2;
 /**
  * Pulo (Locust Jump Jets): o botão fica "guardado" por um instante, e vale também logo depois de
  * sair do chão (lombada, crista). Antes, apertar num quadro sem contato com o chão não fazia nada.
@@ -175,50 +177,34 @@ export function createVehicleState(spec: VehicleSpec, x: number, z: number, head
 }
 
 /**
- * "Ímã de pouso" da rampa J: prevê onde o voo balístico termina e, se for no vazio de um vão (G),
- * corrige a velocidade vertical para pousar no chão mais próximo — mas só dentro de ±JUMP_ASSIST
- * do alcance natural. Quem chega devagar demais (abaixo de ~GAP_MIN_SPEED) não é salvo e cai; quem
- * vem rápido continua voando mais longe que o lento (a física segue valendo).
+ * "Ímã de pouso" da rampa J: se houver um vão (G) à frente e o carro vier a GAP_MIN_SPEED ou mais,
+ * ajusta a velocidade vertical para pousar logo depois do vão (folga de alguns metros, um pouco
+ * maior quanto mais rápido). Sem isso, os lentos caíam e os rápidos voavam metade da reta de pouso.
+ * Abaixo de GAP_MIN_SPEED não há ajuda: a física natural manda e o carro cai no vão.
  */
 function jumpAssist(track: Track, at: TrackSample, y: number, vy: number, speed: number): number {
+  if (speed < GAP_MIN_SPEED) return vy;
   const n = track.pieces.length;
   const cur = track.pieces[at.pieceIndex];
-  // intervalos de vazio à frente, em metros a partir do carro, até a primeira peça comum
-  const voids: [number, number][] = [];
+  // fim do PRIMEIRO vão à frente, em metros a partir do carro. Numa sequência J G J G o carro
+  // pousa na rampa do meio e decola de novo (antes, o vão duplo virava um voo único de 70 m).
   let d = cur.length - at.s;
+  let end = cur.code === 'G' ? d : -1;
   let base = track.heightOn(cur, cur.length);
-  if (cur.code === 'G') voids.push([0, d]);
   for (let k = 1; k < 8; k++) {
     const p = track.pieces[(at.pieceIndex + k) % n];
     if (p.code === 'G') {
-      voids.push([d, d + p.length]);
+      end = d + p.length;
       base = track.heightOn(p, 0);
-    } else if (p.code !== 'J') break;
+    } else if (p.code !== 'J' || end >= 0) break;
     d += p.length;
   }
-  if (!voids.length) return vy;
+  if (end < 0) return vy;
   const y0 = y - base;
-  const reach = (w: number) => (speed * (w + Math.sqrt(Math.max(0, w * w + 2 * GRAVITY * y0)))) / GRAVITY;
-  const natural = reach(vy);
-  const hole = voids.find(([a, b]) => natural > a - 1 && natural < b + JUMP_LAND_MARGIN);
-  if (!hole) return vy;
-  // alvos: logo depois do vão ou (se houver chão antes dele além da borda) logo antes
-  const targets = [hole[1] + JUMP_LAND_MARGIN];
-  if (hole[0] - 2 > 4) targets.push(hole[0] - 2);
-  let best = vy;
-  let bestCost = Infinity;
-  for (const target of targets) {
-    const ratio = target / natural;
-    if (ratio < 1 - JUMP_ASSIST || ratio > 1 + JUMP_ASSIST) continue;
-    const T = target / speed;
-    const w = (GRAVITY * T * T) / 2 - y0;
-    const cost = Math.abs(ratio - 1);
-    if (cost < bestCost && w / T > 0) {
-      bestCost = cost;
-      best = w / T;
-    }
-  }
-  return best;
+  const target = end + JUMP_LAND_MARGIN + (speed - GAP_MIN_SPEED) * JUMP_LAND_PER_SPEED;
+  const T = target / speed;
+  const w = (GRAVITY * T * T) / 2 - y0;
+  return w > 0 ? w / T : vy;
 }
 
 export function forwardSpeed(v: VehicleState): number {
@@ -380,7 +366,7 @@ export function stepVehicle(v: VehicleState, spec: VehicleSpec, input: ControlIn
       const from = v.pieceIndex >= 0 ? track.pieces[v.pieceIndex] : undefined;
       const launch = forwardSpeed(v);
       if (from?.code === 'J' && launch > JUMP_LAUNCH_MIN_SPEED) {
-        v.vy = Math.max(v.vy, launch * JUMP_RAMP_SLOPE * JUMP_LAUNCH_KICK);
+        v.vy = Math.min(Math.max(v.vy, launch * JUMP_RAMP_SLOPE * JUMP_LAUNCH_KICK), JUMP_VY_MAX);
         v.vy = jumpAssist(track, sample, v.y, v.vy, launch);
       }
     } else {

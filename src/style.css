@@ -569,3 +569,52 @@ h3 {
   .quick-opts { grid-template-columns: 1fr; }
   .upg-icon { width: 52px; height: 52px; }
 }
+
+/* ---------- miniaturas: cards de veículo e planetas ---------- */
+.car-img.card-img {
+  max-width: 100%; margin: 0 auto 8px; border-radius: 10px; border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(0, 0, 0, 0.4); background: #07050c;
+}
+.car.sel .car-img.card-img, .shop-carcard.mine .car-img.card-img { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 18px rgba(242, 195, 24, 0.35); }
+.shop-car-img { background: none; padding: 0 0 8px; }
+.shop-car-img .car-img.card-img { max-width: 320px; margin: 0 auto 8px; }
+.mycar .car-img.card-img { max-width: 260px; }
+.car .car-img.card-img { max-width: 220px; }
+.planet-img { display: block; flex: none; aspect-ratio: 1; border-radius: 50%; pointer-events: none; transition: opacity 0.25s; object-fit: cover; }
+.planet-img.loading { opacity: 0; }
+/* corrida rápida: aba de planeta = planeta + nome */
+.planet-tabs .tab { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px 6px 8px; }
+.planet-tabs .planet-img { width: 56px; box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.08); }
+.planet-tabs .tab.sel .planet-img { box-shadow: 0 0 0 2px var(--accent), 0 0 14px rgba(242, 195, 24, 0.45); }
+/* garagem: planeta no cabeçalho e rota da campanha */
+.hub-head .hub-planet { display: flex; align-items: center; gap: 8px; padding: 4px 8px; }
+.hub-planet .planet-img { width: 48px; margin: -2px 0; }
+.hub-planet span { min-width: 0; }
+.planet-route { display: flex; align-items: center; justify-content: center; margin: 10px 0 4px; }
+.pr-step { display: flex; flex-direction: column; align-items: center; gap: 2px; flex: 0 1 auto; min-width: 0; }
+.pr-step .planet-img { width: 40px; }
+.pr-step.now .planet-img { width: 60px; box-shadow: 0 0 0 2px var(--accent), 0 0 16px rgba(242, 195, 24, 0.5); }
+.pr-step small { font-size: 10px; letter-spacing: 1px; color: var(--muted); white-space: nowrap; text-transform: uppercase; }
+.pr-step.now small { color: var(--accent); font-weight: 800; }
+.pr-step.next .planet-img { filter: grayscale(0.45) brightness(0.75); opacity: 0.85; }
+.pr-step.done { position: relative; }
+.pr-step.done::after { content: '✓'; position: absolute; top: -2px; right: -2px; width: 16px; height: 16px; border-radius: 50%; background: #2fb82f; color: #062006; font-size: 11px; font-weight: 900; line-height: 16px; text-align: center; }
+.pr-link { flex: 1 1 12px; max-width: 36px; min-width: 4px; height: 2px; margin: 0 2px 16px; background: repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.35) 0 4px, transparent 4px 8px); }
+.slot-planet { display: flex !important; align-items: center; gap: 5px; }
+.planet-img.mini { width: 18px; }
+.notice .planet-img.promo { width: 96px; margin: 0 auto 6px; box-shadow: 0 0 24px rgba(92, 255, 92, 0.25); }
+.notice .planet-route { margin-top: 0; }
+@media (max-width: 640px), (max-height: 460px) {
+  .planet-tabs .tab { flex: 1 1 88px; font-size: 12px; }
+  .planet-tabs .planet-img { width: 44px; }
+  .pr-step .planet-img { width: 30px; }
+  .pr-step.now .planet-img { width: 46px; }
+  .pr-step small { font-size: 8px; letter-spacing: 0; }
+  .pr-step:not(.now) small { display: none; }
+  .pr-link { margin-bottom: 0; }
+  .hub-planet .planet-img { width: 36px; }
+  /* slots no celular: sem o carro, botões numa linha própria */
+  .slot { flex-wrap: wrap; }
+  .slot .car-img { display: none; }
+  .slot .slot-btns { flex: 1 0 100%; justify-content: flex-end; }
+}

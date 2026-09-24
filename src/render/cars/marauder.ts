@@ -144,7 +144,7 @@ const bodyW = curve([
   [-1.9, 1.24],
   [WZR, 1.3],
   [-0.7, 1.24],
-  [-0.1, 1.14],
+  [-0.1, 1.1],
   [0.6, 1.22],
   [WZF, 1.28],
   [2.0, 1.2],
@@ -163,14 +163,20 @@ function arch(z: number): number {
   let y = 0;
   for (const wz of [WZF, WZR]) {
     const dz = Math.abs(z - wz);
-    const R = 0.98;
-    if (dz < R) y = Math.max(y, WR - 0.3 + Math.sqrt(R * R - dz * dz));
+    const R = 1.0;
+    if (dz < R) y = Math.max(y, WR - 0.2 + Math.sqrt(R * R - dz * dz));
   }
   return y;
 }
 
+/** Máximo suave: a borda do arco não vira quina (sombra serrilhada). */
+const softMax = (a: number, b: number, k: number) => {
+  const h = Math.max(0, Math.min(1, 0.5 + (b - a) / (2 * k)));
+  return a + (b - a) * h + k * h * (1 - h);
+};
+
 function bodySec(z: number): Sec {
-  return { w: bodyW(z), wt: 0.84, yb: Math.max(lowBase(z), arch(z)), yt: bodyTop(z), n: 5, crown: 0.05 };
+  return { w: bodyW(z), wt: 0.84, yb: softMax(lowBase(z), arch(z), 0.04), yt: bodyTop(z), n: 5, crown: 0.05 };
 }
 
 // cabine: para-brisa e vidro traseiro bem deitados, teto baixo
@@ -222,7 +228,7 @@ function surfaceStripes(targets: THREE.Object3D[], bands: [number, number][], z0
       }
       const base = pos.length / 3;
       pos.push(xa, ya + lift, z, xb, yb + lift, z);
-      if (prev >= 0) idx.push(prev, prev + 1, base + 1, prev, base + 1, base);
+      if (prev >= 0) idx.push(prev, base + 1, prev + 1, prev, base, base + 1); // normal para cima
       prev = base;
     }
   }
@@ -230,9 +236,6 @@ function surfaceStripes(targets: THREE.Object3D[], bands: [number, number][], z0
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setIndex(idx);
   g.computeVertexNormals();
-  // garante normais para cima (a ordem dos vértices depende do lado da faixa)
-  const n = g.getAttribute('normal') as THREE.BufferAttribute;
-  for (let i = 0; i < n.count; i++) if (n.getY(i) < 0) n.setXYZ(i, -n.getX(i), -n.getY(i), -n.getZ(i));
   return g;
 }
 
@@ -259,7 +262,7 @@ export function createMarauder(color: number, shadows: boolean): CarVisual {
   const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
 
   // carroceria de peça única
-  const shell = k.add(loft(Z_TAIL, Z_NOSE, bodySec, 72, 40, 0.22), k.paint, 0, 0, 0);
+  const shell = k.add(loft(Z_TAIL, Z_NOSE, bodySec, 96, 40, 0.22), k.paint, 0, 0, 0);
   // estufa de vidro escuro e teto pintado por cima
   k.add(loft(CAB_R, CAB_F, cabSec, 40, 32, 0.12), k.glass, 0, 0, 0);
   const roof = k.add(
@@ -289,13 +292,27 @@ export function createMarauder(color: number, shadows: boolean): CarVisual {
   // painel traseiro escuro entre as lanternas
   k.add(new THREE.BoxGeometry(1.5, 0.16, 0.04), k.trim, 0, 1.76, Z_TAIL - 0.01);
 
+  // bordas salientes dos para-lamas contornando cada pneu
+  for (const wz of [WZF, WZR])
+    for (const sx of [-1, 1]) {
+      const lip = new THREE.TorusGeometry(1.0, 0.075, 8, 24, Math.PI * 0.46).rotateZ(Math.PI * 0.27).rotateY(Math.PI / 2).scale(1.4, 1, 1);
+      k.add(lip, k.paint, sx * (bodyW(wz) - 0.08), WR - 0.2, wz);
+    }
+
   // aerofólio traseiro na cor do carro, sobre dois suportes
   k.add(sideProfile(wingShape(), 2.3, 0.03, 8), k.paint, 0, 2.3, -1.98);
   for (const sx of [-0.62, 0.62]) {
     const st = k.add(new THREE.BoxGeometry(0.07, 0.3, 0.2), k.trim, sx, 2.18, -1.96);
     st.rotation.x = -0.25;
   }
-  for (const sx of [-1, 1]) k.add(new THREE.BoxGeometry(0.04, 0.26, 0.64), k.paintDark, sx * 1.16, 2.38, -2.0);
+  // placas laterais do aerofólio, com cantos arredondados
+  const ep = new THREE.Shape();
+  ep.moveTo(-0.3, -0.08);
+  ep.lineTo(0.22, -0.08);
+  ep.quadraticCurveTo(0.34, -0.06, 0.3, 0.06);
+  ep.quadraticCurveTo(0.1, 0.2, -0.3, 0.22);
+  ep.quadraticCurveTo(-0.36, 0.08, -0.3, -0.08);
+  for (const sx of [-1, 1]) k.add(sideProfile(ep, 0.05, 0.015, 8), k.paintDark, sx * 1.16, 2.3, -1.98);
 
   // VK Plasma Rifles duplos no capô, dos lados da tomada de ar
   for (const sx of [-0.56, 0.56]) k.plasmaRifle(sx, bodyTop(1.0) + 0.1, 1.05, 1.0);
@@ -339,7 +356,7 @@ export function createMarauder(color: number, shadows: boolean): CarVisual {
   k.add(stripeGeo(0, 0.02), stripeWhite, 0, 0, 0).castShadow = false;
   k.decalOn(roof, 0.95, 0.6, 0, -0.45, 'number');
   // faróis escamoteáveis (tira baixa no bico) e lanternas largas
-  k.lights([[0.62, 1.7, Z_NOSE - 0.12]], [[0.52, 1.76, Z_TAIL - 0.03]], 0.4);
+  k.lights([[0.58, 1.62, Z_NOSE - 0.07]], [[0.52, 1.76, Z_TAIL - 0.03]], 0.32);
   // faróis de milha na barra do teto
   k.add(new THREE.BoxGeometry(0.8, 0.05, 0.07), k.trim, 0, cabTop(-0.1) + 0.06, -0.1);
   for (const sx of [-0.3, -0.1, 0.1, 0.3]) k.add(new THREE.CylinderGeometry(0.07, 0.07, 0.07, 12).rotateX(Math.PI / 2), k.head, sx, cabTop(-0.1) + 0.12, -0.07);

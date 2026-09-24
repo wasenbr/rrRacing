@@ -1,6 +1,8 @@
 import { QUALITY_LABELS, type QualityLevel, type QualityPref } from '../render/quality';
 import type { CameraMode } from '../render/cameras';
-import { carThumbnail, itemThumbnail, type ShopItem } from '../render/thumbnails';
+import { carThumbnail, itemThumbnail, type CarThumbStyle, type ShopItem } from '../render/thumbnails';
+import { planetThumbnail } from '../render/planetThumbs';
+import type { ThemeId } from '../sim/track';
 import {
   canAdvanceEarly, CAMPAIGN_PRIZES, carsForSale, DIVISIONS, PLANETS, POINTS, seasonInfo, START_MONEY, type CampaignState, type OpponentSetup, type PlanetDef,
   type RaceOutcome,
@@ -204,10 +206,33 @@ function itemImg(item: string, size = 96): string {
   return `<img class="car-img item-img${url ? '' : ' loading'}" data-thumb="${key}" src="${url ?? BLANK}" alt="" draggable="false"/>`;
 }
 
-function carImg(id: string, color: number, size = 160): string {
-  const key = `${id}|${color}|${size}`;
+/**
+ * Miniatura 3D de um carro. `card` (padrão) é o card de veículo com fundo e piso; `transparent`
+ * serve para as listas pequenas (rivais, slots, resultados), sobre o painel.
+ */
+function carImg(id: string, color: number, size = 200, style: CarThumbStyle = 'card'): string {
+  const key = `${id}|${color}|${size}|${style}`;
   const url = thumbReady.get(key);
-  return `<img class="car-img${url ? '' : ' loading'}" data-thumb="${key}" src="${url ?? BLANK}" alt="" draggable="false"/>`;
+  return `<img class="car-img${style === 'card' ? ' card-img' : ''}${url ? '' : ' loading'}" data-thumb="${key}" src="${url ?? BLANK}" alt="" draggable="false"/>`;
+}
+
+/** Tema (planeta) de cada nome de planeta usado nas pistas e na campanha. */
+const PLANET_THEME: Record<string, ThemeId> = Object.fromEntries(PLANETS.map((p) => [p.name, p.theme]));
+
+/** Miniatura do planeta (esfera 3D sobre o espaço), gerada aos poucos como as dos carros. */
+function planetImg(theme: ThemeId | undefined, size = 64, cls = ''): string {
+  if (!theme) return '';
+  const key = `planet|${theme}|${size}`;
+  const url = thumbReady.get(key);
+  return `<img class="planet-img${cls ? ` ${cls}` : ''}${url ? '' : ' loading'}" data-thumb="${key}" src="${url ?? BLANK}" alt="" draggable="false"/>`;
+}
+
+/** Rota da campanha: os 6 planetas em ordem, com o atual em destaque e os vencidos marcados. */
+function planetRoute(current: number, champion = false): string {
+  return `<div class="planet-route">${PLANETS.map((p, i) => {
+    const st = champion || i < current ? 'done' : i === current ? 'now' : 'next';
+    return `<div class="pr-step ${st}" title="${esc(p.name)}">${planetImg(p.theme, i === current && !champion ? 72 : 48)}<small>${esc(p.name)}</small></div>`;
+  }).join('<i class="pr-link"></i>')}</div>`;
 }
 
 let fillToken = 0;
@@ -216,16 +241,21 @@ function fillThumbs(root: HTMLElement): void {
   const token = ++fillToken;
   const next = () => {
     if (token !== fillToken) return; // outro menu foi aberto: recomeça por lá
-    const img = root.querySelector<HTMLImageElement>('img.car-img.loading');
+    const img = root.querySelector<HTMLImageElement>('img[data-thumb].loading');
     if (!img) return;
     const key = img.dataset.thumb!;
     let url = thumbReady.get(key);
     if (!url) {
-      const [id, color, size] = key.split('|');
-      url = id === 'item' ? itemThumbnail(color as ShopItem, Number(size)) : carThumbnail(id, Number(color), Number(size));
+      const [id, color, size, style] = key.split('|');
+      url =
+        id === 'item'
+          ? itemThumbnail(color as ShopItem, Number(size))
+          : id === 'planet'
+            ? planetThumbnail(color as ThemeId, Number(size))
+            : carThumbnail(id, Number(color), Number(size), (style as CarThumbStyle) || 'card');
       thumbReady.set(key, url || BLANK);
     }
-    root.querySelectorAll<HTMLImageElement>(`img.car-img.loading[data-thumb="${key}"]`).forEach((el) => {
+    root.querySelectorAll<HTMLImageElement>(`img.loading[data-thumb="${key}"]`).forEach((el) => {
       el.src = url || BLANK;
       el.classList.remove('loading');
     });
@@ -434,7 +464,7 @@ export class Menus {
       <div class="card wide quick">
         <h2>CORRIDA RÁPIDA</h2>
         <h3>Pista</h3>
-        <div class="tabs planet-tabs">${planets.map((p) => `<button class="tab" data-qplanet="${esc(p)}">${esc(p)}</button>`).join('')}</div>
+        <div class="tabs planet-tabs">${planets.map((p) => `<button class="tab" data-qplanet="${esc(p)}">${planetImg(PLANET_THEME[p] ?? this.tracks.find((t) => t.planet === p)?.theme, 64)}<span>${esc(p)}</span></button>`).join('')}</div>
         <div class="tracks track-row">${this.tracks
           .filter((t) => t.planet === this.quickPlanet)
           .map((t) => `<button class="trk" data-track="${t.id}">${trackImg(t)}<b>${esc(t.name)}</b></button>`)
@@ -499,6 +529,7 @@ export class Menus {
     this.show(`
       <div class="card wide">
         <h2>NOVA CAMPANHA</h2>
+        ${planetRoute(0)}
         <p class="sub center">Comece em ${esc(PLANETS[0].name)}, Divisão B, com ${money(START_MONEY)}. Some ${PLANETS[0].promote} pontos em ${PLANETS[0].races} corridas para subir
           (1º: ${POINTS[0]} pts e ${money(CAMPAIGN_PRIZES[0])} · 2º: ${POINTS[1]} · 3º: ${POINTS[2]}).</p>
         <h3>Escolha seu piloto</h3>
@@ -533,8 +564,8 @@ export class Menus {
             s.empty
               ? `<div class="slot empty"><div class="slot-n">${s.slot + 1}</div><div class="slot-info"><b>Vazio</b></div>
                   ${mode === 'save' ? `<button class="buy" data-save="${s.slot}">Salvar aqui</button>` : ''}</div>`
-              : `<div class="slot"><div class="slot-n">${s.slot + 1}</div>${portraitSvg(s.characterId, 56)}${carImg(s.vehicleId, s.color, 96)}
-                  <div class="slot-info"><b>${esc(s.pilot)}</b><small>${esc(s.planet)} · Divisão ${esc(s.division)}${s.champion ? ' · 🏆' : ''}</small>
+              : `<div class="slot"><div class="slot-n">${s.slot + 1}</div>${portraitSvg(s.characterId, 56)}${carImg(s.vehicleId, s.color, 96, 'transparent')}
+                  <div class="slot-info"><b>${esc(s.pilot)}</b><small class="slot-planet">${planetImg(PLANET_THEME[s.planet], 32, 'mini')}${esc(s.planet)} · Divisão ${esc(s.division)}${s.champion ? ' · 🏆' : ''}</small>
                   <small><span class="gold">${money(s.money)}</span> · ${dateLabel(s.savedAt)}</small></div>
                   <div class="slot-btns">
                     ${mode === 'save' ? `<button class="buy" data-save="${s.slot}">Substituir</button>` : `<button class="buy" data-loadslot="${s.slot}">Carregar</button>`}
@@ -563,11 +594,12 @@ export class Menus {
     this.show(`
       <div class="card wide">
         <div class="hub-head">
-          <div><small>PLANETA</small><b>${esc(d.planet.name)}</b></div>
+          <div class="hub-planet">${planetImg(d.planet.theme, 72)}<span><small>PLANETA</small><b>${esc(d.planet.name)}</b></span></div>
           <div><small>DIVISÃO</small><b>${div}</b></div>
           <div><small>CORRIDA</small><b>${s.race + 1}/${season.races}</b></div>
           <div><small>DINHEIRO</small><b class="gold">${money(s.money)}</b></div>
         </div>
+        ${planetRoute(s.planet, s.champion)}
         <div class="points"><span>Pontos: <b>${s.points}</b> / ${season.promote} para subir</span><div class="bar"><i style="width:${pct}%"></i></div></div>
         ${notice ? `<div class="notice">${notice}</div>` : ''}
         ${early ? `<div class="notice promoted">Você já tem os pontos! Continue correndo aqui para ganhar dinheiro ou <button class="inline-go" data-act="advance">subir agora ➜</button></div>` : ''}
@@ -579,7 +611,7 @@ export class Menus {
             <h3>Rivais</h3>
             <ul class="rivals">${d.opponents
               .map(
-                (o) => `<li>${portraitSvg(o.name, 44)}<div><b style="color:${hex(o.color)}">${esc(o.name)}</b><small>${esc(o.spec.name)}</small></div>${carImg(o.spec.id, o.color, 96)}</li>`,
+                (o) => `<li>${portraitSvg(o.name, 44)}<div><b style="color:${hex(o.color)}">${esc(o.name)}</b><small>${esc(o.spec.name)}</small></div>${carImg(o.spec.id, o.color, 96, 'transparent')}</li>`,
               )
               .join('')}</ul>
           </div>
@@ -778,7 +810,7 @@ export class Menus {
     const slots = Array.from({ length: v.max }, (_, i) => {
       const p = v.players[i];
       return p
-        ? `<li>${carImg(p.vehicleId, p.color, 96)}<div><b style="color:${hex(p.color)}">${esc(p.name)}</b><small>${esc(this.vehicles[p.vehicleId]?.name ?? '')}${i === 0 ? ' · host' : ''}${p.me ? ' · você' : ''}</small></div></li>`
+        ? `<li>${carImg(p.vehicleId, p.color, 96, 'transparent')}<div><b style="color:${hex(p.color)}">${esc(p.name)}</b><small>${esc(this.vehicles[p.vehicleId]?.name ?? '')}${i === 0 ? ' · host' : ''}${p.me ? ' · você' : ''}</small></div></li>`
         : `<li class="empty"><div><small>${v.host && this.fillCpu ? 'CPU' : 'vago'}</small></div></li>`;
     }).join('');
     const canShare = typeof navigator.share === 'function';
@@ -827,8 +859,8 @@ export class Menus {
       report?.outcome === 'champion' ? '🏆 CAMPEÃO!' : report?.outcome === 'promoted' ? 'PROMOVIDO!' : me && me.place === 1 ? 'VITÓRIA!' : 'RESULTADO';
     const campaignBlock = report
       ? `<div class="notice ${report.outcome}">
-          ${report.outcome === 'champion' ? 'Você venceu a galáxia inteira! Lenda do rock.' : ''}
-          ${report.outcome === 'promoted' ? `Subiu para: <b>${report.label}</b>` : ''}
+          ${report.outcome === 'champion' ? `${planetRoute(PLANETS.length, true)}Você venceu a galáxia inteira! Lenda do rock.` : ''}
+          ${report.outcome === 'promoted' ? `${planetImg(PLANETS.find((p) => report.label.startsWith(p.name))?.theme, 112, 'promo')}Subiu para: <b>${report.label}</b>` : ''}
           ${report.outcome === 'retry' ? `Não somou ${report.promote} pontos. A temporada recomeça — melhore o carro na loja!` : ''}
           ${report.outcome === 'continue' ? `+${report.pointsEarned} pontos · total ${report.points}/${report.promote}` : ''}
         </div>`
@@ -839,7 +871,7 @@ export class Menus {
       .map(
         (r) => `<div class="res-row ${r.me ? 'me' : ''} p${r.place}"><span class="res-place">${r.place}º</span>${portraitSvg(r.pilot ?? r.name, 48)}
           <div class="res-name"><b style="color:${r.color}">${esc(r.name)}</b><small>${r.time !== null ? formatTime(r.time) : '—'} · ${r.kills} abate(s)</small></div>
-          ${r.vehicleId ? carImg(r.vehicleId, parseInt(r.color.slice(1), 16), 96) : ''}<span class="gold">${money(r.prize)}</span></div>`,
+          ${r.vehicleId ? carImg(r.vehicleId, parseInt(r.color.slice(1), 16), 96, 'transparent') : ''}<span class="gold">${money(r.prize)}</span></div>`,
       )
       .join('');
     this.show(`

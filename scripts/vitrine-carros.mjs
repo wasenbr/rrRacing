@@ -40,7 +40,6 @@ for (const [name, mode] of shots) {
     const colors = [0xe02828, 0x2f7bff, 0xf2c318, 0x2fc840, 0xb040e0];
     ids.forEach((id, i) => {
       const v = cars.createCarMesh(id, colors[i], true);
-      v.root.scale.setScalar(1);
       v.root.position.set((i - 2) * 5.2, 0, 0);
       v.root.rotation.y = mode === 2 ? Math.PI + 0.5 : 0.5;
       v.animate({ spin: 0.3, steer: 0.3, speed: 0, time: 1, grounded: true });

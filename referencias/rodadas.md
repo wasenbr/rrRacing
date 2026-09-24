@@ -19,3 +19,27 @@ Pendências principais: câmera de perseguição entrando no carro; explosões e
 ainda com cara de sedã; barras de atributos incoerentes (Battle Trak/Havac); óleo acumulando;
 Sundog forte demais; volta solo de Havac/Battle Trak mais lenta; motores dos rivais; locutor
 pouco emotivo; efeitos de contato fracos; aviso de girar o celular; HUD mistura idiomas.
+
+## Pedidos do usuário de 2026-09-23 (itens 25–28 do feedback)
+
+- Qualidade gráfica (`src/render/quality.ts`): Automática/Baixa/Média/Alta em Som e Opções; detecção
+  por memória, núcleos e GPU; resolução dinâmica (baixa até 60% quando o fps cai); sombras, bloom,
+  antialias, densidade do cenário e partículas por nível. `?q=alto` força o nível (evidências).
+- HUD escreve no DOM só quando o texto muda; minimapa a 30 Hz.
+- Controles de toque só na largada e na corrida (`.touch.off` fora disso).
+- Teclado: Ctrl esquerdo atira, `\` (Backslash/IntlBackslash) solta a arma traseira; Ctrl+W acidental
+  pede confirmação na corrida; em tela cheia o Keyboard Lock segura Ctrl+W.
+- Carros refeitos na linha do pack CCamuz3D (`referencias/modernizados/`).
+- Piso "grade" virou placas metálicas trianguladas com parafusos; poeira cor de areia nos pisos
+  metálicos; vinheta escura; sol mais forte e ambiente menor; pintura com verniz alto.
+
+## Pedidos de 2026-09-23 (itens 29–35)
+
+- Retratos refeitos (SVG pintado à mão por piloto, fundo temático); miniaturas de carro em card
+  (estúdio, neon, reflexo); miniaturas de planeta (`src/render/planetThumbs.ts`) na corrida rápida,
+  garagem (rota dos 6 planetas), nova campanha, slots e resultados; ícones da loja com luz de estúdio.
+- Locutor refeito com Chatterbox (exagero 1,1) clonando a voz Kokoro, conferido por Whisper
+  (`scripts/locutor/gerar.py`).
+- Carros: escala visual por modelo para ocupar a área do Havac (`VISUAL_SCALE` em `src/render/cars/index.ts`).
+- Salto: teto de 6 m/s na subida da rampa; vão = pouso 4 m depois do buraco (+0,2 m por m/s acima de
+  22 m/s); vão duplo pousa na rampa do meio. Voo: ~30 m (antes ~48 m; o duplo era 70 m).
