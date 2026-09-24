@@ -8,9 +8,9 @@ import { CAR_SCALE, createVehicleState, forwardSpeed, stepVehicle, type Assist, 
 /** Parâmetros das armas (dano em pontos de blindagem). */
 export const WEAPONS = {
   /** VK Plasma Rifles: bola de plasma rápida, reta, dano médio */
-  laser: { speed: 85, life: 0.8, damage: 14, knock: 3, hop: 0, turnRate: 0 },
+  laser: { speed: 85, life: 0.8, damage: 17, knock: 3, hop: 0, turnRate: 0 },
   /** Rogue Missiles: a arma mais forte — teleguiado suave para a frente, joga o alvo para cima */
-  missile: { speed: 58, life: 2.4, damage: 34, knock: 9, hop: 7, turnRate: 2.2 },
+  missile: { speed: 58, life: 2.4, damage: 30, knock: 9, hop: 7, turnRate: 2.2 },
   /** Sundog Beams: lento, persegue o alvo em qualquer direção (até para trás), pouco dano; some na mureta */
   sundog: { speed: 42, life: 2.2, damage: 12, knock: 2, hop: 0, turnRate: 2.5 },
   /** Bear Claw Mines */
@@ -18,7 +18,7 @@ export const WEAPONS = {
   /** KO Scatterpack: leque de minas pequenas atrás do carro */
   scatter: { count: 5, spread: 2.4, damage: 13, hop: 6, radius: 1.1, armTime: 0.35, life: 25 },
   // óleo (BF's Slipsauce): mancha pequena e desviável; dura 45 s (dá para cair no próprio óleo na
-  // volta seguinte) e cada carro tem no máximo OIL_PER_CAR manchas. Esteiras e aerodeslizador são imunes.
+  // volta seguinte) e cada carro tem no máximo OIL_PER_CAR manchas. Esteiras e aerodeslizador giram metade.
   oil: { radius: 1.35, life: 45, spinTime: 0.8, minSpeed: 12 },
   /** poças fixas por planeta (original): gosma verde freia muito (Drakonis), poça azul/óleo preto
    *  fazem derrapar (Bogmire/New Mojave), neve freia (Nho), lava queima a blindagem (Inferno) */
@@ -93,6 +93,8 @@ export interface Racer extends RacerEntry {
   spinTotal: number;
   /** proteção após rodar no óleo, para não rodar de novo na mesma mancha */
   oilGrace: number;
+  /** já ganhou a carga extra de meio de volta nesta volta? */
+  halfRefill: boolean;
   /** derrapando numa poça (perde aderência enquanto > 0) */
   slipTime: number;
   prevFire: boolean;
@@ -204,6 +206,7 @@ export function createWorld(track: Track, entries: RacerEntry[], laps: number, s
       spinTime: 0,
       spinTotal: 1,
       oilGrace: 0,
+      halfRefill: false,
       slipTime: 0,
       prevFire: false,
       prevDrop: false,
@@ -635,7 +638,13 @@ export function stepWorld(world: World, humanInputs: Record<number, ControlInput
       r.prevDrop = input.drop;
 
       const ev = updateProgress(r.progress, world.track, r.car, world.raceTime, world.laps, dt);
+      // meio da volta: +1 carga da arma da frente (ação constante; o resto recarrega na volta)
+      if (r.progress.halfwayReached && !r.halfRefill) {
+        r.halfRefill = true;
+        if (r.frontCharges < r.spec.frontCharges) r.frontCharges++;
+      }
       if (ev?.type === 'lap') {
+        r.halfRefill = false;
         // como no original, armas e nitro recarregam a cada volta
         r.frontCharges = r.spec.frontCharges;
         r.rearCharges = r.spec.rearCharges;

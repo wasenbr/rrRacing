@@ -30,6 +30,8 @@ com exagero emocional alto (narrador de arena gritando), clonando uma voz de ref
 TTS **Kokoro-82M** (hexgrad, Apache-2.0, voz `am_michael`, `scripts/locutor/voz-referencia.wav`).
 Cada fala é conferida por transcrição (faster-whisper, MIT) e refeita se sair errada. Texto e
 tratamento de arena (compressão, presença e eco curto) feitos pelo projeto (`scripts/locutor/gerar.py`).
+Pós-tratamento (`scripts/locutor/tratar.py`, ffmpeg + rubberband): takes sem emoção descartados,
+silêncio aparado, nomes graves afinados para cima, frases longas aceleradas e loudness igual (−18 LUFS).
 As frases seguem o estilo do locutor do original, sem usar gravações dele.
 
 ## Música

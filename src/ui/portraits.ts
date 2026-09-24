@@ -39,10 +39,79 @@ class Pic {
   add(...s: string[]): void {
     this.out.push(...s);
   }
+  /** Índice em `out` onde começa a figura (antes disso é cenário: fica desfocado e atrás da névoa). */
+  subj = -1;
+  /** Luzes de recorte coloridas (esquerda e direita) e cor da névoa entre cenário e figura. */
+  rimL = '#ffd8a0';
+  rimR = '#8ad0ff';
+  fog = '#8aa0c0';
+  /** Marca o início da figura e define a iluminação da cena. */
+  figure(rimL: string, rimR: string, fog: string): void {
+    this.subj = this.out.length;
+    this.rimL = rimL;
+    this.rimR = rimR;
+    this.fog = fog;
+  }
+  private blurs = new Map<number, string>();
+  /** Filtro de desfoque (pinceladas macias de luz e sombra). */
+  blur(sd: number): string {
+    let k = this.blurs.get(sd);
+    if (!k) {
+      k = `${this.id}b${this.n++}`;
+      this.defs.push(`<filter id="${k}" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="${sd}"/></filter>`);
+      this.blurs.set(sd, k);
+    }
+    return `filter="url(#${k})"`;
+  }
 }
 
-/** Contorno de tinta: escuro e levemente translúcido, para parecer pintura e não ícone. */
-const ink = (w = 2) => `stroke="${INK}" stroke-opacity="0.78" stroke-width="${w * 0.85}" stroke-linejoin="round" stroke-linecap="round"`;
+/** Contorno de tinta: escuro, fino e translúcido — pintura, não ícone. */
+const ink = (w = 2) => `stroke="${INK}" stroke-opacity="0.5" stroke-width="${w * 0.6}" stroke-linejoin="round" stroke-linecap="round"`;
+
+/**
+ * Modelagem de rosto pintado: órbitas e sombra sob a sobrancelha, lateral do nariz, sob o lábio e o
+ * queixo (oclusão), maçãs e testa iluminadas, ponte do nariz com brilho e calor subcutâneo.
+ * Chamar dentro do clip do rosto. `cool` troca a sombra quente por fria (peles azuis/verdes).
+ */
+function sculpt(P: Pic, skin: string, o: { eyeY?: number; dx?: number; noseY?: number; mouthY?: number; warm?: string; cool?: boolean; chin?: number } = {}): void {
+  const ey = o.eyeY ?? 92;
+  const dx = o.dx ?? 16;
+  const ny = o.noseY ?? 112;
+  const my = o.mouthY ?? 126;
+  const dk = o.cool ? shade(skin, 0.42) : shade(skin, 0.5);
+  const warm = o.warm ?? (o.cool ? '#6a8aff' : '#e0503a');
+  const b3 = P.blur(3.2);
+  const b2 = P.blur(1.8);
+  P.add(`<g ${b3}>`);
+  // órbitas e sombra sob a arcada
+  P.add(`<ellipse cx="${100 - dx}" cy="${ey - 1}" rx="14" ry="8.5" fill="${dk}" opacity="0.5"/><ellipse cx="${100 + dx}" cy="${ey - 1}" rx="14" ry="8.5" fill="${dk}" opacity="0.62"/>`);
+  P.add(`<ellipse cx="100" cy="${ey - 6}" rx="8" ry="5" fill="${dk}" opacity="0.25"/>`);
+  // lado direito do nariz, sulco sob o nariz, sob o lábio inferior e sob o queixo
+  P.add(`<ellipse cx="${106}" cy="${ny - 8}" rx="4.5" ry="12" fill="${dk}" opacity="0.45"/><ellipse cx="100" cy="${ny + 3}" rx="9" ry="3" fill="${dk}" opacity="0.4"/>`);
+  P.add(`<ellipse cx="100" cy="${my + 7}" rx="10" ry="3.2" fill="${dk}" opacity="0.4"/><ellipse cx="100" cy="${(o.chin ?? my + 18) + 2}" rx="26" ry="6" fill="${dk}" opacity="0.4"/>`);
+  // calor subcutâneo (bochechas, ponta do nariz)
+  P.add(`<ellipse cx="${100 - dx - 4}" cy="${ey + 17}" rx="11" ry="7" fill="${warm}" opacity="0.22"/><ellipse cx="${100 + dx + 4}" cy="${ey + 17}" rx="11" ry="7" fill="${warm}" opacity="0.16"/><ellipse cx="100" cy="${ny - 1}" rx="5" ry="3.5" fill="${warm}" opacity="0.2"/>`);
+  // luzes: testa, maçã esquerda, queixo
+  P.add(`<ellipse cx="90" cy="${ey - 26}" rx="15" ry="8" fill="#fff" opacity="0.32"/><ellipse cx="${100 - dx - 6}" cy="${ey + 11}" rx="9" ry="4.5" fill="#fff" opacity="0.28"/><ellipse cx="97" cy="${my + 12}" rx="6" ry="3" fill="#fff" opacity="0.2"/>`);
+  P.add('</g>');
+  P.add(`<g ${b2}><ellipse cx="98" cy="${ny - 9}" rx="2.2" ry="9" fill="#fff" opacity="0.4"/><ellipse cx="98.5" cy="${ny - 2}" rx="2.6" ry="1.8" fill="#fff" opacity="0.55"/></g>`);
+}
+
+/** Mechas: muitos fios afilados em dois tons ao longo de curvas geradas por `f` (dentro de um clip). */
+function strands(P: Pic, n: number, seed: number, f: (r: () => number, i: number) => Pt[], light: string, dark: string, w = 1.6): void {
+  const r = rng(seed);
+  let dk = '';
+  let lt = '';
+  let hl = '';
+  for (let i = 0; i < n; i++) {
+    const d = taper(f(r, i), w * (0.6 + r() * 0.8), 0.2, 12);
+    const k = r();
+    if (k < 0.45) dk += d;
+    else if (k < 0.85) lt += d;
+    else hl += d;
+  }
+  P.add(path(dk, dark, 'opacity="0.55"'), path(lt, light, 'opacity="0.45"'), path(hl, '#ffffff', 'opacity="0.35"'));
+}
 const path = (d: string, fill: string, extra = '') => `<path d="${d}" fill="${fill}" ${extra}/>`;
 const line = (d: string, color: string, w: number, op = 1) =>
   `<path d="${d}" fill="none" stroke="${color}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"${op < 1 ? ` opacity="${op}"` : ''}/>`;
@@ -144,7 +213,12 @@ function eye(
     <rect x="${-w}" y="${-h * 1.5}" width="${w * 2}" height="${h * 3}" fill="${o.sclera ?? P.lin([[0, '#c8bcb4'], [0.6, '#f8f4ee'], [1, '#e0d8d0']])}"/>
     <circle cx="${ix}" cy="${h * 0.08}" r="${r}" fill="${ig}"/>${pupil}
     <path d="M${-w} ${-h * 1.4} L${w} ${-h * 1.4} L${w} ${-h * (o.lid ?? 0.35)} C${w * 0.3} ${-h * 0.9} ${-w * 0.3} ${-h * 0.9} ${-w} ${-h * (o.lid ?? 0.35)}Z" fill="#000" opacity="0.28"/>
-    <circle cx="${ix - r * 0.38}" cy="${-r * 0.3}" r="${Math.max(0.9, r * 0.28)}" fill="#fff"/>
+    <circle cx="${ix}" cy="${h * 0.08}" r="${r * 0.72}" fill="none" stroke="${shade(iris, 1.8)}" stroke-width="${r * 0.18}" stroke-dasharray="${(r * 0.12).toFixed(2)} ${(r * 0.2).toFixed(2)}" opacity="0.5"/>
+    <circle cx="${ix}" cy="${h * 0.08}" r="${r}" fill="none" stroke="#000" stroke-width="${r * 0.14}" opacity="0.55"/>
+    <path d="M${-w} ${-h * 1.4} L${w} ${-h * 1.4} L${w} ${-h * 0.2} C${w * 0.3} ${-h * 0.5} ${-w * 0.3} ${-h * 0.5} ${-w} ${-h * 0.2}Z" fill="#000" opacity="0.18"/>
+    <circle cx="${ix - r * 0.38}" cy="${-r * 0.3}" r="${Math.max(0.9, r * 0.3)}" fill="#fff"/>
+    <circle cx="${ix + r * 0.42}" cy="${r * 0.38}" r="${Math.max(0.5, r * 0.13)}" fill="#fff" opacity="0.8"/>
+    <path d="M${-w * 0.6} ${h * 0.75} C${-w * 0.2} ${h * 0.95} ${w * 0.3} ${h * 0.95} ${w * 0.65} ${h * 0.7}" fill="none" stroke="#fff" stroke-width="0.7" opacity="0.5"/>
   </g><path d="${d}" fill="none" ${ink(1.2)}/><path d="M${-w - 1} ${0.5} C${-w * 0.5} ${-h * 1.35} ${w * 0.5} ${-h * 1.35} ${w + 0.5} ${-0.3}" fill="none" ${ink(2.4)}/></g>`;
 }
 
@@ -212,6 +286,7 @@ function snake(P: Pic): void {
   P.add(neon('M-6 10 L70 76', '#ff3ad0'), neon('M16 -6 L82 64', '#3ae8ff', 1.6), neon('M206 10 L130 76', '#3ae8ff'), neon('M184 -6 L118 64', '#ff3ad0', 1.6));
   P.add(neon('M147 52 C147 40 173 40 173 52 C173 64 147 64 147 52Z', '#ff4fd8', 2), neon('M153 55 C154 47 158 47 158 52 C158 57 162 57 163 49 C164 45 167 47 167 53', '#7af4ff', 1.3));
 
+  P.figure('#ff4fd0', '#4ae8ff', '#7a2a9a');
   const hair = P.lin([[0, '#fff6c8'], [0.3, '#f0c860'], [0.7, '#b8862a'], [1, '#5a3a10']]);
   // cabelo de trás: liso, comprido, caindo por trás dos ombros
   P.add(path('M100 24 C62 24 46 52 46 88 C46 122 40 152 26 190 C44 198 66 194 80 180 C74 156 70 132 70 108 L130 108 C130 132 126 156 120 180 C134 194 156 198 174 190 C160 152 154 122 154 88 C154 52 138 24 100 24Z', hair, ink(2)));
@@ -229,6 +304,14 @@ function snake(P: Pic): void {
     else lt += d;
   }
   P.add(path(dk, '#6a4612', 'opacity="0.55"'), path(lt, '#fff4c0', 'opacity="0.5"'));
+  P.add(`<g clip-path="${P.clip('<path d="M100 24 C62 24 46 52 46 88 C46 122 40 152 26 190 C44 198 66 194 80 180 C74 156 70 132 70 108 L130 108 C130 132 126 156 120 180 C134 194 156 198 174 190 C160 152 154 122 154 88 C154 52 138 24 100 24Z"/>')}">`);
+  strands(P, 70, 31, (r, i) => {
+    const sgn = i % 2 ? 1 : -1;
+    const x0 = 100 + sgn * (40 + r() * 16);
+    const x1 = 100 + sgn * (30 + r() * 66);
+    return [[x0, 50 + r() * 30], [x0 + sgn * 6, 100], [x1 - sgn * 4, 150], [x1, 196]];
+  }, '#fff0b0', '#5a3a0e', 1.8);
+  P.add(`<rect width="200" height="200" fill="${P.lin([[0, '#000', 0], [0.5, '#000', 0.1], [1, '#2a0a3a', 0.55]])}"/></g>`);
   // pescoço largo com pomo de adão e sombra do queixo
   const skin = '#e0a47a';
   P.add(path('M79 118 L77 162 Q100 172 123 162 L121 118Z', P.lin([[0, '#b06a48'], [0.5, '#d89670'], [1, '#a05c3c']], 0, 0, 1, 0), ink(1.4)));
@@ -257,6 +340,7 @@ function snake(P: Pic): void {
   const face = 'M100 40 C122 40 136 54 137 78 C138 94 137 106 134 116 C131 126 127 132 120 138 C114 143 107 145 100 145 C93 145 86 143 80 138 C73 132 69 126 66 116 C63 106 62 94 63 78 C64 54 78 40 100 40Z';
   const sc = skinFill(P, face, skin);
   P.add(`<g clip-path="${sc}">`);
+  sculpt(P, skin, { eyeY: 92, dx: 16, noseY: 114, mouthY: 127, chin: 141 });
   P.add(`<ellipse cx="84" cy="91" rx="14" ry="7" fill="#6a3420" opacity="0.3"/><ellipse cx="116" cy="91" rx="14" ry="7" fill="#6a3420" opacity="0.34"/>`);
   P.add(`<ellipse cx="78" cy="103" rx="9" ry="4" fill="#fff" opacity="0.16" transform="rotate(-22 78 103)"/><ellipse cx="122" cy="103" rx="8" ry="3.5" fill="#fff" opacity="0.1" transform="rotate(22 122 103)"/>`);
   P.add(symLine('M68 107 C74 117 80 123 87 127', '#6a3420', 5, 0.2));
@@ -295,7 +379,12 @@ function snake(P: Pic): void {
   P.add(line('M92 131.5 C97 133.5 104 133.5 109 131', '#f4b896', 1.6, 0.6), line('M93 134.5 C98 136 103 136 107 134.5', '#5a2818', 1.3, 0.35));
   // topo do cabelo e mechas sobre a testa
   P.add(path('M60 70 C56 42 76 22 100 22 C124 22 144 42 140 70 C128 58 114 54 100 54 C86 54 72 58 60 70Z', hair, ink(2)));
-  P.add(line('M72 50 C80 38 92 32 104 30 M84 50 C92 40 104 36 118 36 M110 52 C120 46 130 48 136 56', '#fff8d0', 1.1, 0.6));
+  P.add(`<g clip-path="${P.clip('<path d="M60 70 C56 42 76 22 100 22 C124 22 144 42 140 70 C128 58 114 54 100 54 C86 54 72 58 60 70Z"/>')}">`);
+  strands(P, 40, 37, (r) => {
+    const x = 60 + r() * 80;
+    return [[100 + (x - 100) * 0.2, 22], [x - 4, 30], [x, 44], [x + (x - 100) * 0.3, 70]];
+  }, '#fff8d0', '#7a5214', 1.6);
+  P.add('</g>');
   // bandana preta estampada com nó
   const band = 'M58 64 C70 46 130 46 142 64 L142 76 C130 60 70 60 58 76Z';
   P.add(path(band, P.lin([[0, '#4a4a56'], [0.45, '#1a1a22'], [1, '#050508']]), ink(2)));
@@ -332,6 +421,7 @@ function cyberhawk(P: Pic): void {
   P.add(sym('M0 128 L44 122 L50 160 L0 168Z', '#0a1a12', ink(1.5)), sym('M6 132 L40 127 L44 154 L8 160Z', P.lin([[0, '#1a8a4a'], [1, '#063a1a']]), 'opacity="0.9"'));
   P.add(symLine('M10 138 L36 134 M10 144 L30 141 M10 150 L38 146', '#8affb0', 1, 0.8));
 
+  P.figure('#3aff7a', '#ff3ad0', '#0a4a22');
   const chrome = P.lin([[0, '#ffffff'], [0.18, '#c9d0da'], [0.42, '#6f7888'], [0.5, '#eef2f6'], [0.64, '#8a93a3'], [1, '#2a303c']]);
   const chromeDk = P.lin([[0, '#d8dee6'], [0.4, '#6a7282'], [0.55, '#b8c0cc'], [1, '#1e232c']]);
   // armadura
@@ -391,6 +481,7 @@ function ivanzypher(P: Pic): void {
   P.add(path(taper([[4, 206], [-6, 140], [44, 110], [20, 56]], 24, 5), bgT, 'opacity="0.85"'), path(taper(mirPts([[4, 206], [-6, 140], [44, 110], [20, 56]]), 24, 5), bgT, 'opacity="0.85"'));
   P.add(path(taper([[20, 56], [10, 36], [34, 30], [36, 44]], 5, 2), bgT, 'opacity="0.85"'), path(taper(mirPts([[20, 56], [10, 36], [34, 30], [36, 44]]), 5, 2), bgT, 'opacity="0.85"'));
   P.add(path(taper([[30, 206], [40, 170], [8, 150], [14, 120]], 14, 3), '#24561a', 'opacity="0.9"'), path(taper(mirPts([[30, 206], [40, 170], [8, 150], [14, 120]]), 14, 3), '#24561a', 'opacity="0.9"'));
+  P.figure('#e8ff8a', '#8aff4a', '#3a7a1a');
   // corpo
   P.add(path('M10 200 C14 170 40 152 76 146 L124 146 C160 152 186 170 190 200Z', P.lin([[0, '#4a5a2a'], [1, '#141a08']]), ink(2)));
   // cabeça bulbosa
@@ -462,6 +553,7 @@ function katarina(P: Pic): void {
   P.add(symLine('M30 4 L8 122', '#8a96aa', 1.2, 0.6));
   P.add(path('M0 150 C40 134 160 134 200 150 L200 200 L0 200Z', P.lin([[0, '#3a322c'], [1, '#141010']]), ink(1.5)));
   P.add(glowEye(P, 22, 162, 3, '#40c8ff'), glowEye(P, 178, 162, 3, '#ffb020'), glowEye(P, 36, 172, 2, '#60ff80'));
+  P.figure('#ffe0a0', '#8ad0ff', '#e8c890');
   // traje espacial branco
   const suit = P.lin([[0, '#ffffff'], [0.45, '#dfe3ea'], [1, '#8a909e']], 0.2, 0, 0.6, 1);
   P.add(path('M12 200 C14 172 38 156 70 150 L130 150 C162 156 186 172 188 200Z', suit, ink(2)));
@@ -525,6 +617,7 @@ function jake(P: Pic): void {
   P.add(path(winI, 'none', ink(2)), line('M36 20 L164 20', '#aab0c0', 1, 0.5));
   P.add(`<g fill="#9aa0b0" ${ink(0.6)}><circle cx="6" cy="60" r="1.8"/><circle cx="6" cy="110" r="1.8"/><circle cx="194" cy="60" r="1.8"/><circle cx="194" cy="110" r="1.8"/><circle cx="60" cy="9" r="1.8"/><circle cx="140" cy="9" r="1.8"/></g>`);
   P.add(neon('M148 34 L178 32 L179 50 L149 52Z', '#6aff6a', 1.1), neon('M153 40 C155 37 157 43 159 40 C161 37 163 43 165 40 M156 46 L172 45', '#9affc0', 0.8));
+  P.figure('#ff8a4a', '#c04aff', '#8a3a6a');
   // jaqueta com espinhos
   P.add(path('M84 124 L84 156 Q100 166 116 156 L116 124Z', P.lin([[0, '#7a4a30'], [1, '#b87a58']])));
   P.add(path('M84 128 C90 142 110 142 116 128 L116 142 C110 150 90 150 84 142Z', '#000', 'opacity="0.3"'));
@@ -540,7 +633,9 @@ function jake(P: Pic): void {
   P.add(`<circle cx="57" cy="110" r="4.2" fill="none" stroke="#e8ecf2" stroke-width="2"/><circle cx="57" cy="110" r="4.2" fill="none" ${ink(0.6)}/>`);
   // cabeça com laterais raspadas
   const hc = skinFill(P, facePath(40, 37, 27, 142), skin, { rim: '#ff9a5a', rim2: '#c46aff' });
-  P.add(`<g clip-path="${hc}">`, sym('M60 84 C58 58 68 44 86 38 L88 62 C78 64 70 72 66 86Z', '#2a3a6a', 'opacity="0.55"'));
+  P.add(`<g clip-path="${hc}">`);
+  sculpt(P, skin, { eyeY: 90, dx: 17, noseY: 112, mouthY: 125, chin: 140 });
+  P.add(sym('M60 84 C58 58 68 44 86 38 L88 62 C78 64 70 72 66 86Z', '#2a3a6a', 'opacity="0.55"'));
   const r = rng(3);
   let stub = '';
   for (let i = 0; i < 110; i++) {
@@ -582,6 +677,7 @@ function tarquinn(P: Pic): void {
   const ice = P.lin([[0, '#f4fcff'], [0.5, '#9ad4f4'], [1, '#2a6aa0']], 0, 0, 1, 1);
   P.add(sym('M0 200 L0 110 L12 94 L20 128 L32 86 L44 140 L58 200Z', ice, ink(1.2)));
   P.add(symLine('M12 94 L16 150 M32 86 L34 160 M20 128 L10 170', '#fff', 1, 0.7));
+  P.figure('#9af4ff', '#7affc8', '#6ab0e0');
   // ombros de cristal
   const body = 'M8 200 C12 176 34 160 66 154 L134 154 C166 160 188 176 192 200Z';
   P.add(path(body, P.lin([[0, '#e8f8ff'], [0.4, '#8ac8ec'], [1, '#1a4a7a']], 0.3, 0, 0.6, 1), ink(2)));
@@ -593,13 +689,14 @@ function tarquinn(P: Pic): void {
   P.add(sym('M64 120 L72 150 L58 160Z', '#fff', 'opacity="0.45"'), sym('M72 150 L92 184 L86 142Z', '#0a3a6a', 'opacity="0.25"'));
   P.add(line('M92 184 L100 196 L108 184', INK, 1.4));
   // orelhas pontudas longas
-  const skin = '#b8cde6';
+  const skin = '#bcd8f0';
   P.add(sym('M66 84 C50 74 30 56 10 36 C22 60 40 84 56 102 C60 106 64 106 67 100Z', P.lin([[0, '#6a88b0'], [1, '#d8e8f8']], 0, 0, 1, 0), ink(1.8)));
   P.add(sym('M62 88 C48 78 34 64 22 50 C32 66 44 82 58 96Z', '#5a78a0', 'opacity="0.6"'));
   // cabeça alongada careca
   const head = 'M100 20 C132 20 142 46 140 74 C138 96 132 112 122 126 C114 136 106 142 100 142 C94 142 86 136 78 126 C68 112 62 96 60 74 C58 46 68 20 100 20Z';
   const hc = skinFill(P, head, skin, { light: '#f6fbff', rim: '#9af4ff' });
   P.add(`<g clip-path="${hc}">`);
+  sculpt(P, skin, { eyeY: 92, dx: 16, noseY: 114, mouthY: 127, chin: 140, cool: true, warm: '#8a7aff' });
   P.add(`<ellipse cx="86" cy="36" rx="18" ry="10" fill="#fff" opacity="0.4" transform="rotate(-20 86 36)"/>`);
   P.add(symLine('M72 108 C78 118 84 124 90 128', '#3a5a88', 4, 0.2), symLine('M84 30 C82 44 84 56 88 64', '#5a7aa8', 1.2, 0.35));
   P.add('</g>');
@@ -626,6 +723,7 @@ function olaf(P: Pic): void {
   P.add(line('M0 60 L42 60 M0 80 L10 80 M34 80 L42 80 M20 44 L20 60', '#1a1612', 1.2));
   const wood = P.lin([[0, '#7a4a24'], [0.5, '#a86a34'], [1, '#4a2a12']], 0, 0, 1, 0);
   P.add(path('M0 0 L200 0 L200 14 L0 14Z', P.lin([[0, '#a86a34'], [1, '#4a2a12']])), path('M0 0 L10 0 L10 200 L0 200Z', wood), path('M190 0 L200 0 L200 200 L190 200Z', wood));
+  P.figure('#ffb050', '#cfe4ff', '#9ab4c8');
   // pele de animal nos ombros com escudos de metal
   const furTop: string[] = [];
   const rf = rng(8);
@@ -663,7 +761,10 @@ function olaf(P: Pic): void {
   // rosto
   const skin = '#e89a74';
   P.add(sym('M64 88 C56 86 54 96 56 104 C58 110 62 112 66 108Z', P.lin([[0, '#b86a48'], [1, skin]]), ink(1.5)));
-  skinFill(P, facePath(52, 38, 30, 140), skin);
+  const oc = skinFill(P, facePath(52, 38, 30, 140), skin);
+  P.add(`<g clip-path="${oc}">`);
+  sculpt(P, skin, { eyeY: 93, dx: 17, noseY: 114, mouthY: 126, chin: 138 });
+  P.add('</g>');
   P.add(`<ellipse cx="78" cy="104" rx="11" ry="7" fill="${P.rad([[0, '#e0403a', 0.45], [1, '#e0403a', 0]])}"/><ellipse cx="122" cy="104" rx="11" ry="7" fill="${P.rad([[0, '#e0403a', 0.4], [1, '#e0403a', 0]])}"/>`);
   // capacete
   const steel = P.lin([[0, '#f4f7fa'], [0.3, '#aab2be'], [0.6, '#5a6270'], [1, '#2a3038']]);
@@ -815,6 +916,7 @@ function rival(P: Pic, f: Face, seed: number): void {
   let emb = '';
   for (let i = 0; i < 26; i++) emb += `<circle cx="${(r() * 200).toFixed(1)}" cy="${(90 + r() * 110).toFixed(1)}" r="${(0.6 + r() * 1.4).toFixed(1)}" fill="${r() < 0.5 ? '#ffb040' : '#ff5a1a'}" opacity="${(0.4 + r() * 0.6).toFixed(2)}"/>`;
   P.add(`<ellipse cx="100" cy="210" rx="130" ry="60" fill="${P.rad([[0, '#ff7a1a', 0.55], [1, '#ff3a0a', 0]])}"/>`, emb);
+  P.figure(shade(f.bg, 1.9), '#ffb040', shade(f.bg, 1.2));
   // cabelo de trás
   const hairG = P.lin([[0, shade(hairC, 1.6)], [0.4, hairC], [1, shade(hairC, 0.4)]]);
   if (f.hair === 'long' || f.hair === 'mullet') {
@@ -846,6 +948,7 @@ function rival(P: Pic, f: Face, seed: number): void {
     for (let y = 40; y < 90; y += 7) for (let x = 70 + ((y / 7) % 2) * 3.5; x < 132; x += 7) sc += `M${x} ${y} C${x + 2} ${y + 4} ${x + 5} ${y + 4} ${x + 7} ${y}`;
     P.add(line(sc, shade(f.skin, 0.5), 0.9, 0.5));
   }
+  if (!metal) sculpt(P, f.skin, { eyeY: 91, dx: 18, noseY: 113, mouthY: 125, chin: 140, cool: f.head === 'long' || f.head === 'brute' });
   if (metal) P.add(`<ellipse cx="82" cy="44" rx="16" ry="7" fill="#fff" opacity="0.5" transform="rotate(-18 82 44)"/>`);
   if (f.head === 'robot') P.add(line('M100 32 L100 70 M60 58 L80 62 M140 58 L120 62 M58 118 L76 112 M142 118 L124 112', shade(f.skin, 0.4), 1.5));
   P.add('</g>');
@@ -969,10 +1072,31 @@ const HEROES: Record<string, (P: Pic) => void> = { snake, cyberhawk, ivanzypher,
 export function portraitSvg(nameOrId: string, size = 96): string {
   const key = faceKey(nameOrId);
   const P = new Pic();
-  P.add(`<g clip-path="${P.clip('<rect x="3" y="3" width="194" height="194" rx="20"/>')}">`);
   const hero = HEROES[key];
   if (hero) hero(P);
   else rival(P, FACES[key] ?? genericFace(nameOrId), hash(key || nameOrId));
+  // separa cenário e figura: cenário desfocado (profundidade) + névoa; figura com luz de recorte
+  // colorida nos dois lados e sombra projetada sobre o fundo (oclusão)
+  const s = Math.max(0, P.subj);
+  const scene = P.out.splice(0, P.out.length);
+  const fx = `${P.id}fx`;
+  const U = 'x="-20" y="-20" width="240" height="240" filterUnits="userSpaceOnUse"';
+  const rimPart = (dx: number, color: string, tag: string) =>
+    `<feOffset in="SourceAlpha" dx="${dx}" dy="1.5" result="${tag}o"/><feComposite in="SourceAlpha" in2="${tag}o" operator="out" result="${tag}e"/><feGaussianBlur in="${tag}e" stdDeviation="0.9" result="${tag}b"/><feFlood flood-color="${color}" flood-opacity="0.95"/><feComposite in2="${tag}b" operator="in" result="${tag}"/>`;
+  P.defs.push(
+    `<filter id="${fx}bg" ${U}><feGaussianBlur stdDeviation="${size >= 80 ? 1.1 : 0.6}"/></filter>`,
+    `<filter id="${fx}rim" ${U}>${rimPart(3.2, P.rimL, 'l')}${rimPart(-3.2, P.rimR, 'r')}<feGaussianBlur in="SourceAlpha" stdDeviation="4" result="sh"/><feOffset in="sh" dx="3" dy="4" result="sho"/><feFlood flood-color="#000" flood-opacity="0.55"/><feComposite in2="sho" operator="in" result="shadow"/><feMerge><feMergeNode in="shadow"/><feMergeNode in="SourceGraphic"/></feMerge><feBlend in2="l" mode="screen" result="m1"/><feBlend in="m1" in2="r" mode="screen"/></filter>`,
+  );
+  if (size >= 80) {
+    // borda pintada: deslocamento leve por ruído (contornos à mão, sem aspecto de vetor)
+    P.defs.push(`<filter id="${fx}p" ${U}><feTurbulence type="fractalNoise" baseFrequency="0.09" numOctaves="2" seed="4"/><feDisplacementMap in="SourceGraphic" scale="${size >= 160 ? 1.7 : 1.2}" xChannelSelector="R" yChannelSelector="G"/></filter>`);
+  }
+  P.add(`<g clip-path="${P.clip('<rect x="3" y="3" width="194" height="194" rx="20"/>')}">`);
+  if (size >= 80) P.add(`<g filter="url(#${fx}p)">`);
+  P.add(`<g filter="url(#${fx}bg)">`, ...scene.slice(0, s), '</g>');
+  P.add(`<rect width="200" height="200" fill="${P.lin([[0, P.fog, 0.04], [0.6, P.fog, 0.22], [1, P.fog, 0.08]])}"/>`);
+  P.add(`<g filter="url(#${fx}rim)">`, ...scene.slice(s), '</g>');
+  if (size >= 80) P.add('</g>');
   paintFinish(P);
   // vinheta e brilho de vidro
   P.add(bgRect(P.rad([[0, '#000', 0], [0.62, '#000', 0], [1, '#000', 0.6]], 0.5, 0.45, 0.78)));

@@ -29,8 +29,8 @@ export const VEHICLES: Record<string, VehicleSpec> = {
   },
   battletrak: {
     ...base, id: 'battletrak', name: 'Battle Trak', maxSpeed: 41.5, accel: 35, steerRate: 3.0, grip: 16, nitroAccel: 28,
-    armor: 115, front: 'missile', frontCharges: 2, rear: 'scatter', rearCharges: 1, assist: 'nitro', nitroCharges: 2, traction: 'treads',
-    halfWidth: 1.25 * CAR_SCALE, mass: 1.2, brake: 50,
+    armor: 110, front: 'missile', frontCharges: 2, rear: 'scatter', rearCharges: 1, assist: 'nitro', nitroCharges: 2, traction: 'treads',
+    halfWidth: 1.25 * CAR_SCALE, mass: 1.1, brake: 50,
   },
   havac: {
     ...base, id: 'havac', name: 'Havac', maxSpeed: 44, accel: 32.5, steerRate: 2.9, grip: 6.5, nitroAccel: 30,

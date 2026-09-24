@@ -74,7 +74,13 @@ export type DecalStyle = 'stripes' | 'number' | 'both';
  * Decalque de capô/teto: faixas de corrida duplas e círculo com número.
  * Visto de cima pela câmera aérea, dá identidade a cada carro na pista.
  */
+const decalCache = new Map<string, THREE.CanvasTexture>();
+
 function decalTexture(color: number, number: number, style: DecalStyle, aspect: number): THREE.CanvasTexture {
+  // compartilhada: mesma cor/número/estilo/proporção = mesma textura (várias peças e carros)
+  const key = `${color}|${number}|${style}|${aspect.toFixed(2)}`;
+  const hit = decalCache.get(key);
+  if (hit) return hit;
   const c = document.createElement('canvas');
   c.width = 256;
   c.height = Math.max(64, Math.round(256 * aspect));
@@ -107,9 +113,23 @@ function decalTexture(color: number, number: number, style: DecalStyle, aspect: 
     g.textBaseline = 'middle';
     g.fillText(String(number), 128, cy + R * 0.09);
   }
+  if (style !== 'stripes') {
+    // riscos e lascas no adesivo (gasto de corrida)
+    let seed = number * 7919 + 1;
+    const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    g.globalCompositeOperation = 'destination-out';
+    for (let i = 0; i < 14; i++) {
+      const a = rnd() * Math.PI * 2;
+      const rr = R * (0.55 + rnd() * 0.5);
+      g.fillStyle = `rgba(0,0,0,${0.35 + rnd() * 0.5})`;
+      g.fillRect(128 + Math.cos(a) * rr, cy + Math.sin(a) * rr, 2 + rnd() * 5, 1 + rnd() * 3);
+    }
+    g.globalCompositeOperation = 'source-over';
+  }
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   t.anisotropy = 4;
+  decalCache.set(key, t);
   return t;
 }
 
@@ -130,6 +150,8 @@ export class Kit {
   /** faixas de perigo amarelas */
   readonly warn = new THREE.MeshStandardMaterial({ color: 0xffc400, emissive: 0xff9a00, emissiveIntensity: 0.35, roughness: 0.5 });
   readonly dash = new THREE.MeshStandardMaterial({ color: 0x0e0e12, roughness: 0.85 });
+  /** bocas das armas: cromado com brilho fraco (as armas leem na câmera aérea) */
+  readonly muzzle = new THREE.MeshStandardMaterial({ color: 0xe4e9ef, metalness: 0.75, roughness: 0.18, emissive: 0xfff0d0, emissiveIntensity: 0.4, envMapIntensity: 1.5 });
   /** bocas dos rifles de plasma (VK Plasma Rifles): verde elétrico */
   readonly plasmaGlow = new THREE.MeshStandardMaterial({ color: 0x40ff90, emissive: 0x30ff80, emissiveIntensity: 3.2 });
   /** núcleo do emissor Sundog: sol laranja */
@@ -234,14 +256,15 @@ export class Kit {
 
   /* -------------------------- armas e acessórios -------------------------- */
 
-  /** VK Plasma Rifle: cano com aletas de refrigeração e boca verde acesa, apontando para +z. */
-  plasmaRifle(x: number, y: number, z: number, len = 1.0, parent: THREE.Object3D = this.body): void {
-    this.add(new THREE.BoxGeometry(0.24, 0.18, len * 0.45), this.gunMetal, x, y, z - len * 0.2, parent);
-    this.add(new THREE.CylinderGeometry(0.06, 0.075, len, 10).rotateX(Math.PI / 2), this.gunMetal, x, y + 0.02, z + len * 0.25, parent);
-    for (let i = 0; i < 3; i++) this.add(new THREE.CylinderGeometry(0.1, 0.1, 0.04, 10).rotateX(Math.PI / 2), this.steel, x, y + 0.02, z + i * 0.14, parent);
-    // boca: anel largo e núcleo verde aceso (lê na câmera aérea)
-    this.add(new THREE.CylinderGeometry(0.1, 0.085, 0.1, 12).rotateX(Math.PI / 2), this.gunMetal, x, y + 0.02, z + len * 0.74, parent);
-    this.add(new THREE.CylinderGeometry(0.075, 0.075, 0.04, 12).rotateX(Math.PI / 2), this.plasmaGlow, x, y + 0.02, z + len * 0.8, parent);
+  /** VK Plasma Rifle: cano cromado com aletas de refrigeração e boca verde acesa, apontando para +z. `sc` aumenta a arma toda. */
+  plasmaRifle(x: number, y: number, z: number, len = 1.0, parent: THREE.Object3D = this.body, sc = 1): void {
+    const L = len * sc;
+    this.add(new THREE.BoxGeometry(0.24 * sc, 0.18 * sc, L * 0.45), this.gunMetal, x, y, z - L * 0.2, parent);
+    this.add(new THREE.CylinderGeometry(0.06 * sc, 0.075 * sc, L, 10).rotateX(Math.PI / 2), sc > 1 ? this.chrome : this.gunMetal, x, y + 0.02 * sc, z + L * 0.25, parent);
+    for (let i = 0; i < 3; i++) this.add(new THREE.CylinderGeometry(0.1 * sc, 0.1 * sc, 0.04 * sc, 10).rotateX(Math.PI / 2), this.steel, x, y + 0.02 * sc, z + i * 0.14 * sc, parent);
+    // boca: anel largo cromado com brilho fraco e núcleo verde aceso (lê na câmera aérea)
+    this.add(new THREE.CylinderGeometry(0.1 * sc, 0.085 * sc, 0.1 * sc, 12).rotateX(Math.PI / 2), sc > 1 ? this.muzzle : this.gunMetal, x, y + 0.02 * sc, z + L * 0.74, parent);
+    this.add(new THREE.CylinderGeometry(0.075 * sc, 0.075 * sc, 0.04 * sc, 12).rotateX(Math.PI / 2), this.plasmaGlow, x, y + 0.02 * sc, z + L * 0.8, parent);
   }
 
   /** Locust Jump Jets: bocal apontado para baixo, com brilho laranja por dentro. */
@@ -357,6 +380,40 @@ export class Kit {
     const yB = probe(z - l * 0.4) ?? yF;
     const tilt = Math.atan2(yB - yF, l * 0.8);
     return this.decal(w, l, x, (yF + yB) / 2 + 0.025, z, tilt, style, parent);
+  }
+
+  /**
+   * Decalque na lateral (porta) de `surface`, lado `side` (±1): projetado de fora para dentro, acha a
+   * parede e o ângulo dela em planta. Lê de fora, com o topo para cima.
+   */
+  decalSide(surface: THREE.Mesh, w: number, h: number, side: number, y: number, z: number, style: DecalStyle = 'number', parent: THREE.Object3D = this.body): THREE.Mesh | null {
+    surface.updateMatrixWorld(true);
+    const ray = new THREE.Raycaster();
+    const dir = new THREE.Vector3(-side, 0, 0);
+    const probe = (pz: number): number | null => {
+      ray.set(new THREE.Vector3(side * 10, y, pz), dir);
+      const hit = ray.intersectObject(surface, false)[0];
+      return hit ? hit.point.x : null;
+    };
+    const x0 = probe(z);
+    if (x0 === null) return null;
+    const xF = probe(z + w * 0.4) ?? x0;
+    const xB = probe(z - w * 0.4) ?? x0;
+    const yaw = Math.atan2(xF - xB, w * 0.8);
+    const mat = new THREE.MeshStandardMaterial({
+      map: decalTexture(this.color, this.number, style, h / w),
+      transparent: true,
+      roughness: 0.35,
+      metalness: 0.1,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      depthWrite: false,
+    });
+    const geo = new THREE.PlaneGeometry(w, h).rotateY((side * Math.PI) / 2);
+    const m = this.add(geo, mat, x0 + side * 0.025, y, z, parent);
+    m.rotation.y = yaw;
+    m.castShadow = false;
+    return m;
   }
 
   /**

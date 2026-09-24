@@ -4,8 +4,9 @@ import { getBuffer, loadBuffer, publicUrl } from './samples';
 
 /**
  * Locutor no estilo do "Loudmouth" Larry do original: a fala é montada como NOME + FRASE
- * ("Viper jams into first!"). As falas são gravadas por TTS neural (Kokoro, ver
- * public/audio/CREDITOS.md e scripts/gerar-locutor.mjs); sem elas, usa a voz do navegador.
+ * ("Viper jams into first!"). As falas são gravadas por TTS neural (Chatterbox, com exagero
+ * emocional alto; ver public/audio/CREDITOS.md, scripts/locutor/gerar.py e o pós-tratamento
+ * scripts/locutor/tratar.py, que iguala o loudness e apara as falas); sem elas, usa a voz do navegador.
  */
 
 /** Frases (chave -> texto usado no fallback com voz do navegador). */

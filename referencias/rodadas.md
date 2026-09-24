@@ -43,3 +43,28 @@ pouco emotivo; efeitos de contato fracos; aviso de girar o celular; HUD mistura 
 - Carros: escala visual por modelo para ocupar a área do Havac (`VISUAL_SCALE` em `src/render/cars/index.ts`).
 - Salto: teto de 6 m/s na subida da rampa; vão = pouso 4 m depois do buraco (+0,2 m por m/s acima de
   22 m/s); vão duplo pousa na rampa do meio. Voo: ~30 m (antes ~48 m; o duplo era 70 m).
+
+# Rodada 4 (2026-09-23)
+
+Notas: Visual 7 · Carros 7 · Jogabilidade 7,2 · Interface 7 · Som 7 (nenhum aprovado).
+Usuário (item 38): o jogo não é simulador, é para ser divertido (arcade acima de realismo).
+
+Feito:
+- Visual: colocação do HUD em cor sólida (o gradiente recortado saía preto); avisos centrais no terço
+  de cima; vinheta mais forte; menos luz ambiente (hemisférica 0,7, ambiente 0,7, exposição 1,1) e sol
+  mais forte; neve de Nho e Bogmire menos estourados; perseguição mais perto; cockpit mais alto e
+  inclinado, capô com para-lamas, faróis e friso, retrovisor com moldura; scatter virou esfera escura
+  com brilho vermelho.
+- Carros: Air Blade com nadadeira de tubarão, asas largas, bandeja cinza e casulos de míssil; Havac
+  com dutos carenados, cúpula baixa, listras diagonais e canhão do Sundog; Battle Trak com esteiras
+  mais altas que o casco; Havac com balanço de mola.
+- Jogabilidade: faixa de arranque maior (Air Blade 41 … Havac 32,5); massas limitadas a 1,25:1 nas
+  batidas; esteira/aerodeslizador resistem ao óleo (metade do giro) em vez de imunes; sundog da CPU só
+  com alvo a < 25 m e 1 disparo a cada 1,5 s; bônus de volta pago só se vencer. Posição média em
+  corridas mistas: 2,15–2,76 sem armas e 1,96–2,77 com armas (antes 1,20–3,39).
+- Interface: retratos refeitos (Snake homem, card grande com placa metálica), menu/pausa do celular
+  em duas colunas sem rolagem, munição abaixo do ícone, menus a 30 fps, ícones SVG no lugar de emojis,
+  miniaturas de pista com as cores do planeta, rampas e vãos.
+- Som: efeitos fora do compressor (impactos +5 a +8 dB na mix), soft-clip só de segurança, motor com
+  formantes que abrem com a rotação, nitro grave, locutor com loudness igualado e takes calmos
+  descartados, trilha sintetizada com seções e levada por planeta, efeitos de interface com corpo.

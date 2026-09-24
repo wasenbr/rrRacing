@@ -696,14 +696,24 @@ export class Game {
   /** Volume de um som conforme a distância até o jogador. */
   private vol(x: number, z: number): number {
     const c = this.player.car;
-    return clamp(1 - Math.hypot(x - c.x, z - c.z) / 90, 0, 1);
+    // queda suave (quadrática): perto soa forte, longe some sem corte brusco
+    const t = clamp(1 - Math.hypot(x - c.x, z - c.z) / 90, 0, 1);
+    return t * t * 0.7 + t * 0.3;
   }
 
   /** Posição do som na tela, de -1 (esquerda) a +1 (direita), para o pan estéreo. */
   private pan(x: number, z: number): number {
+    // lado pelo vetor "direita" da câmera (project() inverte o x de fontes atrás da câmera)
     const cam = this.rig.active;
-    const v = this.panVec.set(x, this.player.car.y, z).project(cam);
-    return clamp(v.x * 0.8, -0.8, 0.8);
+    const right = this.panVec.set(1, 0, 0).applyQuaternion(cam.quaternion);
+    const c = this.player.car;
+    const dx = x - c.x;
+    const dz = z - c.z;
+    const d = Math.hypot(dx, dz);
+    if (d < 0.5) return 0;
+    const side = (dx * right.x + dz * right.z) / (d * Math.max(1e-6, Math.hypot(right.x, right.z)));
+    // perto do carro o som fica mais ao centro
+    return clamp(side * 0.8 * Math.min(1, d / 12), -0.8, 0.8);
   }
 
   private onEvent(e: WorldEvent): void {

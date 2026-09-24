@@ -69,35 +69,44 @@ const clamp01 = (t: number) => Math.min(1, Math.max(0, t));
 /* Casco de peça única (tubarão/jato)                                   */
 /* ------------------------------------------------------------------ */
 
-/** Meia-largura do casco em z: cheio atrás, afinando até o bico pontudo. */
+/** Meia-largura do casco em z: cheio no meio, afinando até o bico pontudo e até a cauda (rabo de tubarão). */
 function hullW(z: number): number {
-  const u = clamp01((z + 0.1) / (NOSE + 0.1));
-  let w = 0.8 * Math.pow(1 - Math.pow(u, 2.5), 0.65);
-  const t = clamp01((z - TAIL) / 0.35); // traseira arredondada
-  w *= 0.82 + 0.18 * Math.sqrt(t * (2 - t));
+  let w: number;
+  if (z >= -0.2) {
+    const u = clamp01((z + 0.2) / (NOSE + 0.2));
+    w = 0.8 * Math.pow(1 - Math.pow(u, 2.5), 0.65);
+  } else {
+    const t = clamp01((z - TAIL) / (-0.2 - TAIL));
+    w = 0.8 * (0.3 + 0.7 * smooth(t));
+    const e = clamp01((z - TAIL) / 0.2); // fecha a cauda numa quilha estreita
+    w *= 0.4 + 0.6 * Math.sqrt(e * (2 - e));
+  }
   return Math.max(0.035, w);
 }
 
-/** Altura do dorso em z: bico baixo, subindo até a cabine e a cauda. */
+/** Altura do dorso em z: bico baixo, subindo até a cabine e virando a base da barbatana atrás. */
 function hullTop(z: number): number {
   let y: number;
   if (z > 0.9) y = 1.66 - (1.66 - 1.3) * Math.pow((z - 0.9) / (NOSE - 0.9), 1.3);
-  else y = 1.66 + 0.3 * smooth(clamp01((0.9 - z) / 2.0)); // dorso sobe atrás e vira a barbatana
-  const t = clamp01((z - TAIL) / 0.35);
-  const tail = Math.sqrt(t * (2 - t));
-  y = BASE + (y - BASE) * (0.72 + 0.28 * tail);
+  else y = 1.66 + 0.24 * smooth(clamp01((0.9 - z) / 1.8));
+  const t = clamp01((z - TAIL) / 0.3);
+  y = BASE + (y - BASE) * (0.7 + 0.3 * Math.sqrt(t * (2 - t)));
   if (z > NOSE - 0.12) y = BASE + (y - BASE) * (0.55 + 0.45 * ((NOSE - z) / 0.12));
   return y;
 }
 
+/** Fundo do casco: plano, levantando na cauda (rabo de tubarão). */
+const hullBot = (z: number) => BASE + 0.22 * Math.pow(clamp01((-1.2 - z) / (-1.2 - TAIL)), 1.6);
+
 function hullGeo(): THREE.BufferGeometry {
   const rings: THREE.Vector3[][] = [];
   const N = 30;
-  const S = 40;
+  const S = 44;
   for (let i = 0; i <= S; i++) {
     const z = TAIL + (NOSE - TAIL) * (1 - Math.pow(1 - i / S, 1.15));
     const w = hullW(z);
-    const h = hullTop(z) - BASE;
+    const yb = hullBot(z);
+    const h = hullTop(z) - yb;
     const ring: THREE.Vector3[] = [];
     for (let j = 0; j < N; j++) {
       const a = (j / N) * Math.PI * 2;
@@ -105,7 +114,7 @@ function hullGeo(): THREE.BufferGeometry {
       const s = Math.sin(a);
       const x = w * Math.sign(c) * Math.pow(Math.abs(c), 0.7);
       // lado de cima: superelipse (ombros cheios); de baixo: quase plano
-      const y = s >= 0 ? BASE + h * Math.pow(s, 0.8) : BASE - 0.05 * Math.pow(-s, 0.5);
+      const y = s >= 0 ? yb + h * Math.pow(s, 0.8) : yb - 0.05 * Math.pow(-s, 0.5);
       ring.push(new THREE.Vector3(x, y, z));
     }
     rings.push(ring);
@@ -114,65 +123,71 @@ function hullGeo(): THREE.BufferGeometry {
 }
 
 /* ------------------------------------------------------------------ */
-/* Barbatana dorsal curva e asas varridas                               */
+/* Barbatana em foice e asas trapezoidais varridas                      */
 /* ------------------------------------------------------------------ */
 
-const FIN_Y0 = 1.45; // a raiz fica dentro do casco: a barbatana nasce dele, grossa
-const FIN_H = 1.9;
-/** linha média da corda: curva cada vez mais para trás (nadadeira de tubarão) */
-const finMid = (t: number) => -1.0 - 1.4 * Math.pow(t, 1.6);
-/** meia-corda: base longa (do fim da cabine à traseira), fechando em ponta arredondada */
-const finHC = (t: number) => 1.05 * Math.pow(1 - t, 0.55) * (1 - 0.2 * t);
-const finLE = (t: number) => finMid(t) + finHC(t);
-const finTE = (t: number) => finMid(t) - finHC(t);
-/** meia-espessura: bem grossa na base e ainda encorpada no meio */
-const finTh = (t: number) => 0.08 + 0.44 * Math.pow(1 - t, 0.8);
+const FIN_Y0 = 1.45; // a raiz fica dentro do casco: a barbatana nasce dele
+const FIN_H = 2.05;
+/** bordo de ataque: convexo, subindo e curvando cada vez mais para trás */
+const finLE = (t: number) => -0.05 - 1.0 * t - 1.4 * t * t;
+/** bordo de fuga: côncavo (foice), da cauda até a ponta */
+const finTE = (t: number) => -2.02 - 0.43 * t + 1.25 * t * Math.pow(1 - t, 1.3);
+/** meia-espessura: na raiz acompanha a largura do casco (continua com ele), vira lâmina acima */
+const finTh = (t: number, z: number) => {
+  const blade = 0.035 + 0.11 * Math.pow(1 - t, 0.7);
+  const k = smooth(clamp01(t / 0.32));
+  return hullW(z) * 0.9 * (1 - k) + blade * k;
+};
 
 function finGeo(): THREE.BufferGeometry {
   const rings: THREE.Vector3[][] = [];
-  const N = 22;
-  const S = 22;
+  const N = 26;
+  const S = 26;
   for (let i = 0; i <= S; i++) {
-    const t = 1 - Math.pow(1 - i / S, 1.4); // mais anéis perto da ponta
+    const t = 1 - Math.pow(1 - i / S, 1.3); // mais anéis perto da ponta
     const y = FIN_Y0 + FIN_H * t;
     const le = finLE(t);
     const te = finTE(t);
     const mid = (le + te) / 2;
-    const hc = (le - te) / 2;
-    const th = finTh(t);
+    const hc = Math.max(0.03, (le - te) / 2);
     const ring: THREE.Vector3[] = [];
     for (let j = 0; j < N; j++) {
       const a = (j / N) * Math.PI * 2;
       const c = Math.cos(a);
+      const z = mid + hc * c;
       // perfil de aerofólio: mais grosso perto do bordo de ataque
-      const x = th * Math.sin(a) * (0.75 + 0.25 * c);
-      ring.push(new THREE.Vector3(x, y, mid + hc * c));
+      const x = finTh(t, z) * Math.sin(a) * (0.72 + 0.28 * c);
+      ring.push(new THREE.Vector3(x, y, z));
     }
     rings.push(ring);
   }
   return loft(rings);
 }
 
-/** altura da raiz das asas na barbatana */
-const WING_Y = 2.2;
+/** altura da raiz das asas (no ombro do casco, saindo da base da barbatana) */
+const WING_Y = 1.9;
+const WING_SPAN = 1.5;
+const WING_X0 = 0.22;
+const wingLE = (s: number) => -0.35 - 1.35 * s;
+const wingTE = (s: number) => -2.02 - 0.28 * s;
+const wingY = (s: number) => WING_Y + 0.2 * s;
 
-/** Asa larga varrida saindo da lateral da barbatana (side = ±1). */
+/** Asa trapezoidal larga, varrida para trás, corda afinando para a ponta (side = ±1). */
 function wingGeo(side: number): THREE.BufferGeometry {
   const rings: THREE.Vector3[][] = [];
   const N = 18;
   const S = 16;
-  const span = 1.5;
   for (let i = 0; i <= S; i++) {
     const s = i / S;
-    const x = side * (0.1 + span * s);
-    const y = WING_Y + 0.12 * Math.pow(s, 1.3);
-    const le = -0.55 - 0.9 * Math.pow(s, 1.1);
-    const te = -1.95 - 0.25 * s;
-    // ponta arredondada: a corda fecha nos últimos 18%
-    const k = s > 0.82 ? Math.sqrt(Math.max(0, 1 - Math.pow((s - 0.82) / 0.18, 2))) : 1;
+    const x = side * (WING_X0 + WING_SPAN * s);
+    const y = wingY(s);
+    const le = wingLE(s);
+    const te = wingTE(s);
+    // ponta cortada levemente arredondada: fecha nos últimos 6%
+    const k = s > 0.94 ? Math.sqrt(Math.max(0, 1 - Math.pow((s - 0.94) / 0.06, 2))) : 1;
     const mid = (le + te) / 2;
-    const hc = ((le - te) / 2) * Math.max(0.08, k);
-    const th = (0.17 - 0.1 * Math.sqrt(s)) * Math.max(0.3, k);
+    const hc = ((le - te) / 2) * Math.max(0.6, k);
+    const th = (0.09 - 0.03 * s) * Math.max(0.15, k);
     const ring: THREE.Vector3[] = [];
     for (let j = 0; j < N; j++) {
       const a = (j / N) * Math.PI * 2;
@@ -311,20 +326,20 @@ export function createAirBlade(color: number, shadows: boolean): CarVisual {
   k.add(tray.rim, trayMat, 0, TRAY_Y + 0.26, 0);
 
   // casco liso de peça única
-  k.add(hullGeo(), k.paint, 0, 0, 0);
+  const hull = k.add(hullGeo(), k.paint, 0, 0, 0);
 
-  // barbatana dorsal integrada (a base afunda no casco) e asas varridas
+  // barbatana em foice contínua com o casco e asas trapezoidais varridas saindo da base dela
   k.add(finGeo(), k.paint, 0, 0, 0);
   const wings = [-1, 1].map((sx) => k.add(wingGeo(sx), k.paint, 0, 0, 0));
 
   // luz ciano na barbatana, acima da raiz das asas (aro cromado + lente)
-  const EYE_Y = WING_Y + 0.3;
+  const EYE_Y = WING_Y + 0.42;
   const eyeT = (EYE_Y - FIN_Y0) / FIN_H;
-  const eyeZ = finLE(eyeT) - 0.22;
+  const eyeZ = finLE(eyeT) - 0.2;
   const mid = (finLE(eyeT) + finTE(eyeT)) / 2;
   const hc = (finLE(eyeT) - finTE(eyeT)) / 2;
   const u = (eyeZ - mid) / hc;
-  const eyeX = finTh(eyeT) * Math.sqrt(1 - u * u) * (0.75 + 0.25 * u);
+  const eyeX = finTh(eyeT, eyeZ) * Math.sqrt(1 - u * u) * (0.72 + 0.28 * u);
   for (const sx of [-1, 1]) {
     k.add(new THREE.TorusGeometry(0.09, 0.035, 8, 16).rotateY(Math.PI / 2), k.chrome, sx * (eyeX + 0.01), EYE_Y, eyeZ);
     const lens = k.add(new THREE.SphereGeometry(0.075, 12, 8), cyan, sx * eyeX, EYE_Y, eyeZ);
@@ -350,39 +365,43 @@ export function createAirBlade(color: number, shadows: boolean): CarVisual {
   noseLight.scale.set(0.08, 0.05, 0.2);
   noseLight.rotation.x = 0.15;
 
-  // Rogue Missiles: casulos arredondados pendurados sob as asas (pilone curto), 2 mísseis cada
-  const podGeo = new THREE.CapsuleGeometry(0.16, 0.62, 4, 12).rotateX(Math.PI / 2);
-  const missileGeo = new THREE.CylinderGeometry(0.055, 0.055, 0.3, 8).rotateX(Math.PI / 2);
-  const tipGeo = new THREE.ConeGeometry(0.055, 0.16, 8).rotateX(Math.PI / 2);
-  const bandGeo = new THREE.CylinderGeometry(0.165, 0.165, 0.08, 12).rotateX(Math.PI / 2);
+  // Rogue Missiles: casulos cromados sobre as asas (visíveis de cima), 2 mísseis cada
+  const PR = 0.2;
+  const podGeo = new THREE.CapsuleGeometry(PR, 0.78, 4, 14).rotateX(Math.PI / 2);
+  const missileGeo = new THREE.CylinderGeometry(0.07, 0.07, 0.36, 10).rotateX(Math.PI / 2);
+  const mouthGeo = new THREE.TorusGeometry(0.075, 0.022, 6, 14);
+  const tipGeo = new THREE.ConeGeometry(0.07, 0.2, 10).rotateX(Math.PI / 2);
+  const bandGeo = new THREE.CylinderGeometry(PR + 0.006, PR + 0.006, 0.1, 14).rotateX(Math.PI / 2);
+  const podS = (1.0 - WING_X0) / WING_SPAN;
   for (const sx of [-1, 1]) {
-    const px = sx * 1.02;
-    const py = WING_Y - 0.28;
+    const px = sx * 1.0;
+    const py = wingY(podS) + 0.07 + PR + 0.02;
     const pz = -1.5;
-    k.add(podGeo, k.gunMetal, px, py, pz);
-    k.add(bandGeo, k.warn, px, py, pz - 0.15);
-    k.add(new THREE.BoxGeometry(0.06, 0.2, 0.4), k.gunMetal, px, py + 0.16, pz);
-    for (const dx of [-0.08, 0.08]) {
-      k.add(missileGeo, rimMat, px + dx, py - 0.02, pz + 0.42);
-      k.add(tipGeo, k.tail, px + dx, py - 0.02, pz + 0.64);
+    k.add(podGeo, k.chrome, px, py, pz);
+    k.add(bandGeo, k.warn, px, py, pz - 0.2);
+    k.add(new THREE.BoxGeometry(0.08, 0.1, 0.5), k.gunMetal, px, py - PR, pz);
+    for (const dx of [-0.09, 0.09]) {
+      k.add(mouthGeo, k.muzzle, px + dx, py + 0.02, pz + 0.58);
+      k.add(missileGeo, rimMat, px + dx, py + 0.02, pz + 0.6);
+      k.add(tipGeo, k.tail, px + dx, py + 0.02, pz + 0.86);
     }
   }
 
-  // turbina cromada do nitro atrás (bocal em forma de sino)
+  // turbina cromada do nitro, pequena, sob a quilha da cauda (bocal escuro, sem "olho" aceso)
   const bell = new THREE.LatheGeometry(
     [
-      new THREE.Vector2(0.2, 0.35),
-      new THREE.Vector2(0.27, 0.2),
-      new THREE.Vector2(0.28, -0.05),
-      new THREE.Vector2(0.33, -0.25),
-      new THREE.Vector2(0.3, -0.27),
-      new THREE.Vector2(0.24, -0.1),
-      new THREE.Vector2(0.18, -0.1),
+      new THREE.Vector2(0.13, 0.3),
+      new THREE.Vector2(0.18, 0.14),
+      new THREE.Vector2(0.19, -0.04),
+      new THREE.Vector2(0.22, -0.18),
+      new THREE.Vector2(0.2, -0.2),
+      new THREE.Vector2(0.15, -0.06),
+      new THREE.Vector2(0.1, -0.06),
     ],
-    22,
+    20,
   ).rotateX(Math.PI / 2);
-  k.add(bell, k.chrome, 0, 1.5, TAIL - 0.12);
-  k.add(new THREE.CircleGeometry(0.2, 18).rotateY(Math.PI), k.jetGlow, 0, 1.5, TAIL - 0.2);
+  k.add(bell, k.chrome, 0, 1.36, TAIL - 0.02);
+  k.add(new THREE.CircleGeometry(0.15, 16).rotateY(Math.PI), k.dash, 0, 1.36, TAIL - 0.1);
   // Bear Claw Mines sob a cauda
   k.bearClawDropper(0, TRAY_Y + 0.0, -2.0);
 
@@ -397,10 +416,11 @@ export function createAirBlade(color: number, shadows: boolean): CarVisual {
     k.tube(V(-0.6, WR, z), V(0.6, WR, z), 0.08, k.gunMetal);
   }
 
-  // número nas asas (lê de cima)
-  for (const sx of [-1, 1]) k.decalOn(wings[sx < 0 ? 0 : 1], 0.55, 0.55, sx * 1.0, -1.55, 'number');
-  k.lights([], [[0.42, 1.42, TAIL - 0.02]], 0.2);
-  const flames = k.flames([[0, 1.5, TAIL - 0.95]], 1.3);
+  // número nas asas (lê de cima), no bico e nas laterais do casco
+  for (const sx of [-1, 1]) k.decalOn(wings[sx < 0 ? 0 : 1], 0.46, 0.46, sx * 1.45, -1.86, 'number');
+  k.decalOn(hull, 0.34, 0.5, 0, 1.45, 'stripes');
+  for (const sx of [-1, 1]) k.decalSide(hull, 0.5, 0.36, sx, 1.45, -0.55, 'number');
+  const flames = k.flames([[0, 1.36, TAIL - 0.95]], 1.1);
 
   const wheels = [-1, 1].flatMap((sx) => [-1, 1].map((sz) => ({ sz, ...bigWheel(k, tireMat, rimMat, sx * WX, sz * WZ) })));
 

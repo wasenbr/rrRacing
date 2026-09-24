@@ -266,7 +266,7 @@ export function buildGround(track: Track, theme: Theme, shadows: boolean): { mes
       map: gc.map,
       normalMap: normal,
       normalScale: new THREE.Vector2(liquid ? 0.7 : 1.2, liquid ? 0.7 : 1.2),
-      roughness: theme.groundStyle === 'ocean' ? 0.12 : theme.groundStyle === 'sludge' ? 0.35 : theme.groundStyle === 'snow' ? 0.7 : 0.95,
+      roughness: theme.groundStyle === 'ocean' ? 0.12 : theme.groundStyle === 'sludge' ? 0.35 : theme.groundStyle === 'snow' ? 0.88 : 0.95,
       metalness: 0,
       envMapIntensity: liquid ? 1.4 : 0.6,
     });

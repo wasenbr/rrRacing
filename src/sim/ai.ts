@@ -25,10 +25,12 @@ export interface AiState {
   wantNitro: boolean;
   /** tempo até poder disparar a arma da frente de novo (s) */
   fireCooldown: number;
+  /** tempo preso atrás de alguém (s): passado um tempo, parte para a ultrapassagem */
+  behindTime: number;
 }
 
 export function createAiState(): AiState {
-  return { thinkTimer: 0, lane: 0, stuckTime: 0, reverseTime: 0, recoverDir: -1, wantFire: false, wantDrop: false, wantNitro: false, fireCooldown: 0 };
+  return { thinkTimer: 0, lane: 0, stuckTime: 0, reverseTime: 0, recoverDir: -1, wantFire: false, wantDrop: false, wantNitro: false, fireCooldown: 0, behindTime: 0 };
 }
 
 /** Posição de um ponto em coordenadas da pista: distância ao longo dela e deslocamento lateral. */
@@ -106,7 +108,9 @@ export function computeAiInput(world: World, r: Racer, dt: number): ControlInput
       // desvia de quem está logo à frente, na mesma faixa (ultrapassagem pelo lado mais livre)
       if (ahead > 0 && ahead < 14 && Math.abs(oc.lateral - lane) < 2.4) {
         blocked = true;
-        lane = oc.lateral > 0 ? oc.lateral - 3 : oc.lateral + 3;
+        // preso há um tempo: abre mais para o lado e ataca
+        const side = st.behindTime > 2 ? 3.8 : 3;
+        lane = oc.lateral > 0 ? oc.lateral - side : oc.lateral + side;
         // colado atrás e sem espaço: os jatos de pulo passam por cima
         if (ahead < 6 && Math.abs(oc.lateral - me.lateral) < 1.8 && speed > 12) hop = true;
       }
@@ -144,7 +148,6 @@ export function computeAiInput(world: World, r: Racer, dt: number): ControlInput
       if (h.kind === 'slime' && ai.skill < 0.5) continue;
       const hc = trackCoords(world, h.x, h.z, car.pieceIndex);
       const ahead = alongDelta(world, me.dist, hc.dist);
-      if (h.kind === 'oil' && r.spec.traction !== undefined && r.spec.traction !== 'wheels') continue; // imune
       if (h.kind === 'puddle' && r.spec.traction === 'hover') continue;
       const r0 = h.kind === 'oil' ? 2.3 : h.kind === 'scatter' ? 1.9 : h.kind === 'mine' ? 2.5 : 3;
       // perigo logo à frente na faixa atual: pula por cima (só minas/óleo; poças fixas não valem o pulo)
@@ -157,6 +160,7 @@ export function computeAiInput(world: World, r: Racer, dt: number): ControlInput
       }
     }
     st.lane = clamp(lane, -track.halfWidth + 1.6, track.halfWidth - 1.6);
+    st.behindTime = blocked ? st.behindTime + 0.3 : Math.max(0, st.behindTime - 0.6);
 
     // nitro em reta, se não estiver na frente com folga
     const straight = Math.abs(wrapAngle(track.pointAtDist(me.dist + 40).heading - track.pointAtDist(me.dist).heading)) < 0.15;
@@ -181,6 +185,8 @@ export function computeAiInput(world: World, r: Racer, dt: number): ControlInput
   const later = track.pointAtDist(me.dist + 10 + Math.max(0, speed) * 0.5).heading;
   const bend = Math.abs(wrapAngle(later - now));
   let targetSpeed = r.spec.maxSpeed * (0.72 + ai.skill * 0.28) * (1 - 0.42 * clamp(bend / (Math.PI / 2), 0, 1));
+  // no vácuo de quem vai à frente, arrisca mais para passar (corridas menos "em fila")
+  if (st.behindTime > 2) targetSpeed *= 1.06;
 
   // "Elástico" leve em relação ao humano mais adiantado, para a corrida ficar disputada
   const humans = world.racers.filter((o) => !o.ai);

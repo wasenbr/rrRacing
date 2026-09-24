@@ -19,7 +19,19 @@ export interface Song {
   form: number[];
   /** 'straight' = rock reto; 'shuffle' = boogie com swing */
   feel: 'straight' | 'shuffle';
+  /**
+   * Levada da bateria (cada planeta tem a sua): 'rock' reto, 'gallop' (galope de metal),
+   * 'punk' (bumbo em todo tempo), 'heavy' (meio-tempo arrastado), 'boogie' (shuffle).
+   */
+  groove: 'rock' | 'gallop' | 'punk' | 'heavy' | 'boogie';
+  /** seção do `form` tocada como ponte (bateria em meio-tempo, guitarra rarefeita) */
+  bridge: number;
 }
+
+/** Papel de cada seção: muda densidade e dinâmica (intro → riff → refrão → ponte). */
+type Role = 'intro' | 'riff' | 'chorus' | 'bridge';
+const ROLE_VEL: Record<Role, number> = { intro: 0.6, riff: 0.82, chorus: 1, bridge: 0.68 };
+const BRIDGE_MOVE = [0, 0, 5, 3];
 
 const r = (s: string) => s.trim().split(/\s+/);
 
@@ -29,6 +41,8 @@ export const SONGS: Song[] = [
     bpm: 150,
     root: 40,
     feel: 'straight',
+    groove: 'rock',
+    bridge: 5,
     riffs: [
       r('x x x x 3 - 5 - x x x x 7 - 5 3'),
       r('0 - . 0 3 - 0 5 - 3 0 - . 7 5 3'),
@@ -41,6 +55,8 @@ export const SONGS: Song[] = [
     bpm: 138,
     root: 42,
     feel: 'straight',
+    groove: 'gallop',
+    bridge: 4,
     riffs: [
       r('0 - 0 - 3 - 1 - 0 - 0 - 6 - 5 -'),
       r('x x 0 x x 3 x x 5 x 3 x 1 - 0 -'),
@@ -53,6 +69,8 @@ export const SONGS: Song[] = [
     bpm: 126,
     root: 45,
     feel: 'shuffle',
+    groove: 'boogie',
+    bridge: 5,
     riffs: [
       r('0 . 0 . 4 . 4 . 5 . 5 . 4 . 4 .'),
       r('5 . 5 . 9 . 9 . 10 . 10 . 9 . 9 .'),
@@ -65,6 +83,8 @@ export const SONGS: Song[] = [
     bpm: 160,
     root: 43,
     feel: 'straight',
+    groove: 'punk',
+    bridge: 5,
     riffs: [
       r('0 0 0 0 0 0 5 5 3 3 3 3 3 3 0 0'),
       r('x x x x 5 - 3 - x x x x 7 - 8 -'),
@@ -77,6 +97,8 @@ export const SONGS: Song[] = [
     bpm: 172,
     root: 38,
     feel: 'straight',
+    groove: 'punk',
+    bridge: 4,
     riffs: [
       r('x x 0 x x 1 x x 0 x x 6 - 5 - x'),
       r('0 - 1 - 0 - 6 5 0 - 1 - 3 - 1 -'),
@@ -89,6 +111,8 @@ export const SONGS: Song[] = [
     bpm: 132,
     root: 38,
     feel: 'straight',
+    groove: 'heavy',
+    bridge: 5,
     riffs: [
       r('x . x x 0 - x . x x 3 - x 1 - x'),
       r('0 - 0 - 5 - 3 - 0 - 0 - 6 - 7 -'),
@@ -101,6 +125,8 @@ export const SONGS: Song[] = [
     bpm: 112,
     root: 40,
     feel: 'shuffle',
+    groove: 'boogie',
+    bridge: 4,
     riffs: [
       r('0 . 0 . 5 . 0 . 7 . 5 . 3 . 0 .'),
       r('x x 0 . x x 3 . x x 5 . 3 - 0 -'),
@@ -296,25 +322,42 @@ export class SynthRock {
     const e = this.eighth();
     // introdução: os primeiros 2 compassos sem baixo e com bateria leve
     const intro = sectionIndex === 0 && inSection < 16;
-    // refrão (riff 2): bateria mais cheia e solo por cima
-    const chorus = riffIndex === 2;
+    const role: Role = sectionIndex === 0 ? 'intro' : section === s.bridge ? 'bridge' : riffIndex === 2 ? 'chorus' : 'riff';
+    const chorus = role === 'chorus';
+    const bridge = role === 'bridge';
+    // antes do refrão a virada começa mais cedo (a música "cresce")
+    const toChorus = s.form[(section + 1) % s.form.length] === 2;
 
-    // bateria
+    // bateria: acentos no tempo forte, leve variação humana e dinâmica por seção
     const beat = inSection % 8;
     const lastBar = inSection >= 24;
-    if (inSection === 0 && !intro) this.crash(t);
-    if (inSection === 16 && sectionIndex === 0) this.crash(t);
-    if (lastBar && section % 2 === 1 && inSection >= 28) {
+    const vel = ROLE_VEL[role] * (beat % 4 === 0 ? 1 : 0.82) * (0.9 + this.rand() * 0.2);
+    if (inSection === 0 && !intro) this.crash(t, chorus ? 1 : 0.75);
+    if (chorus && inSection === 16) this.crash(t, 0.7);
+    if (inSection === 16 && sectionIndex === 0) this.crash(t, 0.8);
+    if (lastBar && bridge) {
+      // fim da ponte: rufo de caixa em crescendo até o próximo riff
+      const k = inSection - 24;
+      this.snare(t, 0.25 + k * 0.1);
+      this.snare(t + e / 2, 0.3 + k * 0.1);
+      if (k === 7) this.kick(t, 1);
+    } else if (lastBar && (section % 2 === 1 || toChorus) && inSection >= (toChorus ? 26 : 28)) {
       // virada: tons descendo + caixa
       const k = inSection - 28;
-      this.tom(t, 220 - k * 30);
-      this.snare(t + e / 2, 0.6);
+      this.tom(t, 220 - k * 30, vel);
+      this.snare(t + e / 2, 0.6 * vel);
+    } else if (bridge) {
+      // meio-tempo: bumbo no 1, caixa no 3, prato de condução em semínimas
+      if (beat === 0 || (beat === 3 && inSection % 16 >= 8)) this.kick(t, vel);
+      if (beat === 4) this.snare(t, vel);
+      if (beat % 2 === 0) this.ride(t, 0.35 * vel);
     } else if (!intro || inSection >= 8) {
-      const kick = beat === 0 || beat === 4 || (beat === 5 && s.feel === 'straight') || (beat === 3 && section % 2 === 1) || (chorus && beat === 7);
-      if (kick) this.kick(t);
-      if (beat === 2 || beat === 6) this.snare(t, 1);
-      if (chorus) this.ride(t, beat % 2 === 0 ? 0.5 : 0.3);
-      else this.hat(t, beat % 2 === 0 ? 0.4 : 0.22, beat === 7 && section % 2 === 0);
+      if (this.kickAt(beat, section, chorus)) this.kick(t, vel);
+      const halfTime = s.groove === 'heavy' && !chorus;
+      if (halfTime ? beat === 4 : beat === 2 || beat === 6) this.snare(t, vel);
+      else if (role === 'riff' && (beat === 7 || beat === 3) && this.rand() < 0.3) this.snare(t, 0.18); // nota fantasma
+      if (chorus) this.ride(t, (beat % 2 === 0 ? 0.55 : 0.32) * vel);
+      else this.hat(t, (beat % 2 === 0 ? 0.42 : 0.2) * vel, beat === 7 && section % 2 === 0);
     } else {
       this.hat(t, 0.3, false);
     }
@@ -322,6 +365,16 @@ export class SynthRock {
     if (chorus) this.solo(s, inSection, t, e);
 
     // guitarra e baixo
+    if (bridge) {
+      // ponte: guitarra só sustenta um acorde por compasso; baixo pulsa em semínimas
+      const move = BRIDGE_MOVE[Math.floor(inSection / 8) % 4];
+      if (inSection % 8 === 0) {
+        const first = riff.find((x) => /^[0-9]+$/.test(x));
+        this.chord(s.root + (first ? Number(first) : 0) + move, t, e * 7.5, 0.55);
+      }
+      if (inSection % 2 === 0) this.bass(s.root + move - 12, t, e * 1.6);
+      return;
+    }
     if (tok === '-') return;
     if (tok === '.') {
       this.releaseChord(t);
@@ -341,6 +394,22 @@ export class SynthRock {
     if (intro) return;
     this.bass(s.root + n - 12, t, e * Math.min(hold, 2) * 0.95);
     if (hold > 2) for (let i = 2; i < hold; i += 2) this.bass(s.root + n - 12, t + e * i, e * 1.8);
+  }
+
+  /** Bumbo conforme a levada da música (colcheia `beat` 0..7 do compasso). */
+  private kickAt(beat: number, section: number, chorus: boolean): boolean {
+    switch (this.song.groove) {
+      case 'punk':
+        return beat % 2 === 0 || (chorus && beat === 5);
+      case 'gallop':
+        return beat === 0 || beat === 3 || beat === 4 || beat === 7 || (chorus && beat === 1);
+      case 'heavy':
+        return beat === 0 || beat === 3 || (chorus && beat === 5);
+      case 'boogie':
+        return beat === 0 || beat === 4 || (beat === 3 && section % 2 === 1) || (chorus && beat === 7);
+      default:
+        return beat === 0 || beat === 4 || beat === 5 || (beat === 3 && section % 2 === 1) || (chorus && beat === 7);
+    }
   }
 
   /** Solo improvisado na pentatônica (determinístico por música). */
@@ -364,13 +433,13 @@ export class SynthRock {
     return g;
   }
 
-  private kick(t: number): void {
+  private kick(t: number, vel = 1): void {
     // corpo com queda de afinação + estalo do batedor
     const o = this.ctx.createOscillator();
     o.frequency.setValueAtTime(160, t);
     o.frequency.exponentialRampToValueAtTime(48, t + 0.08);
     o.frequency.exponentialRampToValueAtTime(40, t + 0.3);
-    o.connect(this.env(t, 1.1, 0.001, 0.32));
+    o.connect(this.env(t, 1.1 * vel, 0.001, 0.32));
     o.start(t);
     o.stop(t + 0.36);
     const n = this.ctx.createBufferSource();
@@ -379,7 +448,7 @@ export class SynthRock {
     bp.type = 'bandpass';
     bp.frequency.value = 3200;
     n.connect(bp);
-    bp.connect(this.env(t, 0.35, 0.0005, 0.012));
+    bp.connect(this.env(t, 0.35 * vel * vel, 0.0005, 0.012));
     n.start(t, Math.random() * 0.5);
     n.stop(t + 0.03);
   }
@@ -389,7 +458,8 @@ export class SynthRock {
     n.buffer = this.noise;
     const bp = this.ctx.createBiquadFilter();
     bp.type = 'bandpass';
-    bp.frequency.value = 2200;
+    // mais forte = mais brilho (a caixa abre com a força da baqueta)
+    bp.frequency.value = 1500 + 1100 * Math.min(1, vol);
     bp.Q.value = 0.6;
     n.connect(bp);
     const g = this.env(t, 0.7 * vol, 0.001, 0.19);
@@ -409,11 +479,11 @@ export class SynthRock {
     o.stop(t + 0.14);
   }
 
-  private tom(t: number, f: number): void {
+  private tom(t: number, f: number, vel = 1): void {
     const o = this.ctx.createOscillator();
     o.frequency.setValueAtTime(f, t);
     o.frequency.exponentialRampToValueAtTime(f * 0.6, t + 0.18);
-    o.connect(this.env(t, 0.6, 0.001, 0.2));
+    o.connect(this.env(t, 0.6 * vel, 0.001, 0.2));
     o.start(t);
     o.stop(t + 0.24);
   }
@@ -446,14 +516,14 @@ export class SynthRock {
     n.stop(t + 0.4);
   }
 
-  private crash(t: number): void {
+  private crash(t: number, vol = 1): void {
     const n = this.ctx.createBufferSource();
     n.buffer = this.noise;
     const hp = this.ctx.createBiquadFilter();
     hp.type = 'highpass';
     hp.frequency.value = 4000;
     n.connect(hp);
-    const g = this.env(t, 0.26, 0.002, 1.6);
+    const g = this.env(t, 0.26 * vol, 0.002, 1.6);
     hp.connect(g);
     g.connect(this.reverb);
     n.start(t);
@@ -492,12 +562,12 @@ export class SynthRock {
   }
 
   /** acorde de quinta sustentado (tônica, quinta, oitava), dobrado em estéreo */
-  private chord(note: number, t: number, dur: number): void {
+  private chord(note: number, t: number, dur: number, level = 1): void {
     this.releaseChord(t);
     const g = this.ctx.createGain();
     g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(1, t + 0.008);
-    g.gain.setTargetAtTime(0.72, t + 0.05, 0.3);
+    g.gain.exponentialRampToValueAtTime(level, t + 0.008);
+    g.gain.setTargetAtTime(0.72 * level, t + 0.05, 0.3);
     const gl = this.ctx.createGain();
     const gr = this.ctx.createGain();
     g.connect(gl);
@@ -525,7 +595,7 @@ export class SynthRock {
     this.chordVoices = { osc, gain: g };
     // corta no fim da duração, a menos que outro evento corte antes
     const end = t + dur;
-    g.gain.setValueAtTime(0.72, end - 0.02);
+    g.gain.setValueAtTime(0.72 * level, end - 0.02);
     g.gain.exponentialRampToValueAtTime(0.0001, end + 0.04);
     for (const o of osc) o.stop(end + 0.06);
   }

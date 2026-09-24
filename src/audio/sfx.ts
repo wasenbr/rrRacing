@@ -170,8 +170,8 @@ export function sfxMissile(vol = 1, pan = 0): void {
   noiseSrc(ctx, filter(ctx, 'lowpass', 3000, 0.7, env(ctx, dirt(ctx, out, 3), 1.2, 0.001, 0.12)), 0.14);
   sample(a, out, 'batida_soco', { vol: 0.7, rate: 0.9 * p });
   // foguete: ronco + jato
-  const rocket = sample(a, out, 'missil_lancamento', { vol: 0.9, rate: 1.25 * p, duration: 0.75, fadeOut: 0.45 });
-  sample(a, out, 'jato', { vol: 0.5, rate: 1.3 * p, duration: 0.6, fadeOut: 0.35 });
+  const rocket = sample(a, out, 'missil_lancamento', { vol: 0.7, rate: 1.25 * p, duration: 0.7, fadeOut: 0.45 });
+  sample(a, out, 'jato', { vol: 0.35, rate: 1.3 * p, duration: 0.55, fadeOut: 0.35 });
   if (!rocket) {
     const f = ctx.createBiquadFilter();
     f.type = 'bandpass';
@@ -229,6 +229,9 @@ export function sfxExplosion(vol = 1, big = true, pan = 0): void {
   const crunch = big
     ? sample(a, out, ['explosao_crunch_a', 'explosao_crunch_b'], { vol: 1, rate: 0.9 * p })
     : sample(a, out, ['explosao_curta_a', 'explosao_curta_b'], { vol: 0.9, rate: 1.05 * p });
+  // estalo de ataque: a explosão chega de uma vez (sem ele a pequena demora a "abrir")
+  sample(a, out, 'batida_soco', { vol: big ? 0.6 : 0.9, rate: 0.75 * p });
+  noiseSrc(ctx, filter(ctx, 'lowpass', 5000, 0.7, env(ctx, dirt(ctx, out, 3), big ? 0.6 : 0.9, 0.001, 0.08)), 0.1);
   sample(a, out, 'explosao_sub', { vol: big ? 1 : 0.55, rate: big ? 0.9 : 1.2, duration: big ? 2 : 0.8, fadeOut: 0.4 });
   if (big) sample(a, out, 'explosao_cauda', { vol: 0.6, rate: 0.85 * p, t: t + 0.05 });
   // corpo sintético: ruído com passa-baixa fechando (mais baixo quando há amostra)
@@ -317,16 +320,18 @@ export function sfxAssist(kind: string, vol = 1, pan = 0): void {
     osc(ctx, 'sine', 110, 50, 0.12, env(ctx, out, 0.8, 0.002, 0.12));
     return;
   }
-  sample(a, out, 'nitro', { vol: 0.85, rate: 1.1, duration: 1.6, fadeOut: 0.6 });
-  // "whoosh" subindo + estalo de ignição
+  // jato do nitro com os agudos cortados (sopro encorpado, não chiado)
+  sample(a, filter(ctx, 'lowpass', 2200, 0.6, out), 'nitro', { vol: 1.1, rate: 0.9, duration: 1.6, fadeOut: 0.6 });
+  // "whoosh" grave subindo (250 → 1100 Hz) + estalo de ignição
   const f = ctx.createBiquadFilter();
   f.type = 'bandpass';
-  f.Q.value = 0.8;
-  f.frequency.setValueAtTime(300, t);
-  f.frequency.exponentialRampToValueAtTime(3000, t + 0.6);
-  f.connect(env(ctx, out, 0.6, 0.02, 0.7));
+  f.Q.value = 1;
+  f.frequency.setValueAtTime(250, t);
+  f.frequency.exponentialRampToValueAtTime(1100, t + 0.5);
+  f.connect(env(ctx, dirt(ctx, out, 2), 0.8, 0.03, 0.7));
   noiseSrc(ctx, f, 0.8);
-  osc(ctx, 'sine', 90, 45, 0.15, env(ctx, out, 0.8, 0.002, 0.15));
+  sample(a, out, 'batida_grave', { vol: 0.6, rate: 0.7 });
+  osc(ctx, 'sine', 90, 45, 0.15, env(ctx, out, 0.9, 0.002, 0.15));
 }
 
 /* ------------------------------------------------------------------ */
@@ -337,7 +342,7 @@ export function sfxPickup(kind: 'money' | 'armor', vol = 1, pan = 0): void {
   const a = audio();
   if (!a) return;
   const { ctx } = a;
-  const out = voice(a, vol * 0.9, pan);
+  const out = voice(a, vol * 1.2, pan);
   const t0 = ctx.currentTime;
   if (kind === 'money') {
     // caixa registradora: "ka" metálico + sino "ching" com parciais inarmônicos
@@ -391,6 +396,7 @@ export function sfxWall(vol = 1, pan = 0): void {
   const p = vary(0.15);
   punch(vol, 0.45, 0.35);
   const has = sample(a, out, 'mureta', { vol: 1, rate: 0.85 * p });
+  sample(a, out, 'batida_soco', { vol: 0.7, rate: 1.1 * p }); // estalo seco do contato
   sample(a, out, 'batida_grave', { vol: 0.6, rate: 0.8 * p });
   noiseSrc(ctx, filter(ctx, 'bandpass', 900 * p, 0.6, env(ctx, out, has ? 0.5 : 0.9, 0.002, 0.22)), 0.26);
   osc(ctx, 'sine', 90 * p, 40, 0.15, env(ctx, out, 0.7, 0.002, 0.15));
@@ -474,7 +480,7 @@ export function sfxCountdown(go: boolean): void {
   const a = audio();
   if (!a) return;
   const { ctx } = a;
-  const out = voice(a, go ? 0.55 : 0.5, 0);
+  const out = voice(a, go ? 0.6 : 1.1, 0);
   const t = ctx.currentTime;
   const f = go ? 880 : 440;
   const dur = go ? 0.7 : 0.22;
@@ -492,7 +498,7 @@ export function sfxCountdown(go: boolean): void {
     osc(ctx, 'sine', 90, 38, 0.35, env(ctx, out, 1.2, 0.002, 0.35, t), t);
     sample(a, out, 'batida_soco', { vol: 0.9, rate: 0.8 });
     // prato: ruído agudo com cauda
-    noiseSrc(ctx, filter(ctx, 'highpass', 5000, 0.7, env(ctx, out, 0.35, 0.002, 0.9, t)), 1, t);
+    noiseSrc(ctx, filter(ctx, 'bandpass', 5500, 0.8, env(ctx, out, 0.12, 0.002, 0.7, t)), 0.8, t);
   }
 }
 
@@ -518,7 +524,7 @@ export function sfxLap(final: boolean): void {
     for (const m of [1.335, 2, 2.67]) osc(ctx, 'sawtooth', root * m, root * m, 0.9, cab2, t + 0.18);
   }
   osc(ctx, 'sine', 110, 40, 0.25, env(ctx, out, 1, 0.002, 0.25, t), t);
-  noiseSrc(ctx, filter(ctx, 'highpass', 4500, 0.7, env(ctx, out, final ? 0.35 : 0.25, 0.002, final ? 1.1 : 0.5, t)), 1.2, t);
+  noiseSrc(ctx, filter(ctx, 'bandpass', 5000, 0.8, env(ctx, out, final ? 0.12 : 0.08, 0.002, final ? 0.9 : 0.45, t)), 1, t);
 }
 
 /** Queimando na lava: fogo rugindo (ruído grave-médio pulsando) com estalos de brasa. */

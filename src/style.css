@@ -702,3 +702,6 @@ h3 {
   .card.pause .go { margin: 0; padding: 9px; font-size: 19px !important; }
   .card.pause button { padding: 9px 8px; font-size: 14px; }
 }
+/* linhas de atributo com a mesma altura, com ou sem a marca FORTE/FRACO */
+.cars .stat, .shop-carcard .stat { grid-template-rows: 16px 8px; row-gap: 3px; margin-bottom: 2px; }
+.cars .stat span, .cars .stat em, .shop-carcard .stat span, .shop-carcard .stat em { line-height: 16px; }

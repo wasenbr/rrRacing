@@ -93,12 +93,12 @@ export class CameraRig {
       // olha à frente do carro, na direção do movimento (mais pista à frente em alta velocidade)
       const flat = car.velocity.clone().setY(0);
       const speed = flat.length();
-      const lead = flat.multiplyScalar(0.3);
-      lead.clampLength(0, 9);
+      const lead = flat.multiplyScalar(0.45);
+      lead.clampLength(0, 14);
       const target = car.position.clone().add(lead);
       this.isoTarget.lerp(target, this.first ? 1 : 1 - Math.exp(-dt * 8));
-      // abre o zoom com a velocidade (até +18%) — o cenário passa mais rápido na tela
-      const wantZoom = 1 + Math.min(1, Math.max(0, (speed - 12) / 28)) * 0.18;
+      // abre o zoom com a velocidade (até +28%) — o cenário passa mais rápido na tela
+      const wantZoom = 1 + Math.min(1, Math.max(0, (speed - 12) / 24)) * 0.28;
       this.zoom += (wantZoom - this.zoom) * (1 - Math.exp(-dt * 2));
       const halfH = ((this.aspect < 1 ? this.isoView * 1.5 : this.isoView) / 2) * this.zoom;
       if (Math.abs(this.iso.top - halfH) > 0.01) {

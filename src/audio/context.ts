@@ -73,9 +73,9 @@ function buildGraph(c: BaseAudioContext): void {
   rumbleCut.Q.value = 0.7;
   bed.connect(rumbleCut);
   rumbleCut.connect(glue);
-  // pré-limitador: ~4 dB de folga, o limitador só segura picos raros
+  // pré-limitador: ~1 dB de folga (volume geral agradável), o limitador só segura picos raros
   const preLimit = ctx.createGain();
-  preLimit.gain.value = 0.63;
+  preLimit.gain.value = 0.89;
   glue.connect(preLimit);
   preLimit.connect(limiter);
   // soft clip final: rede de segurança (linear até 0,9)
@@ -88,7 +88,11 @@ function buildGraph(c: BaseAudioContext): void {
     curve[i] = ax < knee ? x : Math.sign(x) * (knee + (1 - knee) * Math.tanh((ax - knee) / (1 - knee)));
   }
   clip.curve = curve;
-  limiter.connect(clip);
+  // o compressor do navegador aplica ganho de compensação automático (~+1,5 dB aqui): desconta
+  const postLimit = ctx.createGain();
+  postLimit.gain.value = 0.84;
+  limiter.connect(postLimit);
+  postLimit.connect(clip);
   clip.connect(master);
   master.connect(ctx.destination);
 

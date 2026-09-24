@@ -423,7 +423,7 @@ export class Menus {
       <div class="card title-card">
         <div class="logo-row">
           <div class="logo-faces">${portraitSvg('snake', 64)}${portraitSvg('tarquinn', 64)}${portraitSvg('katarina', 64)}</div>
-          <h1>ROCK <span>'N'</span> ROLL<br/>RACING <em>3D</em></h1>
+          <h1>ROCK <span>'N'</span> ROLL <br/>RACING <em>3D</em></h1>
         </div>
         <p class="sub">6 planetas · 5 carros · armas, pancadaria e muito rock</p>
         <div class="main-buttons">

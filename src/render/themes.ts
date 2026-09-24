@@ -100,7 +100,7 @@ export const THEMES: Record<ThemeId, Theme> = {
     sun: 0xfff0d8, sunIntensity: 3.3, ambientSky: 0xffd8a8, ambientGround: 0x8a4a14, surface: 'metal',
   },
   nho: {
-    skyHorizon: 0x2a4a8a, skyTop: 0x02040c, fog: 0x8aa8d8, groundLevel: -8, ground: 0xa8b8d4, groundStyle: 'snow',
+    skyHorizon: 0x2a4a8a, skyTop: 0x02040c, fog: 0x8aa8d8, groundLevel: -8, ground: 0x8c9cbc, groundStyle: 'snow',
     liquid: false, liquidEmissive: 0,
     road: '#10285e', roadGrid: '#06102a', roadGlow: 0, roadPattern: 'ice', roadEdge: '#8ac0ff', roadLine: '#8ac0ff',
     skirt: 0x22242c, walls: 'icerock', wallAccent: 0x1a3aa0,
