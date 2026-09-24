@@ -70,7 +70,7 @@ export const THEMES: Record<ThemeId, Theme> = {
     skirt: 0xa8acb4, walls: 'pipes', wallAccent: 0xe02020,
     rail: ['#b8bcc4', '#e02a20'], railStyle: 'lip',
     props: [0xb0b4bc, 0x8a8e96, 0x6a6e76], glow: 0xff7a20, flames: true,
-    sun: 0xfff0d8, sunIntensity: 2.9, ambientSky: 0xffe0b0, ambientGround: 0x6a4a18, surface: 'metal',
+    sun: 0xfff0d8, sunIntensity: 2.9, ambientSky: 0xd8b888, ambientGround: 0x4a3410, surface: 'metal',
   },
   drakonis: {
     skyHorizon: 0x2a1450, skyTop: 0x020106, fog: 0x0a0614, groundLevel: -8, ground: 0x0c0914, groundStyle: 'void',
@@ -82,7 +82,7 @@ export const THEMES: Record<ThemeId, Theme> = {
     sun: 0xe8e0ff, sunIntensity: 3.1, ambientSky: 0xa890e0, ambientGround: 0x201830, surface: 'metal',
   },
   bogmire: {
-    skyHorizon: 0x10286a, skyTop: 0x020410, fog: 0x0a1a48, groundLevel: -8, ground: 0x0c2a8a, groundStyle: 'ocean',
+    skyHorizon: 0x10286a, skyTop: 0x020410, fog: 0x0a1a48, groundLevel: -8, ground: 0x0e2a6a, groundStyle: 'ocean',
     liquid: true, liquidEmissive: 0x020a30,
     road: '#8a5428', roadGrid: '#5a3416', roadGlow: 0, roadPattern: 'dirt', roadEdge: '#3a2412', roadLine: '#3a2412',
     skirt: 0x5a3418, walls: 'roots', wallAccent: 0x2a6a1a,
@@ -100,13 +100,13 @@ export const THEMES: Record<ThemeId, Theme> = {
     sun: 0xfff0d8, sunIntensity: 3.3, ambientSky: 0xffd8a8, ambientGround: 0x8a4a14, surface: 'metal',
   },
   nho: {
-    skyHorizon: 0x2a4a8a, skyTop: 0x02040c, fog: 0x8aa8d8, groundLevel: -8, ground: 0xe4eeff, groundStyle: 'snow',
+    skyHorizon: 0x2a4a8a, skyTop: 0x02040c, fog: 0x8aa8d8, groundLevel: -8, ground: 0xa8b8d4, groundStyle: 'snow',
     liquid: false, liquidEmissive: 0,
     road: '#10285e', roadGrid: '#06102a', roadGlow: 0, roadPattern: 'ice', roadEdge: '#8ac0ff', roadLine: '#8ac0ff',
     skirt: 0x22242c, walls: 'icerock', wallAccent: 0x1a3aa0,
     rail: ['#4a8aff', '#d8ecff'], railStyle: 'ice',
     props: [0x2a6a3a, 0x8ab8ff, 0xc8d8f0], glow: 0x60c8ff, flames: false,
-    sun: 0xf0f6ff, sunIntensity: 2.7, ambientSky: 0xc8dcff, ambientGround: 0x7a8aa8, surface: 'metal',
+    sun: 0xf0f6ff, sunIntensity: 2.5, ambientSky: 0x9ab4e0, ambientGround: 0x4a5a78, surface: 'metal',
   },
   inferno: {
     skyHorizon: 0x6a1004, skyTop: 0x060102, fog: 0x5a0a02, groundLevel: -8, ground: 0xb81800, groundStyle: 'lava',

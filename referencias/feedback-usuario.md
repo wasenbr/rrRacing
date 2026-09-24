@@ -78,3 +78,8 @@ Cada item precisa ser atendido e verificado pelos avaliadores.
     de rolagem. A página não pode rolar nunca e o jogo deve ocupar toda a área visível após girar.
 37. O botão "Instalar o jogo" deve estar sempre visível no menu (fora do app já instalado), inclusive
     no iPhone; sem o convite do navegador, ele mostra o passo a passo de instalação.
+
+# Retorno do usuário (rodada 4, 2026-09-23)
+
+38. O jogo não é um simulador: é para ser divertido. Jogabilidade arcade acima de realismo físico
+    (controle responsivo e perdoador, ação constante, combate e disputa acima de precisão de física).

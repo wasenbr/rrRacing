@@ -23,10 +23,12 @@ export interface AiState {
   wantFire: boolean;
   wantDrop: boolean;
   wantNitro: boolean;
+  /** tempo até poder disparar a arma da frente de novo (s) */
+  fireCooldown: number;
 }
 
 export function createAiState(): AiState {
-  return { thinkTimer: 0, lane: 0, stuckTime: 0, reverseTime: 0, recoverDir: -1, wantFire: false, wantDrop: false, wantNitro: false };
+  return { thinkTimer: 0, lane: 0, stuckTime: 0, reverseTime: 0, recoverDir: -1, wantFire: false, wantDrop: false, wantNitro: false, fireCooldown: 0 };
 }
 
 /** Posição de um ponto em coordenadas da pista: distância ao longo dela e deslocamento lateral. */
@@ -85,6 +87,7 @@ export function computeAiInput(world: World, r: Racer, dt: number): ControlInput
 
   // "Pensa" algumas vezes por segundo: escolhe faixa, decide armas
   st.thinkTimer -= dt;
+  st.fireCooldown = Math.max(0, st.fireCooldown - dt);
   if (st.thinkTimer <= 0) {
     st.thinkTimer = 0.25 + world.rng() * 0.15;
     let lane = ai.lane;
@@ -121,10 +124,12 @@ export function computeAiInput(world: World, r: Racer, dt: number): ControlInput
         const ang = Math.abs(wrapAngle(Math.atan2(o.car.x - car.x, o.car.z - car.z) - car.heading));
         // como no original, a CPU só atira no que está em linha reta à frente (o sundog persegue sozinho)
         const cone = front === 'missile' ? 0.22 : front === 'sundog' ? 1.2 : 0.12;
-        if (ang < cone && world.rng() < 0.35 + ai.aggression * 0.6) st.wantFire = true;
+        // o sundog só sai com o alvo perto (senão vira "spam" de bolas de fogo)
+        const near = front !== 'sundog' || ahead < 25;
+        if (near && ang < cone && world.rng() < 0.35 + ai.aggression * 0.6) st.wantFire = true;
       }
       // o sundog persegue para qualquer lado: também vale contra quem vem colado atrás
-      if (front === 'sundog' && r.frontCharges > 0 && ahead < -3 && ahead > -25 && world.rng() < ai.aggression * 0.3) st.wantFire = true;
+      if (front === 'sundog' && r.frontCharges > 0 && ahead < -3 && ahead > -18 && world.rng() < ai.aggression * 0.12) st.wantFire = true;
       // solta mina/óleo em quem vem colado atrás
       // (óleo só com o perseguidor bem alinhado e perto: mancha solta a esmo só enche a pista)
       const oil = r.spec.rear === 'oil';
@@ -192,13 +197,16 @@ export function computeAiInput(world: World, r: Racer, dt: number): ControlInput
   input.drop = st.wantDrop;
   input.nitro = st.wantNitro;
   // o botão precisa "soltar" entre disparos (a simulação usa borda de subida)
-  if (r.prevFire) input.fire = false;
+  if (r.prevFire || st.fireCooldown > 0) input.fire = false;
   if (r.prevDrop) input.drop = false;
   if (car.prevNitro) input.nitro = false;
   // apontar a direção evita atirar na mureta durante curvas fechadas
   if (bend > 0.6 && r.spec.front === 'laser') input.fire = false;
   // cada decisão vale um disparo só
-  if (input.fire) st.wantFire = false;
+  if (input.fire) {
+    st.wantFire = false;
+    st.fireCooldown = r.spec.front === 'sundog' ? 1.5 : r.spec.front === 'missile' ? 0.8 : 0.3;
+  }
   if (input.drop) st.wantDrop = false;
   if (input.nitro) st.wantNitro = false;
   return input;

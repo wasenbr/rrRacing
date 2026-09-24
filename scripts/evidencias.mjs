@@ -311,13 +311,22 @@ async function jogo() {
       const full = newCarSetup(id);
       full.upgrades = { engine: 3, tires: 3, shocks: 3, armor: 3 };
       const b = drive(buildSpec(spec, full), 40, (r) => r.progress.lapTimes.length >= 1);
-      // frenagem em reta: acelera na reta longa de New Mojave até 100 km/h (ou 3 s) e freia
-      const track = new Track(TRACKS.find((d) => d.id === 'newmojave-1') ?? TRACKS[0]);
+      // arranque e frenagem numa oval plana de teste (sem saltos, rampas nem vãos): acelera até
+      // 100 km/h (ou 3 s) em linha reta e freia
+      const flat = { ...TRACKS[0], id: 'teste-reta', name: 'Reta de teste', layout: 'F S S S S S S S S S S S S S R R S S S S S S S S S S S S S S R R', slime: 0 };
+      let track;
+      try { track = new Track(flat); } catch { track = new Track(TRACKS.find((d) => d.id === 'newmojave-1') ?? TRACKS[0]); }
       const w = createWorld(track, [{ name: 'P', color: 0, spec, ai: null }], 99, 1, PRIZES);
       w.started = true;
       const r = w.racers[0];
       let t = 0;
-      while (forwardSpeed(r.car) * 3.6 < 100 && t < 3) { stepWorld(w, { 0: { throttle: 1, brake: 0, steer: 0, fire: false, drop: false, nitro: false } }, dt); t += dt; }
+      let flat60 = null, flat100 = null;
+      while (forwardSpeed(r.car) * 3.6 < 100 && t < 3) {
+        stepWorld(w, { 0: { throttle: 1, brake: 0, steer: 0, fire: false, drop: false, nitro: false } }, dt);
+        t += dt;
+        if (flat60 === null && forwardSpeed(r.car) * 3.6 >= 60) flat60 = t;
+      }
+      if (forwardSpeed(r.car) * 3.6 >= 100) flat100 = t;
       const from = forwardSpeed(r.car) * 3.6;
       const x0 = r.car.x, z0 = r.car.z;
       let bt = 0;
@@ -325,8 +334,9 @@ async function jogo() {
       handling.push({
         car: id,
         maxSpeedKmh: +(spec.maxSpeed * 3.6).toFixed(0),
-        zeroTo60s: a.t60 === null ? null : +a.t60.toFixed(2),
-        zeroTo100s: a.t100 === null ? null : +a.t100.toFixed(2),
+        zeroTo60s: flat60 === null ? null : +flat60.toFixed(2),
+        zeroTo100s: flat100 === null ? null : +flat100.toFixed(2),
+        brakeTrack: track.def?.id ?? '?',
         topReachedKmh: +a.top.toFixed(0),
         brakeFromKmh: +from.toFixed(0),
         brakeDistanceM: +Math.hypot(r.car.x - x0, r.car.z - z0).toFixed(1),

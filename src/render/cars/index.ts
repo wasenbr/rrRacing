@@ -24,7 +24,7 @@ const BUILDERS: Record<string, (color: number, shadows: boolean) => CarVisual> =
 const VISUAL_SCALE: Record<string, number> = {
   dirtdevil: 0.865, // 2,76 x 5,10
   marauder: 0.876, // 2,65 x 5,18
-  airblade: 0.8, // 3,30 x 4,97 (asas)
+  airblade: 0.81, // 3,20 x 4,97 (asas e rodas)
   battletrak: 0.754, // 3,36 x 5,52
   havac: 1,
 };

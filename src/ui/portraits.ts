@@ -41,7 +41,8 @@ class Pic {
   }
 }
 
-const ink = (w = 2) => `stroke="${INK}" stroke-width="${w}" stroke-linejoin="round" stroke-linecap="round"`;
+/** Contorno de tinta: escuro e levemente translúcido, para parecer pintura e não ícone. */
+const ink = (w = 2) => `stroke="${INK}" stroke-opacity="0.78" stroke-width="${w * 0.85}" stroke-linejoin="round" stroke-linecap="round"`;
 const path = (d: string, fill: string, extra = '') => `<path d="${d}" fill="${fill}" ${extra}/>`;
 const line = (d: string, color: string, w: number, op = 1) =>
   `<path d="${d}" fill="none" stroke="${color}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"${op < 1 ? ` opacity="${op}"` : ''}/>`;
@@ -211,32 +212,91 @@ function snake(P: Pic): void {
   P.add(neon('M-6 10 L70 76', '#ff3ad0'), neon('M16 -6 L82 64', '#3ae8ff', 1.6), neon('M206 10 L130 76', '#3ae8ff'), neon('M184 -6 L118 64', '#ff3ad0', 1.6));
   P.add(neon('M147 52 C147 40 173 40 173 52 C173 64 147 64 147 52Z', '#ff4fd8', 2), neon('M153 55 C154 47 158 47 158 52 C158 57 162 57 163 49 C164 45 167 47 167 53', '#7af4ff', 1.3));
 
-  const hair = P.lin([[0, '#fff4b8'], [0.3, '#f2cc58'], [0.7, '#c38c2c'], [1, '#6e4a14']]);
-  // cabelo de trás, até os ombros
-  P.add(path('M100 24 C64 24 48 50 48 86 C48 118 42 148 30 182 C46 190 64 186 76 172 C70 150 68 128 70 104 L130 104 C132 128 130 150 124 172 C136 186 154 190 170 182 C158 148 152 118 152 86 C152 50 136 24 100 24Z', hair, ink(2)));
-  P.add(symLine('M56 76 C52 110 48 144 38 178', '#7a5216', 1.4, 0.7), symLine('M62 90 C60 124 60 150 56 180', '#fff3c0', 1.2, 0.55), symLine('M52 100 C50 130 44 156 34 180', '#fff3c0', 0.9, 0.45));
-  // pescoço e roupa
-  P.add(path('M84 124 L84 156 Q100 166 116 156 L116 124Z', P.lin([[0, '#9a6040'], [1, '#c68a62']])));
-  P.add(path('M84 128 C90 142 110 142 116 128 L116 142 C110 150 90 150 84 142Z', '#000', 'opacity="0.3"'));
-  leatherJacket(P, '#1c1a22', '#e8e4dc', { rimL: '#ff4fd0', rimR: '#4ae8ff' });
-  P.add(line('M84 150 C88 168 112 168 116 150', '#d8dce4', 1.6), path('M96 166 L104 166 L100 176Z', P.lin([[0, '#ffffff'], [1, '#8a92a0']]), ink(0.8)));
-  // rosto
-  const skin = '#ecb68c';
-  const sc = skinFill(P, facePath(42, 35, 27, 141), skin, { rim: '#ff6ad8' });
-  P.add(`<g clip-path="${sc}">${path('M70 112 C74 130 88 140 100 140 C112 140 126 130 130 112 C122 120 112 118 100 118 C88 118 78 120 70 112Z', '#6a4a2a', 'opacity="0.14"')}${symLine('M72 104 C74 114 78 122 84 128', '#8a4a2a', 2.5, 0.25)}</g>`);
-  // sobrancelhas, olhos, nariz, sorriso confiante
-  P.add(path(taper([[93, 82], [87, 77], [78, 76], [70, 80]], 4.2, 1.6), '#8a5a1c', ink(0.6)), path(taper([[107, 81], [113, 75], [122, 75], [130, 79]], 4.2, 1.6), '#8a5a1c', ink(0.6)));
-  P.add(eyes(P, 90, 15, 9, 4.6, '#3a86d8', { tilt: 3, lid: 0.1 }));
-  P.add(symLine('M76 96 C80 98 86 98 90 96', '#6a3a22', 0.9, 0.5));
-  P.add(nose(92, 111, 6, skin));
-  P.add(path('M84 121 C94 127 108 126 118 118 C112 130 94 132 84 121Z', P.lin([[0, '#ffffff'], [1, '#d8d0c4']]), ink(1)));
-  P.add(line('M82 120 C94 126 108 125 120 116', INK, 1.8), line('M119 116 C122 114 122 112 121 110', INK, 1.2, 0.8), line('M92 132 C98 134 104 134 110 131', '#f8c8a8', 1.4, 0.7));
-  P.add(line('M80 118 C79 115 80 112 82 111', INK, 1, 0.5));
-  // mechas da frente e topo
-  P.add(sym('M58 66 C54 90 58 118 48 156 C62 146 68 128 70 108 C72 92 70 80 70 70Z', hair, ink(1.8)));
-  P.add(sym('M66 74 C64 96 66 118 62 136 C68 126 72 112 72 96Z', P.lin([[0, '#fff8d0'], [1, '#d8a440']]), 'opacity="0.8"'));
-  P.add(path('M60 68 C56 40 76 22 100 22 C124 22 144 40 140 68 C128 56 114 52 100 52 C86 52 72 56 60 68Z', hair, ink(2)));
-  // bandana preta estampada
+  const hair = P.lin([[0, '#fff6c8'], [0.3, '#f0c860'], [0.7, '#b8862a'], [1, '#5a3a10']]);
+  // cabelo de trás: liso, comprido, caindo por trás dos ombros
+  P.add(path('M100 24 C62 24 46 52 46 88 C46 122 40 152 26 190 C44 198 66 194 80 180 C74 156 70 132 70 108 L130 108 C130 132 126 156 120 180 C134 194 156 198 174 190 C160 152 154 122 154 88 C154 52 138 24 100 24Z', hair, ink(2)));
+  const rs = rng(17);
+  let dk = '';
+  let lt = '';
+  for (let i = 0; i < 16; i++) {
+    const x0 = 50 + rs() * 18;
+    const y0 = 70 + rs() * 30;
+    const x1 = 28 + rs() * 46;
+    const y1 = 168 + rs() * 24;
+    const pts: Pt[] = [[x0, y0], [x0 - 4 - rs() * 6, y0 + 40], [x1 + 4, y1 - 36], [x1, y1]];
+    const d = taper(pts, 2.6 + rs() * 1.6, 0.4, 12) + taper(mirPts(pts), 2.6 + rs() * 1.6, 0.4, 12);
+    if (i % 2) dk += d;
+    else lt += d;
+  }
+  P.add(path(dk, '#6a4612', 'opacity="0.55"'), path(lt, '#fff4c0', 'opacity="0.5"'));
+  // pescoço largo com pomo de adão e sombra do queixo
+  const skin = '#e0a47a';
+  P.add(path('M79 118 L77 162 Q100 172 123 162 L121 118Z', P.lin([[0, '#b06a48'], [0.5, '#d89670'], [1, '#a05c3c']], 0, 0, 1, 0), ink(1.4)));
+  P.add(path('M79 124 C88 148 112 148 121 124 L121 144 C110 154 90 154 79 144Z', '#3a1808', 'opacity="0.35"'));
+  P.add(`<ellipse cx="100" cy="153" rx="4" ry="5.5" fill="#e8b08a" opacity="0.8"/>`, line('M97 158 C99 160 101 160 103 158', '#7a3a22', 1, 0.5));
+  P.add(symLine('M86 140 C90 150 94 158 97 166', '#7a3a22', 1.3, 0.35));
+  // jaqueta de couro com gola levantada, zíper e pespontos; camiseta branca e corrente
+  leatherJacket(P, '#1c1a22', '#e8e4dc', { collar: false, rimL: '#ff4fd0', rimR: '#4ae8ff' });
+  const collar = P.lin([[0, '#6a6674'], [0.35, '#2a2830'], [1, '#08080a']], 0, 0, 1, 1);
+  P.add(sym('M80 144 L58 148 L48 176 L62 190 L86 160Z', collar, ink(1.6)));
+  P.add(symLine('M76 150 L60 153 L52 175', '#fff', 1.4, 0.3));
+  const stitch = 'M79 148 L62 151 L54 174 L64 184';
+  P.add(`<path d="${stitch}" fill="none" stroke="#8a8694" stroke-width="0.8" stroke-dasharray="2 2" opacity="0.8"/><path d="${mx(stitch)}" fill="none" stroke="#8a8694" stroke-width="0.8" stroke-dasharray="2 2" opacity="0.8"/>`);
+  P.add(`<path d="M84 162 C86 176 89 188 92 200" fill="none" stroke="#c8ccd4" stroke-width="2.2" stroke-dasharray="1.2 1.4"/>`);
+  P.add(symLine('M14 196 C20 184 30 176 44 172', '#fff', 3, 0.18));
+  P.add(`<g fill="${P.rad([[0, '#ffffff'], [1, '#6a7080']])}" ${ink(0.6)}><circle cx="34" cy="186" r="2.2"/><circle cx="166" cy="186" r="2.2"/></g>`);
+  P.add(line('M86 150 C90 168 110 168 114 150', '#8a8e98', 2.4), `<path d="M86 150 C90 168 110 168 114 150" fill="none" stroke="#f0f2f6" stroke-width="1.4" stroke-dasharray="1.6 1.2"/>`);
+  P.add(path('M96 165 L104 165 L100 177Z', P.lin([[0, '#ffffff'], [1, '#8a92a0']]), ink(0.8)));
+  // mechas laterais atrás das orelhas
+  P.add(sym('M62 66 C54 84 54 104 50 126 C46 146 40 162 32 178 C48 172 56 158 59 140 C61 120 61 100 65 84Z', hair, ink(1.6)));
+  P.add(symLine('M58 90 C56 112 52 136 42 164', '#fff4c0', 1.1, 0.6), symLine('M61 96 C60 120 57 142 50 160', '#7a5214', 1, 0.6));
+  // orelhas
+  P.add(sym('M65 86 C57 82 54 94 56 102 C58 110 62 112 67 108Z', P.lin([[0, '#a45e3e'], [1, skin]]), ink(1.4)));
+  P.add(symLine('M62 92 C59 96 60 102 63 104', '#7a3a22', 1, 0.6));
+  // rosto masculino: têmporas largas, maçãs marcadas, mandíbula quadrada e queixo largo
+  const face = 'M100 40 C122 40 136 54 137 78 C138 94 137 106 134 116 C131 126 127 132 120 138 C114 143 107 145 100 145 C93 145 86 143 80 138 C73 132 69 126 66 116 C63 106 62 94 63 78 C64 54 78 40 100 40Z';
+  const sc = skinFill(P, face, skin);
+  P.add(`<g clip-path="${sc}">`);
+  P.add(`<ellipse cx="84" cy="91" rx="14" ry="7" fill="#6a3420" opacity="0.3"/><ellipse cx="116" cy="91" rx="14" ry="7" fill="#6a3420" opacity="0.34"/>`);
+  P.add(`<ellipse cx="78" cy="103" rx="9" ry="4" fill="#fff" opacity="0.16" transform="rotate(-22 78 103)"/><ellipse cx="122" cy="103" rx="8" ry="3.5" fill="#fff" opacity="0.1" transform="rotate(22 122 103)"/>`);
+  P.add(symLine('M68 107 C74 117 80 123 87 127', '#6a3420', 5, 0.2));
+  P.add(line('M64 80 C63 96 64 108 68 118', '#ff7ae0', 3, 0.35), line('M136 80 C137 96 136 108 132 118', '#6af0ff', 3, 0.3));
+  // barba por fazer: sombra na mandíbula e no buço e fios curtos
+  P.add(path('M65 110 C70 128 84 145 100 145 C116 145 130 128 135 110 C128 119 120 122 113 120 C108 117 92 117 87 120 C80 122 72 119 65 110Z', '#4a3424', 'opacity="0.3"'));
+  P.add(path('M84 121 C90 115 110 115 116 121 L114 124 C108 120 92 120 86 124Z', '#4a3424', 'opacity="0.35"'));
+  const rb = rng(23);
+  let stub = '';
+  for (let i = 0; i < 700; i++) {
+    const x = 64 + rb() * 72;
+    const y = 112 + rb() * 34;
+    const hw = 35 - (y - 112) * 0.78;
+    if (Math.abs(x - 100) > hw) continue;
+    if (y < 121 && Math.abs(x - 100) < 20 - (121 - y) * 1.5) continue;
+    if (y > 123.5 && y < 131 && Math.abs(x - 100) < 14) continue;
+    stub += `M${x.toFixed(1)} ${y.toFixed(1)} h0.8 v0.8 h-0.8Z`;
+  }
+  P.add(path(stub, '#3a2414', 'opacity="0.6"'));
+  P.add(line('M100 138 L100 142.5', '#5a2c18', 1.3, 0.55));
+  P.add('</g>');
+  // sobrancelhas grossas e retas, olhar semicerrado e confiante
+  const brow: Pt[] = [[96, 84.5], [88, 81.5], [78, 80.5], [67, 83.5]];
+  P.add(path(taper(brow, 5.6, 2.4), '#8a5e1e', ink(0.6)), path(taper(mirPts(brow), 5.6, 2.4), '#8a5e1e', ink(0.6)));
+  P.add(eyes(P, 92, 16, 8.6, 3.6, '#3a86d8', { tilt: -2, lid: 0.55 }));
+  P.add(symLine('M77 96.5 C81 98 87 98 91 96', '#6a3a22', 1, 0.55), symLine('M65 89 L61 87.5 M65.5 92.5 L61.5 92.5', '#7a4028', 0.8, 0.5));
+  // nariz reto e forte
+  P.add(path('M103 88 C105 99 108 108 110 114 C107 116 104 116 101 115Z', '#7a3a22', 'opacity="0.35"'));
+  P.add(line('M98 90 C97 98 97 104 98 110', '#fff', 1.6, 0.25), `<ellipse cx="99" cy="112" rx="3.4" ry="2.4" fill="#fff" opacity="0.28"/>`);
+  P.add(line('M92 113 C88.5 116 89.5 119.5 94 119.5 M108 113 C111.5 116 110.5 119.5 106 119.5', INK, 1.3));
+  P.add(path('M94 118.5 C97 121 103 121 106 118.5 C104 123 96 123 94 118.5Z', '#5a2818', 'opacity="0.4"'));
+  // boca fechada com meio sorriso de canto e sulcos nasolabiais
+  P.add(line('M88 114 C84 119 83 124 84.5 128', '#7a3a22', 1.2, 0.45), line('M112 114 C117 118 118.5 122 118 126', '#7a3a22', 1.2, 0.45));
+  P.add(path('M86 127 C92 124.5 97 125 100 126 C103 125 108 124 115 123.5 C109 127.5 104 128.5 100 128.5 C95 128.5 90 128 86 127Z', '#a45a44', ink(0.7)));
+  P.add(line('M85 127 C92 128.8 106 128.8 116.5 123', INK, 1.9), line('M117 122.5 C119 121.5 120 119.5 119.5 117.5', INK, 1, 0.6));
+  P.add(line('M92 131.5 C97 133.5 104 133.5 109 131', '#f4b896', 1.6, 0.6), line('M93 134.5 C98 136 103 136 107 134.5', '#5a2818', 1.3, 0.35));
+  // topo do cabelo e mechas sobre a testa
+  P.add(path('M60 70 C56 42 76 22 100 22 C124 22 144 42 140 70 C128 58 114 54 100 54 C86 54 72 58 60 70Z', hair, ink(2)));
+  P.add(line('M72 50 C80 38 92 32 104 30 M84 50 C92 40 104 36 118 36 M110 52 C120 46 130 48 136 56', '#fff8d0', 1.1, 0.6));
+  // bandana preta estampada com nó
   const band = 'M58 64 C70 46 130 46 142 64 L142 76 C130 60 70 60 58 76Z';
   P.add(path(band, P.lin([[0, '#4a4a56'], [0.45, '#1a1a22'], [1, '#050508']]), ink(2)));
   let dots = '';
@@ -247,6 +307,7 @@ function snake(P: Pic): void {
     dots += `M${x + 4} ${y + 4.5} h1.2 v1.2 h-1.2Z M${x + 4} ${y - 5} h1.2 v1.2 h-1.2Z`;
   }
   P.add(path(dots, '#f4f0e8', 'opacity="0.85"'));
+  P.add(line('M64 62 C76 52 124 52 136 62', '#fff', 1.2, 0.25), line('M70 70 C84 62 116 62 130 70', '#000', 1.4, 0.4));
   P.add(path('M140 66 C154 72 158 88 152 104 L145 100 C149 88 146 78 138 74Z', '#15151c', ink(1.5)), path('M140 68 C156 64 166 76 168 90 L161 90 C158 80 150 74 140 76Z', '#26262e', ink(1.5)));
   P.add(`<circle cx="142" cy="70" r="5" fill="#1a1a22" ${ink(1.5)}/>`);
 }
@@ -883,6 +944,25 @@ function rival(P: Pic, f: Face, seed: number): void {
 
 // ---------------------------------------------------------------- montagem
 
+/**
+ * Acabamento de pintura sobre a ilustração: luz principal quente vinda do alto à esquerda,
+ * sombra fria embaixo à direita, manchas de pincel (ruído de baixa frequência) e textura fina
+ * de tela — tira o aspecto de ícone vetorial chapado.
+ */
+function paintFinish(P: Pic): void {
+  const gray = 'type="matrix" values="0.33 0.33 0.33 0 0 0.33 0.33 0.33 0 0 0.33 0.33 0.33 0 0 0 0 0 0 1"';
+  const brush = `${P.id}fb`;
+  const grain = `${P.id}fg`;
+  P.defs.push(
+    `<filter id="${brush}" x="0" y="0" width="200" height="200" filterUnits="userSpaceOnUse"><feTurbulence type="fractalNoise" baseFrequency="0.035 0.06" numOctaves="3" seed="7"/><feColorMatrix ${gray}/></filter>`,
+    `<filter id="${grain}" x="0" y="0" width="200" height="200" filterUnits="userSpaceOnUse"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="3"/><feColorMatrix ${gray}/></filter>`,
+  );
+  P.add(`<rect width="200" height="200" fill="${P.rad([[0, '#fff2d8', 0.5], [0.55, '#fff2d8', 0.08], [1, '#fff2d8', 0]], 0.2, 0.12, 0.7)}" style="mix-blend-mode:soft-light"/>`);
+  P.add(`<rect width="200" height="200" fill="${P.lin([[0, '#1a2a6a', 0], [0.55, '#1a2a6a', 0], [1, '#1a1040', 0.45]], 0, 0, 1, 1)}" style="mix-blend-mode:multiply"/>`);
+  P.add(`<rect width="200" height="200" filter="url(#${brush})" opacity="0.4" style="mix-blend-mode:soft-light"/>`);
+  P.add(`<rect width="200" height="200" filter="url(#${grain})" opacity="0.2" style="mix-blend-mode:overlay"/>`);
+}
+
 const HEROES: Record<string, (P: Pic) => void> = { snake, cyberhawk, ivanzypher, katarina, jake, tarquinn, olaf };
 
 /** SVG do retrato (string pronta para innerHTML). */
@@ -893,6 +973,7 @@ export function portraitSvg(nameOrId: string, size = 96): string {
   const hero = HEROES[key];
   if (hero) hero(P);
   else rival(P, FACES[key] ?? genericFace(nameOrId), hash(key || nameOrId));
+  paintFinish(P);
   // vinheta e brilho de vidro
   P.add(bgRect(P.rad([[0, '#000', 0], [0.62, '#000', 0], [1, '#000', 0.6]], 0.5, 0.45, 0.78)));
   P.add(path('M3 3 L197 3 L197 40 C140 26 60 26 3 60Z', P.lin([[0, '#fff', 0.14], [1, '#fff', 0]])));

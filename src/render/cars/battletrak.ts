@@ -2,7 +2,9 @@ import * as THREE from 'three';
 import { carFrame, cockpitRig, Kit, polyShape, sideProfile, type CarVisual } from './common';
 
 const TL = 4.5; // comprimento das esteiras
-const TR = 0.7; // raio das pontas das esteiras (altura = 2 * TR): um pouco mais altas que o casco
+const TR = 0.75; // raio das pontas das esteiras (altura = 2 * TR = 1,5 m): ~25% mais altas que o casco
+/** achata o casco central (topo ~1,18 m), deixando as esteiras enormes dominarem */
+const lowY = (y: number) => (y <= 0.28 ? y : 0.28 + (y - 0.28) * 0.88);
 const TX = 1.0; // centro das esteiras em x
 const TW = 0.58; // largura das esteiras
 const HW = 2 * (TX - TW / 2) + 0.06; // largura do casco: preenche todo o vão entre as esteiras
@@ -25,28 +27,28 @@ function hullShape(): THREE.Shape {
     [-2.05, 0.28],
     [0.9, 0.28],
     [2.3, 0.28],
-    [2.62, 0.5],
-    [2.6, 0.66],
-    [2.42, 0.74],
-    [0.9, 1.075],
-    [0.15, 1.24],
-    [-1.85, 1.3],
-    [-2.25, 1.12],
-    [-2.28, 0.52],
+    [2.62, 0.474],
+    [2.6, 0.614],
+    [2.42, 0.685],
+    [0.9, 0.98],
+    [0.15, 1.125],
+    [-1.85, 1.178],
+    [-2.25, 1.019],
+    [-2.28, 0.491],
   ]);
 }
 
 /** Para-brisa preto em cunha: placa grossa deitada sobre toda a rampa da frente do casco. */
 function glassShape(): THREE.Shape {
   return polyShape([
-    [2.2, 0.66],
-    [2.46, 0.72],
-    [2.47, 0.8],
-    [0.9, 1.14],
-    [0.2, 1.31],
-    [-0.12, 1.33],
-    [-0.14, 1.18],
-    [0.9, 0.98],
+    [2.2, 0.614],
+    [2.46, 0.667],
+    [2.47, 0.738],
+    [0.9, 1.037],
+    [0.2, 1.186],
+    [-0.12, 1.204],
+    [-0.14, 1.072],
+    [0.9, 0.896],
   ]);
 }
 
@@ -63,7 +65,7 @@ function facet(geo: THREE.BufferGeometry): THREE.BufferGeometry {
     let s = 1;
     if (z > 0.9) s -= 0.55 * Math.min(1, (z - 0.9) / 1.72);
     if (z < -1.85) s -= 0.12 * Math.min(1, (-1.85 - z) / 0.43);
-    if (y > 0.98) s -= 0.1 * Math.min(1, (y - 0.98) / 0.35);
+    if (y > lowY(0.98)) s -= 0.1 * Math.min(1, (y - lowY(0.98)) / 0.31);
     p.setX(i, x * s);
   }
   p.needsUpdate = true;
@@ -134,9 +136,9 @@ export function createBattleTrak(color: number, shadows: boolean): CarVisual {
     }
     // rodas motriz e tensora nas pontas (giram)
     for (const z of [-TL / 2 + TR, TL / 2 - TR]) {
-      const w = k.add(new THREE.CylinderGeometry(0.38, 0.38, 0.07, 20).rotateZ(Math.PI / 2), k.steel, sx * (TX + TW / 2 + 0.07), TR + (z > 0 ? 0.1 : 0), z);
+      const w = k.add(new THREE.CylinderGeometry(TR * 0.54, TR * 0.54, 0.07, 20).rotateZ(Math.PI / 2), k.steel, sx * (TX + TW / 2 + 0.07), TR + (z > 0 ? 0.1 : 0), z);
       for (let i = 0; i < 3; i++) {
-        const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.6, 0.09), k.trim);
+        const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.08, TR * 0.86, 0.09), k.trim);
         spoke.rotation.x = (i / 3) * Math.PI;
         w.add(spoke);
       }
@@ -179,10 +181,10 @@ export function createBattleTrak(color: number, shadows: boolean): CarVisual {
   k.add(new THREE.BoxGeometry(HW - 0.1, 0.12, 3.1), k.trim, 0, 0.3, -0.55);
 
   // torreta sextavada pequena no dorso com cano curto
-  k.add(new THREE.CylinderGeometry(0.36, 0.42, 0.14, 6), k.gunMetal, 0, 1.36, -0.75);
-  k.add(new THREE.CylinderGeometry(0.22, 0.34, 0.16, 6), k.steel, 0, 1.5, -0.75);
-  k.add(new THREE.CylinderGeometry(0.075, 0.085, 0.7, 12).rotateX(Math.PI / 2), k.gunMetal, 0, 1.5, -0.3);
-  k.add(new THREE.CylinderGeometry(0.1, 0.1, 0.1, 12).rotateX(Math.PI / 2), k.trim, 0, 1.5, 0.05);
+  k.add(new THREE.CylinderGeometry(0.36, 0.42, 0.14, 6), k.gunMetal, 0, lowY(1.36), -0.75);
+  k.add(new THREE.CylinderGeometry(0.22, 0.34, 0.16, 6), k.steel, 0, lowY(1.36) + 0.14, -0.75);
+  k.add(new THREE.CylinderGeometry(0.075, 0.085, 0.7, 12).rotateX(Math.PI / 2), k.gunMetal, 0, lowY(1.36) + 0.14, -0.3);
+  k.add(new THREE.CylinderGeometry(0.1, 0.1, 0.1, 12).rotateX(Math.PI / 2), k.trim, 0, lowY(1.36) + 0.14, 0.05);
 
   // Rogue Missiles: dois canos curtos sob o nariz, ogivas vermelhas
   for (const sx of [-0.36, 0.36]) {
@@ -190,18 +192,19 @@ export function createBattleTrak(color: number, shadows: boolean): CarVisual {
     k.add(new THREE.ConeGeometry(0.06, 0.16, 10).rotateX(Math.PI / 2), k.tail, sx, 0.4, 2.74);
   }
 
+  const EXH_Y = lowY(1.38);
   // escape: cilindro grande deitado no alto da traseira (sai o nitro) e KO Scatterpack embaixo
-  k.add(new THREE.CylinderGeometry(0.32, 0.32, 1.1, 20).rotateX(Math.PI / 2), k.trim, 0, 1.38, -1.95);
-  for (const dz of [-1.55, -2.35]) k.add(new THREE.CylinderGeometry(0.335, 0.335, 0.08, 20).rotateX(Math.PI / 2), k.chrome, 0, 1.38, dz);
-  k.add(new THREE.CylinderGeometry(0.26, 0.26, 0.04, 16).rotateX(Math.PI / 2), k.gunMetal, 0, 1.38, -2.5);
-  k.add(new THREE.CircleGeometry(0.22, 16).rotateY(Math.PI), k.jetGlow, 0, 1.38, -2.53);
+  k.add(new THREE.CylinderGeometry(0.32, 0.32, 1.1, 20).rotateX(Math.PI / 2), k.trim, 0, EXH_Y, -1.95);
+  for (const dz of [-1.55, -2.35]) k.add(new THREE.CylinderGeometry(0.335, 0.335, 0.08, 20).rotateX(Math.PI / 2), k.chrome, 0, EXH_Y, dz);
+  k.add(new THREE.CylinderGeometry(0.26, 0.26, 0.04, 16).rotateX(Math.PI / 2), k.gunMetal, 0, EXH_Y, -2.5);
+  k.add(new THREE.CircleGeometry(0.22, 16).rotateY(Math.PI), k.jetGlow, 0, EXH_Y, -2.53);
   k.scatterpack(0, 0.58, -2.38);
 
   // número e faixas sobre o dorso
   k.decalOn(shell, 0.8, 0.8, 0, -1.25, 'number');
-  for (const sx of [-1, 1]) k.add(new THREE.BoxGeometry(0.05, 0.03, 1.9), k.accent, sx * 0.52, 1.29, -0.85);
-  k.lights([[0.34, 0.58, 2.6]], [[0.5, 0.95, -2.27]], 0.22);
-  const flames = k.flames([[0, 1.38, -3.15]], 1.1);
+  for (const sx of [-1, 1]) k.add(new THREE.BoxGeometry(0.05, 0.03, 1.9), k.accent, sx * 0.52, lowY(1.29), -0.85);
+  k.lights([[0.34, 0.58, 2.6]], [[0.5, lowY(0.95), -2.27]], 0.22);
+  const flames = k.flames([[0, EXH_Y, -3.15]], 1.1);
 
   const eye = new THREE.Vector3(0, 1.6, 0.2);
   const { cockpit, steeringWheel } = cockpitRig(k, { eye, halfWidth: 0.9, weapon: 'missiles', hoodLength: 1.7, hoodMat: blackGlass }, body);

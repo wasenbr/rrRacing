@@ -1,6 +1,7 @@
 import type { Track } from '../sim/track';
 import './hud.css';
 import { drawTrack, trackTransform } from './trackMap';
+import { withIcons } from './icons';
 
 /** Esferas de blindagem (como o medidor do original, sob o contador de voltas). */
 const ARMOR_DOTS = 10;
@@ -230,7 +231,7 @@ export class Hud {
   }
 
   showToast(text: string): void {
-    this.toast.textContent = text;
+    this.toast.innerHTML = withIcons(text);
     this.toast.classList.add('show');
     this.toastTimer = 1.6;
   }

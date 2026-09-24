@@ -110,16 +110,15 @@
 .rh-pos b {
   font-size: 46px;
   line-height: 0.9;
-  background: linear-gradient(180deg, #fff 0%, #ff6a5a 45%, #b01008 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  /* cor sólida: gradiente recortado no texto não renderiza em todos os navegadores */
+  color: #ff5a4a;
   -webkit-text-stroke: 2px #000;
-  filter: drop-shadow(0 3px 0 #000);
+  paint-order: stroke fill;
+  text-shadow: 0 3px 0 #000, 0 0 6px rgba(0, 0, 0, 0.8);
 }
-.rh-pos.p1 b { background-image: linear-gradient(180deg, #fff 0%, #ffe066 40%, #c88a00 100%); }
-.rh-pos.p2 b { background-image: linear-gradient(180deg, #fff 0%, #d8e0ea 45%, #6a7684 100%); }
-.rh-pos.p3 b { background-image: linear-gradient(180deg, #fff 0%, #f0a060 45%, #8a4a14 100%); }
+.rh-pos.p1 b { color: #ffd21a; }
+.rh-pos.p2 b { color: #e0e6ee; }
+.rh-pos.p3 b { color: #f0a060; }
 .rh-laps { display: flex; align-items: baseline; gap: 6px; }
 .rh-laps span { font-size: 14px; letter-spacing: 1px; color: #fff; text-shadow: 0 2px 0 #000; }
 .rh-laps b { font-size: 30px; color: #fff; -webkit-text-stroke: 1.5px #000; paint-order: stroke fill; text-shadow: 0 3px 0 #000; }
@@ -136,7 +135,8 @@
 /* mensagens do centro: contagem, VAI!, VOLTA FINAL */
 .rh-center {
   position: absolute;
-  top: 34%;
+  /* terço de cima: na vista aérea o carro do jogador fica no meio da tela */
+  top: 15%;
   left: 0;
   right: 0;
   text-align: center;
@@ -160,7 +160,7 @@
 
 .rh-toast {
   position: absolute;
-  top: 150px;
+  top: 32%;
   left: 50%;
   transform: translateX(-50%);
   padding: 6px 14px;
@@ -175,7 +175,11 @@
   transition: opacity 0.2s;
 }
 .rh-toast.show { opacity: 1; }
-.rh-mirror { position: absolute; display: none; border: 3px solid #111; border-radius: 6px; box-shadow: 0 2px 8px #000; }
+.rh-mirror {
+  position: absolute; display: none; border: 5px solid #2a2c32; border-radius: 10px;
+  /* moldura de retrovisor: aro cromado, sombra interna e sombra projetada */
+  box-shadow: 0 0 0 2px #9aa0aa, 0 0 0 4px #111, inset 0 0 10px rgba(0, 0, 0, 0.8), 0 6px 14px rgba(0, 0, 0, 0.8);
+}
 
 /* telas pequenas (celular deitado) */
 @media (max-height: 520px), (max-width: 700px) {
@@ -183,7 +187,8 @@
   .rh-weapons { gap: 4px; }
   .rh-weapons .ic { width: 38px; height: 34px; }
   .rh-weapons .w svg { width: 22px; height: 22px; }
-  .rh-weapons .w b { font-size: 17px; bottom: 2px; }
+  /* contador abaixo do ícone, na largura dele: não invade a arma seguinte */
+  .rh-weapons .w b { position: static; width: 38px; margin-top: -5px; text-align: center; font-size: 16px; -webkit-text-stroke: 1.2px #000; }
   .rh-weapons .w small { display: none; }
   .rh-armor i { width: 9px; height: 9px; }
   .rh-armor { gap: 2px; padding: 3px 4px; }
@@ -196,7 +201,7 @@
   .rh-speed b { font-size: 16px; }
   .rh-center { font-size: 44px; }
   .rh-center.m-count { font-size: 84px; }
-  .rh-toast { top: 108px; font-size: 13px; }
+  .rh-toast { top: 34%; font-size: 13px; }
 }
 
 /* legibilidade em pistas claras (neve de Nho, deserto): contorno escuro em todo texto e uma

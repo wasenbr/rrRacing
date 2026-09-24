@@ -20,6 +20,7 @@ import { formatTime } from './hud';
 import { setTiltSteering, tiltSteeringEnabled, tiltSupported } from '../input/controls';
 import { portraitSvg } from './portraits';
 import { trackThumbnail } from './trackThumb';
+import { icon, iconizeHtml } from './icons';
 
 /** Nome curto das armas (HUD/menus), a partir dos nomes do original. */
 export const WEAPON_LABEL: Record<string, string> = Object.fromEntries(Object.entries(WEAPON_NAMES).map(([k, v]) => [k, v.short]));
@@ -185,7 +186,8 @@ function statBars(v: VehicleSpec): string {
   const worst = Math.min(...vals);
   return `<div class="stats">${ATTRS.map((k, i) => {
     const n = Math.max(1, Math.round(vals[i] * 10));
-    const tag = vals[i] === best ? '<em class="st-good">forte</em>' : vals[i] === worst ? '<em class="st-bad">fraco</em>' : '';
+    // só marca o que é mesmo forte (7+) ou fraco (3-): evita "forte" em barra mediana
+    const tag = vals[i] === best && n >= 7 ? '<em class="st-good">forte</em>' : vals[i] === worst && n <= 3 ? '<em class="st-bad">fraco</em>' : '';
     const cls = n >= 7 ? 'hi' : n <= 3 ? 'lo' : 'mid';
     return `<div class="stat ${cls}"><span>${ATTRIBUTE_LABEL[k]}</span><i>${Array.from({ length: 10 }, (_, j) => `<b class="${j < n ? 'on' : ''}"></b>`).join('')}</i>${tag}</div>`;
   }).join('')}</div>`;
@@ -351,9 +353,12 @@ export class Menus {
   }
 
   private updateFsButton(): void {
-    const visible = this.app.touch && this.app.fullscreenSupported && this.el.style.display !== 'none';
+    const inline = !!this.el.querySelector('[data-act="fullscreen"]');
+    const visible = this.app.touch && this.app.fullscreenSupported && this.el.style.display !== 'none' && !inline;
     this.fsButton.style.display = visible ? '' : 'none';
-    this.fsButton.textContent = this.app.fullscreen ? '🗗' : '⛶';
+    // o botão flutuante fica numa faixa própria à direita, sem cobrir o card nem a HUD
+    this.el.classList.toggle('fs-pad', visible);
+    this.fsButton.innerHTML = icon(this.app.fullscreen ? 'exitFullscreen' : 'fullscreen');
     this.fsButton.title = this.app.fullscreen ? 'Sair da tela cheia' : 'Tela cheia';
   }
 
@@ -400,7 +405,7 @@ export class Menus {
 
   private fsButtonHtml(): string {
     if (!this.app.touch || !this.app.fullscreenSupported) return '';
-    return `<button data-act="fullscreen">${this.app.fullscreen ? '🗗 Sair da tela cheia' : '⛶ Tela cheia'}</button>`;
+    return `<button data-act="fullscreen">${this.app.fullscreen ? `${icon('exitFullscreen')} Sair da tela cheia` : `${icon('fullscreen')} Tela cheia`}</button>`;
   }
 
   /* ---------------- menu principal ---------------- */
@@ -409,7 +414,11 @@ export class Menus {
     this.inCampaign = false;
     this.hasSave = hasSave;
     // sempre visível fora do app instalado: sem o convite do navegador, mostra o passo a passo
-    const install = this.app.installed ? '' : '<button class="install" data-act="install">📲 Instalar o jogo</button>';
+    const install = this.app.installed ? '' : `<button class="install" data-act="install">${icon('install')} Instalar o jogo</button>`;
+    // no celular deitado os botões secundários vão em duas colunas; com número ímpar, o primeiro
+    // deles ocupa a linha toda para que Instalar e Sair fiquem lado a lado no fim
+    const secondary = 4 + (hasSave ? 1 : 0) + (this.fsButtonHtml() ? 1 : 0) + (install ? 1 : 0) + 1;
+    const quickWide = secondary % 2 ? ' class="wide"' : '';
     this.show(`
       <div class="card title-card">
         <div class="logo-row">
@@ -419,14 +428,14 @@ export class Menus {
         <p class="sub">6 planetas · 5 carros · armas, pancadaria e muito rock</p>
         <div class="main-buttons">
           ${hasSave ? `<button class="go" data-act="continue">CONTINUAR</button>` : ''}
-          <button class="${hasSave ? '' : 'go'}" data-act="new">Nova campanha</button>
-          <button data-act="quick">Corrida rápida</button>
-          <button data-act="online">🌐 Online com amigos</button>
-          <button data-act="load">📂 Carregar jogo</button>
-          <button data-act="settings">⚙ Som e opções</button>
+          <button class="${hasSave ? (quickWide ? 'wide' : '') : 'go'}" data-act="new">Nova campanha</button>
+          <button data-act="quick"${hasSave ? '' : quickWide}>Corrida rápida</button>
+          <button data-act="online">${icon('globe')} Online com amigos</button>
+          <button data-act="load">${icon('folder')} Carregar jogo</button>
+          <button data-act="settings">${icon('gear')} Som e opções</button>
           ${this.fsButtonHtml()}
           ${install}
-          <button class="quit" data-act="quit-game">⏻ Sair do jogo</button>
+          <button class="quit" data-act="quit-game">${icon('power')} Sair do jogo</button>
         </div>
         ${this.helpBlock()}
       </div>`);
@@ -518,7 +527,7 @@ export class Menus {
     this.showNewCampaign();
     this.el.scrollTop = scroll;
     const msg = this.el.querySelector('.secret-msg');
-    if (msg) msg.textContent = '⚡ Piloto secreto liberado: OLAF, direto de Valhalla!';
+    if (msg) msg.textContent = 'Piloto secreto liberado: OLAF, direto de Valhalla!';
     navigator.vibrate?.([30, 40, 30]);
     return true;
   }
@@ -535,6 +544,13 @@ export class Menus {
     this.padTimer = requestAnimationFrame(tick);
   }
 
+  /** Piloto escolhido em destaque: retrato grande com a placa do nome em moldura metálica. */
+  private charFeature(): string {
+    const c = CHARACTERS.find((k) => k.id === this.newChar.characterId) ?? CHARACTERS[0];
+    return `<div class="cf-portrait">${portraitSvg(c.id, 208)}<div class="nameplate"><span>${esc(c.name)}</span></div></div>
+      <div class="cf-info"><small class="home">${esc(c.homeworld ?? '')}</small><p>${esc(c.description)}</p><div class="skills">${this.bonusText(c)}</div></div>`;
+  }
+
   private showNewCampaign(): void {
     const slots = this.actions.listSlots();
     if (!slots.some((s) => s.slot === this.newChar.slot && s.empty)) this.newChar.slot = slots.find((s) => s.empty)?.slot ?? this.newChar.slot;
@@ -545,9 +561,12 @@ export class Menus {
         <p class="sub center">Comece em ${esc(PLANETS[0].name)}, Divisão B, com ${money(START_MONEY)}. Some ${PLANETS[0].promote} pontos em ${PLANETS[0].races} corridas para subir
           (1º: ${POINTS[0]} pts e ${money(CAMPAIGN_PRIZES[0])} · 2º: ${POINTS[1]} · 3º: ${POINTS[2]}).</p>
         <h3>Escolha seu piloto</h3>
-        <div class="chars">${CHARACTERS.filter((c) => !c.secret || this.olafUnlocked).map(
-          (c) => `<button class="char ${c.secret ? 'secret' : ''}" data-char="${c.id}">${portraitSvg(c.id, 84)}<div><b>${esc(c.name)}</b><small class="home">${esc(c.homeworld ?? '')}</small><small>${esc(c.description)}</small><div class="skills">${this.bonusText(c)}</div></div></button>`,
-        ).join('')}</div>
+        <div class="char-pick">
+          <div class="char-feature">${this.charFeature()}</div>
+          <div class="chars">${CHARACTERS.filter((c) => !c.secret || this.olafUnlocked).map(
+            (c) => `<button class="char ${c.secret ? 'secret' : ''}" data-char="${c.id}">${portraitSvg(c.id, 120)}<b>${esc(c.name)}</b></button>`,
+          ).join('')}</div>
+        </div>
         <p class="pw-msg secret-msg"></p>
         <h3>Cor do carro</h3>${this.colorPicker('new')}
         <h3>Dificuldade</h3>${this.difficultyPicker('new')}
@@ -570,14 +589,14 @@ export class Menus {
     this.show(`
       <div class="card">
         <h2>${mode === 'save' ? 'SALVAR JOGO' : 'CARREGAR JOGO'}</h2>
-        ${notice ? `<div class="notice">${notice}</div>` : ''}
+        ${notice ? `<div class="notice">${iconizeHtml(notice)}</div>` : ''}
         <div class="slots">${slots
           .map((s) =>
             s.empty
               ? `<div class="slot empty"><div class="slot-n">${s.slot + 1}</div><div class="slot-info"><b>Vazio</b></div>
                   ${mode === 'save' ? `<button class="buy" data-save="${s.slot}">Salvar aqui</button>` : ''}</div>`
               : `<div class="slot"><div class="slot-n">${s.slot + 1}</div>${portraitSvg(s.characterId, 56)}${carImg(s.vehicleId, s.color, 96, 'transparent')}
-                  <div class="slot-info"><b>${esc(s.pilot)}</b><small class="slot-planet">${planetImg(PLANET_THEME[s.planet], 32, 'mini')}${esc(s.planet)} · Divisão ${esc(s.division)}${s.champion ? ' · 🏆' : ''}</small>
+                  <div class="slot-info"><b>${esc(s.pilot)}</b><small class="slot-planet">${planetImg(PLANET_THEME[s.planet], 32, 'mini')}${esc(s.planet)} · Divisão ${esc(s.division)}${s.champion ? ` · ${icon('trophy')}` : ''}</small>
                   <small><span class="gold">${money(s.money)}</span> · ${dateLabel(s.savedAt)}</small></div>
                   <div class="slot-btns">
                     ${mode === 'save' ? `<button class="buy" data-save="${s.slot}">Substituir</button>` : `<button class="buy" data-loadslot="${s.slot}">Carregar</button>`}
@@ -586,7 +605,7 @@ export class Menus {
           )
           .join('')}</div>
         <p class="small-note">O jogo também salva sozinho no slot em uso ao fim de cada corrida.</p>
-        ${mode === 'load' ? '<button data-act="password">🔑 Usar uma senha</button>' : '<button data-act="show-password">🔑 Ver senha (levar para outro aparelho)</button>'}
+        ${mode === 'load' ? `<button data-act="password">${icon('key')} Usar uma senha</button>` : `<button data-act="show-password">${icon('key')} Ver senha (levar para outro aparelho)</button>`}
         <button class="link" data-act="slots-back">← Voltar</button>
       </div>`);
   }
@@ -613,8 +632,8 @@ export class Menus {
         </div>
         ${planetRoute(s.planet, s.champion)}
         <div class="points"><span>Pontos: <b>${s.points}</b> / ${season.promote} para subir</span><div class="bar"><i style="width:${pct}%"></i></div></div>
-        ${notice ? `<div class="notice">${notice}</div>` : ''}
-        ${early ? `<div class="notice promoted">Você já tem os pontos! Continue correndo aqui para ganhar dinheiro ou <button class="inline-go" data-act="advance">subir agora ➜</button></div>` : ''}
+        ${notice ? `<div class="notice">${iconizeHtml(notice)}</div>` : ''}
+        ${early ? `<div class="notice promoted">Você já tem os pontos! Continue correndo aqui para ganhar dinheiro ou <button class="inline-go" data-act="advance">subir agora ${icon('arrowRight')}</button></div>` : ''}
         <div class="hub-grid">
           <div class="panel">
             <h3>Próxima pista</h3>
@@ -640,9 +659,9 @@ export class Menus {
         <h3>Câmera</h3>${this.cameraPicker()}
         <button class="go" data-act="hub-race">CORRER!</button>
         <div class="row-buttons">
-          <button data-act="shop">🛒 Loja</button>
-          <button data-act="save">💾 Salvar</button>
-          <button data-act="settings">⚙ Opções</button>
+          <button data-act="shop">${icon('cart')} Loja</button>
+          <button data-act="save">${icon('save')} Salvar</button>
+          <button data-act="settings">${icon('gear')} Opções</button>
           <button data-act="main">Menu</button>
         </div>
       </div>`);
@@ -654,7 +673,7 @@ export class Menus {
     this.lastHub = d;
     const s = d.state;
     const tabs = `<div class="tabs">
-      ${(['upgrades', 'weapons', 'cars'] as const).map((t) => `<button class="tab" data-tab="${t}">${{ upgrades: '🔧 Melhorias', weapons: '💥 Armas', cars: '🏎 Carros' }[t]}</button>`).join('')}
+      ${(['upgrades', 'weapons', 'cars'] as const).map((t) => `<button class="tab" data-tab="${t}">${{ upgrades: `${icon('wrench')} Melhorias`, weapons: `${icon('blast')} Armas`, cars: `${icon('car')} Carros` }[t]}</button>`).join('')}
     </div>`;
     let body = '';
     if (this.shopTab === 'upgrades') {
@@ -692,7 +711,7 @@ export class Menus {
             const action = mine
               ? '<span class="maxed">SEU CARRO</span>'
               : !forSale
-                ? '<span class="maxed">🔒 NÃO VENDIDO NESTE PLANETA</span>'
+                ? `<span class="maxed">${icon('lock')} NÃO VENDIDO NESTE PLANETA</span>`
                 : `<button class="buy" data-buycar="${v.id}" ${net > s.money ? 'disabled' : ''}>${net === 0 ? 'TROCAR' : money(net)}</button>`;
             return `<div class="shop-carcard ${mine ? 'mine' : ''} ${forSale || mine ? '' : 'locked'}"><div class="car">${this.carCard(v, s.color, `<small>Preço: ${money(CAR_PRICES[v.id].price)}</small>`)}</div>${action}</div>`;
           })
@@ -701,7 +720,7 @@ export class Menus {
     this.show(`
       <div class="card wide">
         <div class="shop-head"><h2>LOJA</h2><b class="gold">${money(s.money)}</b></div>
-        ${notice ? `<div class="notice">${notice}</div>` : ''}
+        ${notice ? `<div class="notice">${iconizeHtml(notice)}</div>` : ''}
         ${tabs}
         <div class="shop-body">${body}</div>
         <button class="go" data-act="hub">← Voltar à garagem</button>
@@ -749,9 +768,9 @@ export class Menus {
             : 'Nenhuma música sua — tocando a trilha de rock sintetizada. Escolha arquivos do aparelho ou coloque-os na pasta <code>music/</code> do projeto.'
         }</p>
         <input class="music-files" type="file" accept="audio/*" multiple hidden />
-        <button data-act="pick-music">➕ Adicionar músicas do aparelho</button>
-        ${a.user ? '<button data-act="clear-music">🗑 Remover músicas do aparelho</button>' : ''}
-        ${total ? '<button data-act="skip-track">⏭ Próxima música</button>' : ''}
+        <button data-act="pick-music">${icon('plus')} Adicionar músicas do aparelho</button>
+        ${a.user ? `<button data-act="clear-music">${icon('trash')} Remover músicas do aparelho</button>` : ''}
+        ${total ? `<button data-act="skip-track">${icon('next')} Próxima música</button>` : ''}
         <p class="pw-msg"></p>
         <button class="go" data-act="close-settings">Voltar</button>
       </div>`);
@@ -853,14 +872,14 @@ export class Menus {
 
   showPause(online = false): void {
     this.show(`
-      <div class="card small">
+      <div class="card small pause">
         <h2>${online ? 'MENU' : 'PAUSADO'}</h2>
         ${online ? '<p class="small-note center">No online a corrida não para.</p>' : ''}
         <button class="go" data-act="resume">Continuar</button>
         ${online ? '' : '<button data-act="restart">Reiniciar corrida</button>'}
-        <button data-act="settings">⚙ Som e opções</button>
+        <button data-act="settings">${icon('gear')} Som e opções</button>
         ${this.fsButtonHtml()}
-        <button class="quit" data-act="${online ? 'online-leave' : 'quit'}">${online ? '⏏ Sair da sala' : this.inCampaign ? '⏏ Sair da corrida (não conta)' : '⏏ Sair da corrida'}</button>
+        <button class="quit" data-act="${online ? 'online-leave' : 'quit'}">${icon('eject')} ${online ? 'Sair da sala' : this.inCampaign ? 'Sair da corrida (não conta)' : 'Sair da corrida'}</button>
       </div>`);
   }
 
@@ -868,7 +887,7 @@ export class Menus {
     const best = lapTimes.length ? Math.min(...lapTimes) : 0;
     const me = rows.find((r) => r.me);
     const title =
-      report?.outcome === 'champion' ? '🏆 CAMPEÃO!' : report?.outcome === 'promoted' ? 'PROMOVIDO!' : me && me.place === 1 ? 'VITÓRIA!' : 'RESULTADO';
+      report?.outcome === 'champion' ? 'CAMPEÃO!' : report?.outcome === 'promoted' ? 'PROMOVIDO!' : me && me.place === 1 ? 'VITÓRIA!' : 'RESULTADO';
     const campaignBlock = report
       ? `<div class="notice ${report.outcome}">
           ${report.outcome === 'champion' ? `${planetRoute(PLANETS.length, true)}Você venceu a galáxia inteira! Lenda do rock.` : ''}
@@ -941,6 +960,8 @@ export class Menus {
         }
       }
       this.newChar.characterId = d.char;
+      const feat = this.el.querySelector('.char-feature');
+      if (feat) feat.innerHTML = this.charFeature();
     }
     if (d.slotsel) this.newChar.slot = Number(d.slotsel);
     if (d.diff) {

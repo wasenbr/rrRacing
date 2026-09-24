@@ -13,6 +13,12 @@ export interface CarAnim {
   speed: number;
   time: number;
   grounded: boolean;
+  /**
+   * Suspensão visual já aplicada à carroceria pelo jogo (rad), derivada das acelerações lateral
+   * (curva) e longitudinal (arranque/freada). Opcional: vitrine e miniaturas não passam.
+   */
+  roll?: number;
+  pitch?: number;
 }
 
 export interface CarVisual {
@@ -178,6 +184,19 @@ export function cockpitRig(kit: Kit, o: CockpitOpts, parent: THREE.Object3D = ki
   hoodGeo.translate(0, 0, z0);
   const hoodMesh = kit.add(hoodGeo, o.hoodMat ?? kit.paint, 0, 0, 0, cockpit);
   hoodMesh.castShadow = false;
+  // para-lamas arredondados nas laterais do capô: dão volume e a forma de carro vista de dentro
+  const fenderGeo = new THREE.CapsuleGeometry(0.16, L * 0.62, 6, 14).rotateX(Math.PI / 2);
+  for (const sx of [-1, 1]) {
+    const f = kit.add(fenderGeo, o.hoodMat ?? kit.paint, sx * (hw - 0.1), e.y - 0.58, z0 + L * 0.42, cockpit);
+    f.scale.set(1, 0.7, 1);
+    f.rotation.x = 0.08;
+    f.castShadow = false;
+    // farol na ponta de cada para-lama (domo visível de dentro)
+    kit.add(new THREE.SphereGeometry(0.09, 14, 10), kit.chrome, sx * (hw - 0.1), e.y - 0.55, z0 + L * 0.74, cockpit).scale.set(1, 0.6, 1);
+    kit.add(new THREE.SphereGeometry(0.065, 14, 10), new THREE.MeshBasicMaterial({ color: 0xfff4c8 }), sx * (hw - 0.1), e.y - 0.53, z0 + L * 0.745, cockpit).scale.set(1, 0.6, 1);
+  }
+  // friso cromado na borda do painel (separa o capô do interior)
+  kit.add(new THREE.CylinderGeometry(0.025, 0.025, hw * 2, 10).rotateZ(Math.PI / 2), kit.chrome, 0, e.y - 0.47, z0 + 0.02, cockpit);
   // faixa central escura no capô (referência de direção)
   const stripe = kit.add(new THREE.BoxGeometry(0.22, 0.02, L * 0.5), kit.trim, 0, e.y - 0.49, z0 + L * 0.28, cockpit);
   stripe.rotation.x = 0.1;

@@ -39,7 +39,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 /* ---------- HUD (layout inspirado no original) ---------- */
 .vignette {
   position: absolute; inset: 0; pointer-events: none;
-  background: radial-gradient(ellipse 75% 70% at 50% 52%, rgba(0, 0, 0, 0) 50%, rgba(0, 0, 0, 0.4) 78%, rgba(0, 0, 0, 0.78) 100%);
+  background: radial-gradient(ellipse 75% 70% at 50% 52%, rgba(0, 0, 0, 0) 44%, rgba(0, 0, 0, 0.55) 76%, rgba(0, 0, 0, 0.9) 100%);
 }
 .hud { position: absolute; inset: 0; pointer-events: none; text-shadow: 0 2px 0 #000, 0 0 6px #000; font-weight: 800; }
 .hud-tl { position: absolute; top: max(10px, env(safe-area-inset-top)); left: max(10px, env(safe-area-inset-left)); display: flex; align-items: flex-start; gap: 8px; }
@@ -623,4 +623,82 @@ h3 {
   .slot { flex-wrap: wrap; }
   .slot .car-img { display: none; }
   .slot .slot-btns { flex: 1 0 100%; justify-content: flex-end; }
+}
+
+/* ---------- Rodada 6: ícones SVG, piloto em destaque, celular deitado sem rolagem ---------- */
+.ico { display: inline-block; width: 1.05em; height: 1.05em; vertical-align: -0.16em; flex: none; }
+.rh-toast .ico { margin-right: 4px; vertical-align: -0.2em; }
+.rot-phone .ico { width: 64px; height: 64px; color: #ffb030; }
+.touch-top .ico, .fs-float .ico { width: 22px; height: 22px; vertical-align: middle; }
+.fs-float { display: grid; place-items: center; padding: 0; }
+/* botão flutuante de tela cheia: faixa própria à direita, fora do card */
+.overlay.fs-pad { padding-right: max(64px, calc(env(safe-area-inset-right) + 58px)); }
+
+/* nova campanha: piloto escolhido em destaque + cards menores */
+.char-pick { display: grid; grid-template-columns: 236px 1fr; gap: 16px; align-items: start; }
+.char-feature { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.cf-portrait { position: relative; width: 208px; filter: drop-shadow(0 8px 14px rgba(0, 0, 0, 0.7)); }
+.cf-portrait .portrait { border-radius: 20px; filter: none; }
+.nameplate {
+  position: relative; margin: -30px -12px 0; padding: 3px;
+  background: linear-gradient(180deg, #ffffff 0%, #a8aebb 30%, #5a6070 48%, #e8ecf2 60%, #7a8090 80%, #3a3e48 100%);
+  clip-path: polygon(16px 0, calc(100% - 16px) 0, 100% 50%, calc(100% - 16px) 100%, 16px 100%, 0 50%);
+}
+.nameplate::before {
+  content: ''; position: absolute; inset: 0; background: #0a0a0e;
+  clip-path: polygon(15px 1px, calc(100% - 15px) 1px, calc(100% - 1px) 50%, calc(100% - 15px) calc(100% - 1px), 15px calc(100% - 1px), 1px 50%);
+  opacity: 0.35;
+}
+.nameplate span {
+  position: relative; display: block; padding: 8px 20px 7px; text-align: center; white-space: nowrap;
+  font-family: var(--display); font-size: 19px; letter-spacing: 1px; text-transform: uppercase; color: #f4f8ff;
+  text-shadow: 0 0 8px rgba(120, 190, 255, 0.55), 0 2px 0 #000;
+  background: linear-gradient(180deg, #2a2e3a, #10121a 55%, #1a1e2a);
+  box-shadow: inset 0 0 0 1px rgba(140, 200, 255, 0.35), inset 0 0 14px rgba(60, 140, 255, 0.28);
+  clip-path: polygon(13px 0, calc(100% - 13px) 0, 100% 50%, calc(100% - 13px) 100%, 13px 100%, 0 50%);
+}
+.cf-info { text-align: center; }
+.cf-info p { margin: 4px 0 0; color: var(--text); font-size: 14px; line-height: 1.35; }
+.cf-info .home { display: block; color: #ffb030; font-size: 12px; letter-spacing: 2px; text-transform: uppercase; }
+.cf-info .skills { justify-content: center; }
+.char-pick .chars { grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 10px; }
+.char-pick .char { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px 6px 7px; text-align: center; }
+.char-pick .char .portrait { width: 116px; height: 116px; }
+.char-pick .char b { font-size: 13px; line-height: 1.15; }
+.char-pick .char.sel .portrait { filter: drop-shadow(0 0 10px rgba(242, 195, 24, 0.6)); }
+@media (max-width: 640px) {
+  .char-pick { grid-template-columns: 1fr; }
+}
+@media (max-height: 460px) {
+  .char-pick { grid-template-columns: 216px 1fr; gap: 12px; }
+  .cf-portrait { width: 196px; }
+  .cf-portrait .portrait { width: 196px; height: 196px; }
+  .char-pick .chars { grid-template-columns: repeat(auto-fill, minmax(124px, 1fr)); gap: 8px; }
+  .char-pick .char .portrait { width: 110px; height: 110px; }
+}
+
+/* cards de carro alinhados: miniatura de altura fixa, conteúdo a partir do topo */
+.cars .car { display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start; }
+.cars .car .car-img.card-img { width: 100%; height: 150px; aspect-ratio: auto; object-fit: cover; flex: none; }
+.cars .car b { min-height: 1.3em; }
+.cars .car em { margin-top: auto; padding-top: 6px; }
+
+/* celular deitado: menu principal e pausa cabem na tela, sem rolagem */
+@media (max-height: 460px) {
+  .title-card { padding: 14px 16px 12px; width: min(700px, 100%); }
+  .title-card .logo-row { justify-content: center; }
+  .title-card h1 { font-size: 28px; line-height: 1; text-align: center; }
+  .title-card h1 br { display: none; }
+  .title-card .sub { display: none; }
+  .main-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 10px; }
+  .main-buttons button { padding: 7px 10px; font-size: 14px; }
+  .main-buttons .go, .main-buttons .wide { grid-column: 1 / -1; }
+  .main-buttons .go { padding: 8px; font-size: 19px !important; }
+  .title-card .help { margin-top: 8px; font-size: 12px; }
+  .overlay:has(.title-card), .overlay:has(.pause) { padding-top: 8px; padding-bottom: 8px; }
+  .card.pause { width: min(560px, 100%); display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 14px 16px 14px; }
+  .card.pause h2 { grid-column: 1 / -1; font-size: 26px; margin: 0; }
+  .card.pause > p, .card.pause .go { grid-column: 1 / -1; }
+  .card.pause .go { margin: 0; padding: 9px; font-size: 19px !important; }
+  .card.pause button { padding: 9px 8px; font-size: 14px; }
 }

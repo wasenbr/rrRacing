@@ -1,5 +1,6 @@
 import { clamp } from '../sim/math';
 import { emptyInput, type ControlInput } from '../sim/input';
+import { icon } from '../ui/icons';
 
 const TILT_KEY = 'rnrr3d-tilt';
 /** Graus de inclinação para esterçar tudo. */
@@ -212,11 +213,11 @@ export function createTouchControls(root: HTMLElement, controls: Controls): HTML
       <button data-a="gas" class="gas" aria-label="Acelerar">ACEL</button>
       <button data-a="fire" class="fire2" aria-label="Atirar">TIRO</button>
     </div>
-    <div class="rotate-hint" aria-live="polite"><div><span class="rot-phone">📱</span><b>Gire o celular</b><small>O jogo é na horizontal. A corrida fica pausada.</small></div></div>
+    <div class="rotate-hint" aria-live="polite"><div><span class="rot-phone">${icon('phone')}</span><b>Gire o celular</b><small>O jogo é na horizontal. A corrida fica pausada.</small></div></div>
     <div class="touch-top">
-      <button data-ui="pause" aria-label="Pausar">❚❚</button>
-      <button data-ui="camera" aria-label="Trocar câmera">🎥</button>
-      <button data-ui="fullscreen" class="fs-btn" aria-label="Tela cheia">⛶</button>
+      <button data-ui="pause" aria-label="Pausar">${icon('pause')}</button>
+      <button data-ui="camera" aria-label="Trocar câmera">${icon('camera')}</button>
+      <button data-ui="fullscreen" class="fs-btn" aria-label="Tela cheia">${icon('fullscreen')}</button>
     </div>`;
   root.appendChild(el);
   if (tiltOn) {

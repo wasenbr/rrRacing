@@ -32,6 +32,7 @@ import { CAR_SCALE, forwardSpeed, type VehicleSpec, type VehicleState } from '..
 import { createWorld, PRIZES, stepWorld, type Difficulty, type Racer, type RacerEntry, type World, type WorldEvent } from '../sim/world';
 import type { AiProfile } from '../sim/ai';
 import { Hud, formatTime } from '../ui/hud';
+import { icon } from '../ui/icons';
 import { COLORS, Menus, WEAPON_LABEL, type CampaignReport, type HubData, type LobbyView, type NewCampaignOptions, type OnlineOptions, type QuickOptions, type ResultRow } from '../ui/menus';
 import { NetClient, NetHost, netErrorText, normalizeCode } from '../net/peer';
 import { applySnapshot, MAX_PLAYERS, takeSnapshot, type ClientMsg, type HostMsg, type LobbyPlayer, type OnlineRace, type WorldSnap } from '../net/sync';
@@ -154,6 +155,12 @@ export class Game {
   private readonly panVec = new THREE.Vector3();
   private accumulator = 0;
   private lastFrame = 0;
+  /** tempo acumulado entre quadros desenhados nos menus/pausa */
+  private idleDt = 0;
+  /** algo mudou na pausa (tamanho, câmera): redesenhar uma vez */
+  private redraw = true;
+  /** a resolução atual é a dos menus (reduzida) */
+  private menuRes = false;
   private shake = 0;
   private bounce = 0;
   private bounceVel = 0;
@@ -183,11 +190,11 @@ export class Game {
     this.renderer.shadowMap.enabled = this.shadows;
     this.renderer.shadowMap.type = this.quality.level === 'alto' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.2;
+    this.renderer.toneMappingExposure = 1.1;
     root.appendChild(this.renderer.domElement);
 
-    this.scene.environmentIntensity = 0.8;
-    this.hemi = new THREE.HemisphereLight(0xffffff, 0x202020, 1.05);
+    this.scene.environmentIntensity = 0.7;
+    this.hemi = new THREE.HemisphereLight(0xffffff, 0x202020, 0.7);
     this.sun = new THREE.DirectionalLight(0xffffff, 2.5);
     this.sun.castShadow = this.shadows;
     this.sun.shadow.mapSize.set(this.quality.shadowMapSize, this.quality.shadowMapSize);
@@ -230,7 +237,7 @@ export class Game {
     onFullscreenChange((on) => {
       appInfo();
       const b = this.touchEl?.querySelector('.fs-btn');
-      if (b) b.textContent = on ? '🗗' : '⛶';
+      if (b) b.innerHTML = icon(on ? 'exitFullscreen' : 'fullscreen');
       this.resize();
     });
 
@@ -315,7 +322,7 @@ export class Game {
     this.hemi.groundColor.set(theme.ambientGround);
     this.sun.color.set(theme.sun);
     // luz mais dramática: sol forte e ambiente contido (contraste de luz e sombra do visual alvo)
-    this.sun.intensity = theme.sunIntensity * 1.4;
+    this.sun.intensity = theme.sunIntensity * 1.5;
     // luz de recorte vinda do lado oposto ao sol, na cor do planeta: destaca a silhueta dos carros
     let fill = this.scene.getObjectByName('fill') as THREE.DirectionalLight | undefined;
     if (!fill) {
@@ -544,7 +551,9 @@ export class Game {
   private resize(): void {
     const w = this.root.clientWidth;
     const h = this.root.clientHeight;
-    const pr = Math.min(window.devicePixelRatio, this.quality.maxPixelRatio) * this.dynRes.scale;
+    const scale = this.phase === 'menu' ? Math.min(this.dynRes.scale, 0.75) : this.dynRes.scale;
+    const pr = Math.min(window.devicePixelRatio, this.quality.maxPixelRatio) * scale;
+    this.redraw = true;
     this.renderer.setPixelRatio(pr);
     this.renderer.setSize(w, h);
     this.postfx?.setSize(w, h, pr);
@@ -564,7 +573,7 @@ export class Game {
 
   private frame(now: number): void {
     requestAnimationFrame((t) => this.frame(t));
-    const frameDt = this.lastFrame ? Math.min((now - this.lastFrame) / 1000, 0.1) : DT;
+    let frameDt = this.lastFrame ? Math.min((now - this.lastFrame) / 1000, 0.1) : DT;
     this.lastFrame = now;
     this.clock += frameDt;
     if (this.phase !== 'menu' && !document.hidden && this.dynRes.update(frameDt)) this.resize();
@@ -574,6 +583,19 @@ export class Game {
       const show = this.phase === 'countdown' || this.phase === 'racing';
       if (this.touchEl.classList.contains('off') === show) this.touchEl.classList.toggle('off', !show);
     }
+    // menus: cena de fundo a ~30 qps e em resolução reduzida; pausa: imagem congelada
+    const menuRes = this.phase === 'menu';
+    if (menuRes !== this.menuRes) {
+      this.menuRes = menuRes;
+      this.resize();
+    }
+    if (this.phase === 'menu' || this.phase === 'paused') {
+      this.idleDt += frameDt;
+      if (this.phase === 'paused' ? !this.redraw : this.idleDt < 1 / 31) return;
+      frameDt = Math.min(this.idleDt, 0.1);
+    }
+    this.idleDt = 0;
+    this.redraw = false;
 
     const simulating = this.phase === 'countdown' || this.phase === 'racing' || this.phase === 'finished';
     if (simulating) {
@@ -763,7 +785,7 @@ export class Game {
           const laps = this.world.laps;
           this.hud.setLap(e.lap, laps);
           const times = this.player.progress.lapTimes;
-          this.hud.message(e.lap === laps ? 'VOLTA FINAL!' : `VOLTA ${e.lap}`, 1.6, 'lap');
+          this.hud.message(e.lap === laps ? 'VOLTA FINAL!' : `VOLTA ${e.lap}`, 1.1, 'lap');
           this.hud.showToast(`Volta: ${formatTime(times[times.length - 1])} · armas recarregadas`);
           sfxLap(e.lap === laps);
         }
@@ -780,7 +802,7 @@ export class Game {
         break;
       case 'lapped':
         if (e.racer === me) sfxPickup('money');
-        if (e.racer === me) this.hud.showToast(`🏁 Você abriu uma volta sobre ${racers[e.victim].name}! +$${e.bonus.toLocaleString('pt-BR')}`);
+        if (e.racer === me) this.hud.showToast(`Você abriu uma volta sobre ${racers[e.victim].name}! +$${e.bonus.toLocaleString('pt-BR')} se vencer`);
         else if (e.victim === me) this.hud.showToast(`${racers[e.racer].name} abriu uma volta sobre você!`);
         break;
       case 'assist': {
@@ -1409,7 +1431,7 @@ export class Game {
       visual.root.visible = !this.showcase && r.alive && (r.invuln <= 0 || Math.sin(this.clock * 30) > -0.3);
       visual.root.position.set(x, y, z);
       visual.root.rotation.set(-lerp(p.pitch, v.pitch, alpha), heading, lerp(p.roll, v.roll, alpha), 'YXZ');
-      visual.animate({ spin: v.wheelSpin, steer: v.steer, speed: forwardSpeed(v), time: this.clock, grounded: v.grounded });
+      visual.animate({ spin: v.wheelSpin, steer: v.steer, speed: forwardSpeed(v), time: this.clock, grounded: v.grounded, roll: view.susp.roll, pitch: view.susp.pitch });
       this.suspension(view, r, frameDt, i === this.playerId);
       for (const f of visual.flames) {
         f.visible = r.alive && v.nitroTime > 0;

@@ -486,9 +486,10 @@ function stepHazards(world: World, dt: number): void {
       else {
         for (const r of world.racers) {
           if (!r.alive || !r.car.grounded || r.spinTime > 0 || r.oilGrace > 0 || (r.id === h.owner && h.age < 1.5)) continue;
-          if (r.spec.traction === 'treads' || r.spec.traction === 'hover') continue; // imunes ao óleo (original)
           if (Math.hypot(r.car.x - h.x, r.car.z - h.z) < WEAPONS.oil.radius && forwardSpeed(r.car) > WEAPONS.oil.minSpeed) {
-            r.spinTime = WEAPONS.oil.spinTime * (1 - (r.spec.spinResist ?? 0));
+            // esteiras e aerodeslizador resistem ao óleo (giram metade), mas não são imunes: todos competitivos
+            const resist = Math.max(r.spec.spinResist ?? 0, r.spec.traction === 'treads' || r.spec.traction === 'hover' ? 0.5 : 0);
+            r.spinTime = WEAPONS.oil.spinTime * (1 - resist);
             r.spinTotal = r.spinTime;
             r.oilGrace = r.spinTime + 1.2;
             world.events.push({ type: 'spin', racer: r.id });
@@ -537,8 +538,9 @@ function collideCars(world: World): void {
       if (d >= min || d < 1e-6 || Math.abs(a.car.y - b.car.y) > 1.5) continue;
       const nx = dx / d;
       const nz = dz / d;
+      // razão de massas limitada: o carro pesado empurra, mas não atropela os leves no tráfego
       const ma = a.spec.mass;
-      const mb = b.spec.mass;
+      const mb = clamp(b.spec.mass, ma / 1.25, ma * 1.25);
       const pen = min - d;
       a.car.x -= nx * pen * (mb / (ma + mb));
       a.car.z -= nz * pen * (mb / (ma + mb));
@@ -642,6 +644,7 @@ export function stepWorld(world: World, humanInputs: Record<number, ControlInput
       } else if (ev?.type === 'finish') {
         r.finishPlace = ++world.finishedCount;
         r.money += world.prizes[r.finishPlace - 1] ?? 0;
+        if (r.finishPlace === 1) r.money += LAP_BONUS * Object.values(r.lapsOver).reduce((a, b) => a + b, 0);
         world.events.push({ type: 'finish', racer: r.id, place: r.finishPlace });
       }
     }
@@ -657,7 +660,7 @@ export function stepWorld(world: World, humanInputs: Record<number, ControlInput
 
 /**
  * "Lapping bonus" (original: $5.000): o 1º colocado que abre uma volta sobre o último.
- * Premia uma vez por volta de vantagem.
+ * Premia uma vez por volta de vantagem, pago só se ele vencer a corrida (como no original).
  */
 function checkLapping(world: World): void {
   const T = world.track.totalLength;
@@ -671,8 +674,8 @@ function checkLapping(world: World): void {
     {
       const laps = Math.floor((da - raceDistance(world, b)) / T);
       if (laps > (a.lapsOver[b.id] ?? 0)) {
+        // o dinheiro só entra se ele vencer a corrida (ver 'finish')
         a.lapsOver[b.id] = laps;
-        a.money += LAP_BONUS;
         world.events.push({ type: 'lapped', racer: a.id, victim: b.id, bonus: LAP_BONUS });
       }
     }

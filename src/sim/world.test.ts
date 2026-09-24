@@ -4,7 +4,7 @@ import { VEHICLES } from '../data/vehicles';
 import { newCampaign, opponentsFor } from './campaign';
 import { emptyInput } from './input';
 import { Track } from './track';
-import { createWorld, KILL_BOUNTY, stepWorld, type RacerEntry } from './world';
+import { createWorld, KILL_BOUNTY, stepWorld, WEAPONS, type RacerEntry } from './world';
 
 const DT = 1 / 60;
 const track = new Track(TRACKS[0]);
@@ -107,19 +107,20 @@ describe('mundo da corrida', () => {
     expect(world.hazards.filter((h) => h.kind === 'scatter').length).toBeGreaterThanOrEqual(3);
   });
 
-  it('Battle Trak e Havac são imunes ao óleo', () => {
+  it('Battle Trak e Havac resistem ao óleo (giram metade do tempo)', () => {
     for (const id of ['battletrak', 'havac']) {
       const world = createWorld(track, [{ name: 'A', color: 0, spec: VEHICLES[id], ai: null }], 4, 1);
       const car = world.racers[0].car;
       const fx = Math.sin(car.heading), fz = Math.cos(car.heading);
       world.hazards.push({ id: 98, kind: 'oil', owner: -1, x: car.x + fx * 20, y: car.y, z: car.z + fz * 20, age: 5 });
       world.started = true;
-      let spins = 0;
+      let spin = 0;
       for (let i = 0; i < 60 * 3; i++) {
         stepWorld(world, { 0: { ...emptyInput(), throttle: 1 } }, DT);
-        spins += world.events.filter((e) => e.type === 'spin').length;
+        if (world.events.some((e) => e.type === 'spin')) spin = world.racers[0].spinTime;
       }
-      expect(spins).toBe(0);
+      expect(spin).toBeGreaterThan(0);
+      expect(spin).toBeLessThanOrEqual(WEAPONS.oil.spinTime * 0.5 + 1e-9);
     }
   });
 

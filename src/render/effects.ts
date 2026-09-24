@@ -295,9 +295,10 @@ export class Effects {
   private clawMat = new THREE.MeshStandardMaterial({ color: 0xd8dce2, metalness: 1, roughness: 0.25 });
   private ledMat = new THREE.MeshBasicMaterial({ color: HOT(0xff2010, 5) });
   /** KO Scatterpack: bolinhas espinhosas amarelas e pretas */
-  private scatterGeo = new THREE.IcosahedronGeometry(0.34, 0);
-  private scatterMat = new THREE.MeshStandardMaterial({ color: 0xf2c318, metalness: 0.4, roughness: 0.4, emissive: 0x2a2000 });
-  private scatterSpike = new THREE.ConeGeometry(0.07, 0.3, 4);
+  // scatter: esfera de metal escuro com núcleo vermelho aceso (como no visual alvo)
+  private scatterGeo = new THREE.SphereGeometry(0.24, 16, 12);
+  private scatterMat = new THREE.MeshStandardMaterial({ color: 0x5a0a08, metalness: 0.85, roughness: 0.22, emissive: 0xff1a10, emissiveIntensity: 0.9 });
+  private scatterSpike = new THREE.ConeGeometry(0.04, 0.16, 4);
   private darkMetal = new THREE.MeshStandardMaterial({ color: 0x1a1a1e, metalness: 0.8, roughness: 0.3 });
   /** poças: óleo (brilho furta-cor), gosma, água, neve, lava */
   private oilGeo = new THREE.CircleGeometry(1, 32).rotateX(-Math.PI / 2);
@@ -635,12 +636,12 @@ export class Effects {
         g.add(new THREE.Mesh(this.scatterGeo, this.scatterMat));
         for (const [x, y, z] of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, 0, 1], [0, 0, -1]]) {
           const sp = new THREE.Mesh(this.scatterSpike, this.darkMetal);
-          sp.position.set(x * 0.36, y * 0.36, z * 0.36);
+          sp.position.set(x * 0.25, y * 0.25, z * 0.25);
           sp.quaternion.setFromUnitVectors(UP, new THREE.Vector3(x, y, z));
           g.add(sp);
         }
-        const led = new THREE.Mesh(new THREE.SphereGeometry(0.08, 6, 4), this.ledMat);
-        led.position.y = 0.36;
+        const led = new THREE.Mesh(new THREE.SphereGeometry(0.06, 6, 4), this.ledMat);
+        led.position.y = 0.26;
         led.name = 'led';
         g.add(led);
         return g;
@@ -734,7 +735,7 @@ export class Effects {
           o.scale.set(r, 1, r * 0.85);
           o.position.set(h.x, h.y + 0.03, h.z);
         } else if (kind === 'mine' || kind === 'scatter') {
-          o.position.set(h.x, h.y + (kind === 'mine' ? 0.15 : 0.3), h.z);
+          o.position.set(h.x, h.y + (kind === 'mine' ? 0.15 : 0.22), h.z);
           const led = o.getObjectByName('led');
           if (led) led.visible = h.age < 0.6 || Math.sin(this.time * (kind === 'mine' ? 12 : 16) + h.id) > 0;
           if (kind === 'scatter') o.rotation.y = h.id;
