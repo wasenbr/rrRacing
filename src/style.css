@@ -477,6 +477,7 @@ h2 { color: #ffb030; text-shadow: 2px 2px 0 #3a0e04; font-style: italic; }
 .slot-btns { display: flex; gap: 6px; align-items: center; }
 .del { min-width: 44px; padding: 10px; border-radius: 10px; border: 2px solid rgba(224, 52, 42, 0.6); background: rgba(224, 52, 42, 0.12); }
 .del.confirm { background: #c0281a; color: #fff; }
+button.confirm { background: #c0281a; color: #fff; }
 .rivals li { display: flex; align-items: center; gap: 8px; }
 .rivals li > div { flex: 1; }
 .rivals li small { display: block; }

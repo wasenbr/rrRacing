@@ -182,4 +182,30 @@ describe('campanha', () => {
     expect(decodeSave(code.replace(/.$/, (c) => (c === '1' ? '2' : '1')))).toBeNull();
     expect(decodeSave('lixo')).toBeNull();
   });
+
+  it('senha com checksum válido mas conteúdo impossível é rejeitada', () => {
+    const bad: ((s: ReturnType<typeof newCampaign>) => void)[] = [
+      (s) => (s.characterId = 'ninguem'),
+      (s) => (s.car.vehicleId = 'tanque'),
+      (s) => (s.planet = PLANETS.length),
+      (s) => (s.planet = -1),
+      (s) => (s.division = 2),
+      (s) => (s.car.upgrades.engine = 4),
+      (s) => (s.car.upgrades.armor = 1.5),
+      (s) => (s.car.charges.front = 99),
+      (s) => (s.car.charges.nitro = -1),
+      (s) => (s.money = Number.NaN),
+      (s) => ((s as { difficulty?: string }).difficulty = 'impossivel'),
+    ];
+    for (const change of bad) {
+      const s = newCampaign('jake', 0x2f7bff);
+      change(s);
+      expect(decodeSave(encodeSave(s))).toBeNull();
+    }
+    const ok = newCampaign('jake', 0x2f7bff);
+    ok.planet = PLANETS.length - 1;
+    ok.division = 1;
+    ok.car = { vehicleId: 'havac', upgrades: { engine: 3, tires: 3, shocks: 3, armor: 3 }, charges: { front: 2, rear: 1, nitro: 0 } };
+    expect(decodeSave(encodeSave(ok))).toEqual(ok);
+  });
 });

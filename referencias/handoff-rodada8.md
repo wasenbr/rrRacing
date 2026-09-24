@@ -11,11 +11,10 @@ simulação determinística, `npm run typecheck && npm test` passando).
   retratos/miniaturas (`src/ui/portraits.ts`, `src/ui/menus.ts`, `src/style.css`), skill em grupos
   (`.claude/skills/rodada-avaliadores/SKILL.md`), itens 53–54 no feedback, registro da rodada 7 e
   este arquivo.
-- Item 53 ("Let the carnage begin!" sem emoção): havia um agente regravando o take em segundo plano
-  (Chatterbox, `scripts/locutor/gerar.py`, takes em `.tts/takes-luta/`). Conferir se
-  `public/audio/locutor/start_*.mp3` foi trocado (data do arquivo e `manifest.json`). Se não, refazer:
-  gerar 8–12 takes só de `start` com exagero 1,6–2,0 e cfg 0,2–0,3, escolher por Whisper (texto fiel) +
-  faixa de F0 ampla com F0 mediano 130–230 Hz, tratar com `tratar.py` e publicar.
+- Item 53 feito no fim da rodada 7: `public/audio/locutor/start_2.mp3` regravado ("Let the CARNAGE...
+  BEGIN!!", voz `voz-referencia-arena.wav`, exagero 1,75, cfg 0,3; F0 mediano 268→207 Hz, acento de
+  volume 2,9→6,3 dB). Escolhido só por números: o usuário deve ouvir e confirmar. Takes em
+  `.tts/takes-carnage/`.
 - Dev server: `npm run dev` (conferir a porta; na rodada 7 foi 5175). Aquecer com uma requisição antes
   de `node scripts/evidencias.mjs <scratchpad>/r8 tudo http://localhost:<porta>/`.
 
@@ -32,7 +31,7 @@ Pistas, Campanha), Plataforma (Interface, Desempenho), Som, Online e QA.
   se `Number.isInteger(m.color) && COLORS.includes(m.color)`, senão a primeira cor livre. No convidado,
   validar `net.players` vindo do host. `src/ui/menus.ts` sala online (~938) e `carImg`: passar cor e
   chave `data-thumb` por `esc()`.
-- **Som — item 53** (ver "Estado" acima).
+- **Som — item 53**: só confirmar com o usuário se o novo `start_2.mp3` ficou bom (ver "Estado").
 
 ### 2. Altas — pedidos do usuário ainda falhando
 

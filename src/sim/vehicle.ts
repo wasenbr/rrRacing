@@ -15,6 +15,23 @@ const DRIFT_GRIP_LOSS = 0.5;
 /** Curva fechada: multiplica o giro e freia (perde mais que a curva normal, menos que a mureta). */
 const SHARP_TURN = 1.9;
 const SHARP_DRAG = 1.1;
+/**
+ * Derrapagem sem o botão só depois de segurar o esterço forte por este tempo (s): uma curva comum,
+ * mesmo com esterço total, não solta a traseira nem freia o carro (itens 38/41).
+ */
+const DRIFT_HOLD = 0.4;
+const DRIFT_HOLD_RAMP = 0.25;
+/**
+ * Alinhamento da trajetória: a velocidade lateral é girada para o bico (em vez de só amortecida),
+ * perdendo esta fração da velocidade por radiano alinhado (~6% numa curva de 90°).
+ */
+const ALIGN_LOSS = 0.08;
+/** Acima deste escorregamento (rad) o carro está de lado (pancada, óleo): volta a só amortecer. */
+const ALIGN_ROTATE_MAX = 0.45;
+const ALIGN_ROTATE_FADE = 0.5;
+/** Rampa do esterço digital (teclado/toque, -1/0/+1): ao aumentar e ao soltar/inverter (por s). */
+const STEER_RAMP = 7;
+const STEER_RELEASE = 14;
 
 export const GRAVITY = 25; // gravidade "arcade": saltos rápidos e secos
 const GROUND_SNAP = 0.35;
@@ -126,6 +143,8 @@ export interface VehicleState {
   pitch: number;
   roll: number;
   steer: number;
+  /** tempo (s) com esterço forte seguro para um lado (sinal = lado); ver DRIFT_HOLD */
+  steerHold: number;
   wheelSpin: number;
   nitroCharges: number;
   nitroTime: number;
@@ -161,6 +180,7 @@ export function createVehicleState(spec: VehicleSpec, x: number, z: number, head
     pitch: 0,
     roll: 0,
     steer: 0,
+    steerHold: 0,
     wheelSpin: 0,
     nitroCharges: spec.nitroCharges,
     nitroTime: 0,
@@ -246,7 +266,18 @@ export function stepVehicle(v: VehicleState, spec: VehicleSpec, input: ControlIn
   const boosting = v.nitroTime > 0;
   if (boosting) v.nitroTime = Math.max(0, v.nitroTime - dt);
 
-  v.steer += (input.steer - v.steer) * clamp(dt * 20, 0, 1);
+  const target = input.steer;
+  if (target === 0 || Math.abs(target) === 1) {
+    // entrada digital: rampa linear (entra progressivo, solta/inverte rápido)
+    const release = Math.abs(target) < Math.abs(v.steer) || target * v.steer < 0;
+    const rate = (release ? STEER_RELEASE : STEER_RAMP) * dt;
+    v.steer += clamp(target - v.steer, -rate, rate);
+  } else {
+    v.steer += (target - v.steer) * clamp(dt * 20, 0, 1);
+  }
+  if (target > 0.5) v.steerHold = v.steerHold > 0 ? v.steerHold + dt : dt;
+  else if (target < -0.5) v.steerHold = v.steerHold < 0 ? v.steerHold - dt : -dt;
+  else v.steerHold = 0;
   let vf = forwardSpeed(v);
 
   const sharp = !!input.sharp && v.grounded;
@@ -296,9 +327,23 @@ export function stepVehicle(v: VehicleState, spec: VehicleSpec, input: ControlIn
 
     // Derrapagem controlável: esterço forte em alta velocidade solta a traseira e o carro gira
     // um pouco mais — dá para "jogar" o carro na curva sem perder o controle.
+    // Sem o botão, só derrapa segurando o esterço forte por um tempo (curva comum não freia).
     const speedRatio = clamp(Math.abs(vf) / spec.maxSpeed, 0, 1.3);
-    const drift = sharp ? Math.max(0.6, Math.abs(v.steer)) : Math.abs(v.steer) * clamp((speedRatio - DRIFT_START) / (1 - DRIFT_START), 0, 1);
-    vl *= Math.exp(-spec.grip * surf.grip * (1 - DRIFT_GRIP_LOSS * drift) * dt);
+    const held = clamp((Math.abs(v.steerHold) - DRIFT_HOLD) / DRIFT_HOLD_RAMP, 0, 1);
+    const drift = sharp ? Math.max(0.6, Math.abs(v.steer)) : Math.abs(v.steer) * held * clamp((speedRatio - DRIFT_START) / (1 - DRIFT_START), 0, 1);
+    const k = Math.exp(-spec.grip * surf.grip * (1 - DRIFT_GRIP_LOSS * drift) * dt);
+    const damped = vl * k;
+    if (vf > 1) {
+      // gira o vetor de velocidade para o bico, conservando quase toda a velocidade
+      const beta = Math.atan2(vl, vf);
+      const w = clamp(1 - (Math.abs(beta) - ALIGN_ROTATE_MAX) / ALIGN_ROTATE_FADE, 0, 1);
+      if (w > 0) {
+        const nb = beta * k;
+        const sp = Math.hypot(vf, vl) * (1 - ALIGN_LOSS * (1 + drift) * Math.abs(beta - nb));
+        vf = vf * (1 - w) + sp * Math.cos(nb) * w;
+        vl = damped * (1 - w) + sp * Math.sin(nb) * w;
+      } else vl = damped;
+    } else vl = damped;
     v.heading -= v.steer * spec.steerRate * 0.18 * drift * dt;
     v.drift = drift;
   } else {

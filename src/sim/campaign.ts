@@ -1,6 +1,8 @@
 import { TRACKS } from '../data/tracks';
 import type { AiProfile } from './ai';
-import { buildSpec, CHARACTERS, newCarSetup, type CarSetup } from './garage';
+import { buildSpec, CHARACTERS, CHARGE_KINDS, MAX_UPGRADE, newCarSetup, UPGRADE_KINDS, type CarSetup } from './garage';
+import { VEHICLES } from '../data/vehicles';
+import { MAX_CHARGES } from './vehicle';
 import { clamp } from './math';
 import type { ThemeId } from './track';
 import type { VehicleSpec } from './vehicle';
@@ -246,14 +248,34 @@ export function encodeSave(s: CampaignState): string {
   return `${b64}.${checksum(json)}`;
 }
 
+const isInt = (v: unknown, min: number, max: number): v is number => Number.isInteger(v) && (v as number) >= min && (v as number) <= max;
+
+/** Save coerente: piloto, carro, planeta, divisão, melhorias e cargas dentro do que o jogo aceita. */
+export function validSave(s: CampaignState): boolean {
+  if (!s || typeof s !== 'object' || s.version !== 1) return false;
+  if (!CHARACTERS.some((c) => c.id === s.characterId)) return false;
+  if (!isInt(s.color, 0, 0xffffff) || typeof s.money !== 'number' || !Number.isFinite(s.money) || s.money < 0) return false;
+  if (!isInt(s.planet, 0, PLANETS.length - 1) || !isInt(s.division, 0, DIVISIONS.length - 1)) return false;
+  if (!isInt(s.race, 0, PLANETS[s.planet].races) || typeof s.points !== 'number' || !Number.isFinite(s.points)) return false;
+  if (s.difficulty !== undefined && !(s.difficulty in DIFFICULTY)) return false;
+  const car = s.car;
+  if (!car || typeof car !== 'object' || !VEHICLES[car.vehicleId] || !car.upgrades || !car.charges) return false;
+  if (!UPGRADE_KINDS.every((k) => isInt(car.upgrades[k], 0, MAX_UPGRADE))) return false;
+  if (!CHARGE_KINDS.every((k) => isInt(car.charges[k], 0, MAX_CHARGES))) return false;
+  if (typeof s.champion !== 'boolean') return false;
+  // estatísticas faltando (save antigo) não invalidam: decodeSave completa com zeros
+  const st = s.stats;
+  return st === undefined || (!!st && typeof st === 'object' && ['races', 'wins', 'kills', 'earnings'].every((k) => Number.isFinite((st as Record<string, unknown>)[k])));
+}
+
 export function decodeSave(code: string): CampaignState | null {
   try {
     const [b64, sum] = code.trim().split('.');
     const json = new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)));
     if (checksum(json) !== Number(sum)) return null;
     const s = JSON.parse(json) as CampaignState;
-    if (s.version !== 1 || !s.car || typeof s.money !== 'number') return null;
-    if (s.planet >= PLANETS.length) return null;
+    if (!validSave(s)) return null;
+    s.stats ??= { races: 0, wins: 0, kills: 0, earnings: 0 };
     return s;
   } catch {
     return null;

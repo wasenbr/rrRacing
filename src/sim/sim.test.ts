@@ -29,6 +29,11 @@ describe('pistas', () => {
 describe('veículo', () => {
   const track = new Track(TRACKS[0]);
   const spec = VEHICLES.marauder;
+  // chão plano e largo, sem mureta: só a física da curva
+  const flat = {
+    halfWidth: 1000, surface: 'asphalt', pieces: [{ code: 'S', length: 1e9 }], heightOn: () => 0,
+    query: () => ({ height: 0, lateral: 0, heading: 0, pieceIndex: 0, void: false, warp: 0, dist: 0, s: 0 }),
+  } as unknown as Track;
 
   it('acelera na reta', () => {
     const v = createVehicleState(spec, 0, 4, 0);
@@ -38,19 +43,37 @@ describe('veículo', () => {
     expect(v.z).toBeGreaterThan(10);
   });
 
-  it('esterço forte em alta velocidade derrapa; devagar não', () => {
-    const slip = (speed: number) => {
+  it('esterço forte seguro em alta velocidade derrapa; devagar não', () => {
+    const slip = (speed: number, steps = 45) => {
       const v = createVehicleState(spec, 0, 4, 0);
       v.vz = speed;
       let max = 0;
-      for (let i = 0; i < 20; i++) {
-        stepVehicle(v, spec, { ...emptyInput(), throttle: 1, steer: 1 }, track, DT);
+      for (let i = 0; i < steps; i++) {
+        stepVehicle(v, spec, { ...emptyInput(), throttle: 1, steer: 1 }, flat, DT);
         max = Math.max(max, v.drift);
       }
       return max;
     };
     expect(slip(spec.maxSpeed * 0.95)).toBeGreaterThan(0.5);
     expect(slip(spec.maxSpeed * 0.3)).toBe(0);
+    // curva comum (esterço solto antes de ~0,4 s) não derrapa (itens 38/41)
+    expect(slip(spec.maxSpeed * 0.95, 22)).toBe(0);
+  });
+
+  it('curva de 90° com esterço total perde pouca velocidade (itens 38/41)', () => {
+    for (const id of Object.keys(VEHICLES)) {
+      const s = VEHICLES[id];
+      const v = createVehicleState(s, 0, 0, 0);
+      for (let i = 0; i < 600; i++) stepVehicle(v, s, { ...emptyInput(), throttle: 1 }, flat, DT);
+      const s0 = Math.hypot(v.vx, v.vz);
+      let min = s0;
+      for (let i = 0; i < 300 && Math.atan2(v.vx, v.vz) > -Math.PI / 2; i++) {
+        stepVehicle(v, s, { ...emptyInput(), throttle: 1, steer: 1 }, flat, DT);
+        min = Math.min(min, Math.hypot(v.vx, v.vz));
+      }
+      expect(Math.atan2(v.vx, v.vz), id).toBeLessThanOrEqual(-Math.PI / 2 + 0.05);
+      expect(1 - min / s0, id).toBeLessThanOrEqual(0.08);
+    }
   });
 
   it('nunca atravessa o guard-rail', () => {

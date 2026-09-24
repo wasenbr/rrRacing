@@ -77,12 +77,14 @@ export interface MenuActions {
   quickRace(o: QuickOptions): void;
   newCampaign(o: NewCampaignOptions): void;
   continueCampaign(): void;
-  loadPassword(code: string): boolean;
+  /** carrega a senha no slot escolhido (a tela já confirmou se ele estava ocupado) */
+  loadPassword(code: string, slot: number): boolean;
   listSlots(): SlotInfo[];
   advanceEarly(): void;
   loadSlot(slot: number): void;
   saveSlot(slot: number): void;
-  deleteSlot(slot: number): void;
+  /** apaga o slot; devolve se ainda há campanha para CONTINUAR */
+  deleteSlot(slot: number): boolean;
   campaignRace(): void;
   openShop(): void;
   buyCar(id: string): void;
@@ -105,6 +107,7 @@ export interface MenuActions {
   skipTrack(): void;
   setAutoThrottle(on: boolean): void;
   setQuality(q: QualityPref): void;
+  setBatterySaver(on: boolean): void;
   toggleFullscreen(): void;
   install(): void;
   quitGame(): void;
@@ -137,6 +140,8 @@ export interface AudioSettings {
   /** preferência de qualidade e o nível em uso agora */
   quality: QualityPref;
   qualityNow: QualityLevel;
+  /** economia de bateria: corrida a 30 qps */
+  battery: boolean;
 }
 
 export interface ResultRow {
@@ -365,6 +370,8 @@ export class Menus {
   private lastHub: HubData | null = null;
   private inCampaign = false;
   private hasSave = false;
+  /** slot onde a senha será carregada */
+  private pwSlot = -1;
   /** tela de slots: veio de onde (para o "Voltar") */
   private slotsFrom: 'main' | 'hub' = 'main';
   /** Olaf, o piloto secreto (como no original: L + R + Select com o Tarquinn selecionado). */
@@ -826,11 +833,20 @@ export class Menus {
 
   showPassword(code: string | null): void {
     const saving = code !== null;
+    // carregar: escolhe o slot (o primeiro vazio por padrão); ocupado pede confirmação no Carregar
+    const slots = saving ? [] : this.actions.listSlots();
+    if (!saving && !slots.some((x) => x.slot === this.pwSlot)) this.pwSlot = slots.find((x) => x.empty)?.slot ?? 0;
+    const pick = saving
+      ? ''
+      : `<h3>Carregar no slot</h3><div class="slot-pick">${slots
+          .map((x) => `<button class="slotsel pwsel" data-pwslot="${x.slot}"><b>Slot ${x.slot + 1}</b><small>${x.empty ? 'vazio' : `substituir: ${esc(x.pilot)} · ${esc(x.planet)}`}</small></button>`)
+          .join('')}</div>`;
     this.show(`
       <div class="card small">
         <h2>SENHA</h2>
         <p class="small-note">${saving ? 'Guarde esta senha para continuar em outro aparelho ou navegador.' : 'Cole aqui uma senha salva para continuar a campanha.'}</p>
         <textarea class="pw" rows="5" ${saving ? 'readonly' : ''} spellcheck="false">${saving ? esc(code) : ''}</textarea>
+        ${pick}
         <p class="pw-msg"></p>
         ${saving ? '<button class="go" data-act="copy-password">Copiar</button><button data-act="hub">← Voltar</button>' : '<button class="go" data-act="load-password">Carregar</button><button data-act="load">← Voltar</button>'}
       </div>`);
@@ -853,6 +869,7 @@ export class Menus {
         ${toggle('sfx', 'Efeitos sonoros', a.sfx)}
         ${toggle('announcer', 'Locutor', a.announcer)}
         <div class="shop-row"><div class="grow"><b>Qualidade gráfica</b><small>Em uso: ${QUALITY_LABELS[a.qualityNow]}. Baixa deixa o jogo liso em aparelhos simples.</small></div><button class="toggle on" data-quality="${a.quality}">${QUALITY_LABELS[a.quality].toUpperCase()}</button></div>
+        ${toggle('battery', 'Economia de bateria', a.battery, 'Corrida a 30 quadros por segundo: gasta menos bateria e esquenta menos')}
         ${a.touch ? toggle('autothrottle', 'Aceleração automática', a.autoThrottle, 'O carro acelera sozinho; o polegar direito freia e atira') : ''}
         ${a.touch && tiltSupported() ? toggle('tilt', 'Direção por inclinação', tiltSteeringEnabled(), 'Vire o celular como um volante; o polegar esquerdo fica só com as armas') : ''}
         ${a.touch ? this.fsButtonHtml() : ''}
@@ -1028,8 +1045,27 @@ export class Menus {
     sel('.tab[data-tab]', (b) => b.dataset.tab === this.shopTab);
     sel('.tab[data-qplanet]', (b) => b.dataset.qplanet === this.quickPlanet);
     sel('.slotsel', (b) => Number(b.dataset.slotsel) === this.newChar.slot);
+    sel('.pwsel', (b) => Number(b.dataset.pwslot) === this.pwSlot);
     sel('.color', (b) => Number(b.dataset.color) === (b.dataset.group === 'new' ? this.newChar.color : this.quick.color));
     sel('.diff', (b) => b.dataset.diff === (b.dataset.group === 'new' ? this.newChar.difficulty : this.quick.difficulty));
+  }
+
+  /** Segundo toque confirma: o primeiro troca o texto do botão pela pergunta. */
+  private confirmClick(t: HTMLElement, question: string): boolean {
+    if (t.classList.contains('confirm')) return true;
+    this.clearConfirm();
+    t.dataset.label = t.innerHTML;
+    t.classList.add('confirm');
+    t.textContent = question;
+    return false;
+  }
+
+  private clearConfirm(): void {
+    this.el.querySelectorAll<HTMLElement>('.confirm[data-label]').forEach((b) => {
+      b.classList.remove('confirm');
+      b.innerHTML = b.dataset.label!;
+      delete b.dataset.label;
+    });
   }
 
   private onClick(e: Event): void {
@@ -1062,7 +1098,14 @@ export class Menus {
       const feat = this.el.querySelector('.char-feature');
       if (feat) feat.innerHTML = this.charFeature();
     }
-    if (d.slotsel) this.newChar.slot = Number(d.slotsel);
+    if (d.slotsel) {
+      this.newChar.slot = Number(d.slotsel);
+      this.clearConfirm();
+    }
+    if (d.pwslot) {
+      this.pwSlot = Number(d.pwslot);
+      this.clearConfirm();
+    }
     if (d.diff) {
       if (d.group === 'new') this.newChar.difficulty = d.diff as Difficulty;
       else this.quick.difficulty = d.diff as Difficulty;
@@ -1109,17 +1152,22 @@ export class Menus {
         void setTiltSteering(d.on !== '1').then(() => this.lastAudio && this.showSettings(this.lastAudio));
         return;
       }
-      if (d.toggle === 'autothrottle') this.actions.setAutoThrottle(d.on !== '1');
+      if (d.toggle === 'battery') this.actions.setBatterySaver(d.on !== '1');
+      else if (d.toggle === 'autothrottle') this.actions.setAutoThrottle(d.on !== '1');
       else this.actions.setAudio(d.toggle as 'music' | 'sfx' | 'announcer', d.on !== '1');
     }
     if (d.upgrade) this.actions.buyUpgrade(d.upgrade as UpgradeKind);
     if (d.charge) this.actions.buyCharge(d.charge as ChargeKind);
     if (d.buycar) this.actions.buyCar(d.buycar);
-    if (d.save) return this.actions.saveSlot(Number(d.save));
+    if (d.save) {
+      const occupied = this.actions.listSlots().some((x) => x.slot === Number(d.save) && !x.empty);
+      if (occupied && !this.confirmClick(t, 'Substituir?')) return;
+      return this.actions.saveSlot(Number(d.save));
+    }
     if (d.loadslot) return this.actions.loadSlot(Number(d.loadslot));
     if (d.delslot) {
       if (t.classList.contains('confirm')) {
-        this.actions.deleteSlot(Number(d.delslot));
+        this.hasSave = this.actions.deleteSlot(Number(d.delslot));
         this.showSlots(this.el.querySelector('[data-save]') ? 'save' : 'load', 'Slot apagado.');
       } else {
         t.classList.add('confirm');
@@ -1133,8 +1181,12 @@ export class Menus {
         return this.actions.continueCampaign();
       case 'new':
         return this.showNewCampaign();
-      case 'new-start':
+      case 'new-start': {
+        const slot = this.newChar.slot;
+        const busy = this.actions.listSlots().some((x) => x.slot === slot && !x.empty);
+        if (busy && !this.confirmClick(t, `Substituir o slot ${slot + 1}?`)) return;
         return this.actions.newCampaign({ ...this.newChar });
+      }
       case 'quick':
         return this.showQuick();
       case 'quick-start':
@@ -1157,7 +1209,9 @@ export class Menus {
         return;
       }
       case 'load-password': {
-        const ok = this.actions.loadPassword(this.el.querySelector<HTMLTextAreaElement>('.pw')!.value);
+        const busy = this.actions.listSlots().some((x) => x.slot === this.pwSlot && !x.empty);
+        if (busy && !this.confirmClick(t, `Substituir o slot ${this.pwSlot + 1}?`)) return;
+        const ok = this.actions.loadPassword(this.el.querySelector<HTMLTextAreaElement>('.pw')!.value, this.pwSlot);
         if (!ok) this.el.querySelector('.pw-msg')!.textContent = 'Senha inválida.';
         return;
       }

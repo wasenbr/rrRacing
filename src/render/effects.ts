@@ -163,6 +163,13 @@ class ParticlePool {
   /** partículas mortas guardadas para reaproveitar (sem lixo para o coletor de memória) */
   private free: (Particle & { rot: number; spin: number })[] = [];
 
+  /** Apaga todas as partículas vivas (troca de corrida). */
+  clear(): void {
+    for (const p of this.items) this.free.push(p);
+    this.items.length = 0;
+    this.mesh.count = 0;
+  }
+
   emit(p: Omit<Particle, 'max'>): void {
     if (this.density < 1 && Math.random() > this.density) return;
     const it = this.items.length >= this.capacity ? this.items.shift()! : this.free.pop();
