@@ -74,3 +74,7 @@ Cada item precisa ser atendido e verificado pelos avaliadores.
     ficar do tamanho dele (na pista, na vitrine e nas miniaturas).
 35. O salto dos carros está longo demais, principalmente nas pistas com buraco (vão). Saltos mais
     curtos e baixos, só o suficiente para vencer o vão com folga.
+36. iPhone: ao girar da vertical para a horizontal o jogo não ocupava a tela toda e surgia barra
+    de rolagem. A página não pode rolar nunca e o jogo deve ocupar toda a área visível após girar.
+37. O botão "Instalar o jogo" deve estar sempre visível no menu (fora do app já instalado), inclusive
+    no iPhone; sem o convite do navegador, ele mostra o passo a passo de instalação.

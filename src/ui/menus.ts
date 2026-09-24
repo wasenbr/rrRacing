@@ -408,11 +408,8 @@ export class Menus {
   showMain(hasSave: boolean): void {
     this.inCampaign = false;
     this.hasSave = hasSave;
-    const install = this.app.canInstall
-      ? '<button class="install" data-act="install">📲 Instalar o jogo</button>'
-      : this.app.ios && !this.app.installed
-        ? '<p class="small-note center">Para instalar no iPhone: toque em Compartilhar e depois em “Adicionar à Tela de Início”.</p>'
-        : '';
+    // sempre visível fora do app instalado: sem o convite do navegador, mostra o passo a passo
+    const install = this.app.installed ? '' : '<button class="install" data-act="install">📲 Instalar o jogo</button>';
     this.show(`
       <div class="card title-card">
         <div class="logo-row">
@@ -443,6 +440,21 @@ export class Menus {
       <p><b>Celular:</b> polegar esquerdo arrasta o volante (até o fim da faixa = curva fechada; arrastando para cima, atira sem soltar a direção) e tem TIRO, MINA e NITRO logo acima; polegar direito acelera, freia e tem o botão CURVA. Em “Som e opções”: aceleração automática (o polegar direito ganha um TIRO) e direção por inclinação.</p>
       <p>Armas e nitro recarregam a cada volta. Dinheiro e blindagem aparecem pela pista.</p>
     </details>`;
+  }
+
+  /** Como instalar quando o navegador não oferece o convite automático (iPhone, convite recusado antes etc.). */
+  showInstallHelp(): void {
+    const steps = this.app.ios
+      ? '<p>No <b>Safari</b>, toque em <b>Compartilhar</b> (quadrado com seta para cima) e depois em <b>“Adicionar à Tela de Início”</b>.</p><p class="small-note">Aberto pelo ícone, o jogo roda em tela cheia, sem a barra do navegador.</p>'
+      : this.app.touch
+        ? '<p>No <b>Chrome</b>, toque no menu <b>⋮</b> e depois em <b>“Instalar app”</b> ou <b>“Adicionar à tela inicial”</b>.</p>'
+        : '<p>No <b>Chrome</b> ou <b>Edge</b>, clique no ícone de instalar no fim da barra de endereço (ou no menu <b>⋮ → Instalar</b>).</p>';
+    this.show(`
+      <div class="card small center">
+        <h2>INSTALAR O JOGO</h2>
+        ${steps}
+        <button class="go" data-act="main">Voltar</button>
+      </div>`);
   }
 
   /** Tela de despedida quando o navegador não deixa fechar a aba. */

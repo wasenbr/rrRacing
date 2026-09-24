@@ -30,6 +30,30 @@ export function initPwa(): void {
   }
 }
 
+/**
+ * Mantém o jogo do tamanho da área realmente visível. No iPhone o Safari não tem tela cheia
+ * e, ao girar o aparelho, informa o tamanho novo com atraso e deixa a página rolada;
+ * aqui a altura vira a variável CSS --app-h, a rolagem volta a zero e o jogo é redimensionado.
+ */
+export function initViewport(onChange: () => void): void {
+  const apply = () => {
+    const h = window.visualViewport?.height ?? window.innerHeight;
+    document.documentElement.style.setProperty('--app-h', `${Math.round(h)}px`);
+    window.scrollTo(0, 0);
+    onChange();
+  };
+  const settle = () => {
+    apply();
+    // o iOS termina a animação de rotação/barra depois do evento
+    for (const ms of [100, 300, 700]) setTimeout(apply, ms);
+  };
+  window.addEventListener('resize', apply);
+  window.addEventListener('orientationchange', settle);
+  window.visualViewport?.addEventListener('resize', apply);
+  window.visualViewport?.addEventListener('scroll', () => window.scrollTo(0, 0));
+  apply();
+}
+
 /** Avisa quando a possibilidade de instalar muda (para mostrar/esconder o botão). */
 export function onInstallChange(fn: () => void): void {
   listeners.push(fn);

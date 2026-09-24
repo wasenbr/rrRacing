@@ -15,6 +15,11 @@ html, body {
   margin: 0;
   height: 100%;
   overflow: hidden;
+  /* iOS Safari: fixa a página para não surgir rolagem (nem sobra de altura) ao girar o aparelho */
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  -webkit-text-size-adjust: 100%;
   background: var(--bg);
   color: var(--text);
   font-family: var(--font);
@@ -25,7 +30,8 @@ html, body {
   overscroll-behavior: none;
 }
 
-#game { position: fixed; inset: 0; }
+/* altura real visível (--app-h vem do JS; no iOS 100% inclui a área atrás da barra do navegador) */
+#game { position: fixed; top: 0; left: 0; width: 100%; height: var(--app-h, 100dvh); overflow: hidden; }
 #game canvas { display: block; }
 
 button { font: inherit; color: inherit; cursor: pointer; }

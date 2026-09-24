@@ -13,7 +13,7 @@ import {
 } from '../sim/campaign';
 import { buildSpec, CAR_PRICES, CHARACTERS, chargePrice, newCarSetup, tradeInValue, upgradePrice } from '../sim/garage';
 import { deleteSlot, listSlots, loadCampaign, loadFromSlot, loadPrefs, saveCampaign, savePrefs, saveToSlot } from './storage';
-import { canInstall, fullscreenSupported, initPwa, isFullscreen, isInstalled, isIos, onFullscreenChange, onInstallChange, promptInstall, quitGame, toggleFullscreen } from '../ui/pwa';
+import { canInstall, fullscreenSupported, initPwa, initViewport, isFullscreen, isInstalled, isIos, onFullscreenChange, onInstallChange, promptInstall, quitGame, toggleFullscreen } from '../ui/pwa';
 import { Controls, createTouchControls, isTouchDevice, setTouchAutoThrottle } from '../input/controls';
 import { CAMERA_LABELS, CameraRig, type CameraMode } from '../render/cameras';
 import { createCarMesh, type CarVisual } from '../render/cars';
@@ -249,7 +249,7 @@ export class Game {
       if (a === 'mute') this.hud.showToast(toggleMute() ? '🔇 Som desligado' : '🔊 Som ligado');
       if (a === 'fullscreen') void toggleFullscreen();
     });
-    window.addEventListener('resize', () => this.resize());
+    initViewport(() => this.resize());
     // Ctrl é o tiro no PC: um Ctrl+W acidental pede confirmação em vez de fechar a corrida
     window.addEventListener('beforeunload', (e) => {
       if (this.phase === 'racing' || this.phase === 'countdown') e.preventDefault();
@@ -992,7 +992,8 @@ export class Game {
         });
       },
       install: () => {
-        void promptInstall();
+        if (canInstall()) void promptInstall();
+        else this.menus.showInstallHelp();
       },
       quitGame: () => {
         void quitGame().then((closing) => {
