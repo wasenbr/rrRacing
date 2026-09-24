@@ -1,13 +1,12 @@
 ---
 name: rodada-avaliadores
-description: Loop de melhoria do Rock 'n' Roll Racing 3D com avaliadores independentes e exigentes (fixos: visual, carros, jogabilidade, interface/celular, som, desempenho, QA; eventuais: campanha, pistas, online). Use quando pedirem "rodada de melhorias", "submeta aos avaliadores", "/rodada-avaliadores" ou para continuar melhorando até todos aprovarem.
+description: Loop de melhoria do Rock 'n' Roll Racing 3D com avaliadores independentes e exigentes, em grupos chamados quando necessário (Aparência: visual e carros; Jogo: jogabilidade, pistas e campanha; Plataforma: interface/celular e desempenho; Som; Online; QA sempre). Use quando pedirem "rodada de melhorias", "submeta aos avaliadores", "/rodada-avaliadores" ou para continuar melhorando até todos aprovarem.
 ---
 
 # Rodada de melhorias com avaliadores
 
 Objetivo: um remake **fiel ao original** (identidade, pistas, carros, armas, campanha) com a
-**qualidade 3D do Motor Rock**, e só parar quando **todos os avaliadores aprovarem** (fixos na mesma rodada; eventuais na última vez
-em que rodaram).
+**qualidade 3D do Motor Rock**, e só parar quando **todos os avaliadores aprovarem** (a última avaliação de cada um).
 
 Referências (inspiração, nada entra no jogo):
 - `referencias/original.md` — fatos do original (planetas, pistas, carros, armas, pontos, pilotos).
@@ -34,10 +33,10 @@ repita:
   3. EVIDÊNCIAS reiniciar o `npm run dev` (um só; conferir a porta), aquecer com uma requisição à
                 página (com o vite em Idle a 1ª carga fria pode passar de 3 min) e rodar:
                 node scripts/evidencias.mjs <scratchpad>/rN tudo http://localhost:<porta>/
-  4. AVALIAR    lançar EM PARALELO os avaliadores FIXOS + os EVENTUAIS que tocam nesta rodada
-                (Agent, general-purpose, sempre agentes NOVOS a cada rodada, para não ficarem
+  4. AVALIAR    escolher os GRUPOS desta rodada (seção "Grupos") e lançar os avaliadores deles EM
+                PARALELO (Agent, general-purpose, sempre agentes NOVOS a cada rodada, para não ficarem
                 condescendentes). Prompt: seção "Avaliadores".
-  5. DECIDIR    fim SÓ se todos os fixos desta rodada E a última avaliação de cada eventual tiverem
+  5. DECIDIR    fim SÓ se a última avaliação de CADA avaliador (desta rodada ou anterior) tiver
                 "aprovado": true, "nota" ≥ 8 e todos os critérios ≥ 8 (conferir os números; não
                 aceitar nota < 8 mesmo com "aprovado": true).
                 senão -> juntar os problemas (bloqueantes primeiro), rodada += 1, voltar ao passo 1
@@ -47,8 +46,8 @@ repita:
   comandos longos (evidências completas levam vários minutos) sempre em segundo plano. Se atingir, parar e relatar ao usuário o que falta e por quê.
 ```
 
-Registrar cada rodada em `referencias/rodadas.md`: notas de cada avaliador (marcar quais eventuais
-rodaram), problemas, o que foi feito. Com o argumento "uma rodada": fazer só uma volta do loop e relatar.
+Registrar cada rodada em `referencias/rodadas.md`: grupos chamados e por quê, notas de cada avaliador,
+problemas, o que foi feito. Com o argumento "uma rodada": fazer só uma volta do loop e relatar.
 
 ### Evidências (scripts/evidencias.mjs)
 
@@ -66,13 +65,28 @@ O render é por software (SwiftShader); lentidão nas capturas não é defeito d
 
 ## Avaliadores
 
-Um agente por área. **Fixos** rodam em toda rodada. **Eventuais** rodam quando:
-- é a 1ª rodada do loop, ou já se passaram 3 rodadas desde a última avaliação deles; ou
-- a rodada mexeu em arquivos da área (ver "Arquivos" de cada um); ou
-- o usuário pediu, ou há item novo do `feedback-usuario.md` na área; ou
-- a última avaliação deles reprovou (roda de novo até aprovar).
+Um agente por área, organizados em grupos.
 
-Cada um recebe este prompt-base mais o foco da área:
+### Grupos
+
+| Grupo | Avaliadores | Chamar quando a rodada mexeu em |
+|---|---|---|
+| **Aparência** | Visual, Carros | `src/render/*`, `src/style.css` (HUD), `src/data/vehicles.ts` |
+| **Jogo** | Jogabilidade, Pistas, Campanha | `src/sim/*`, `src/data/*`, `src/input/*` |
+| **Plataforma** | Interface e celular, Desempenho | `src/ui/*`, `src/core/*`, `src/render/quality.ts`, `index.html`, `public/` (menos áudio), `vite.config.ts` |
+| **Som** | Som | `src/audio/*`, `public/audio/*`, `music/` |
+| **Online** | Online | `src/net/*`, telas online em `src/ui/*` |
+| **QA** | QA | **sempre** (qualquer mudança pode quebrar algo) |
+
+Um grupo também é chamado quando:
+- há item novo do `feedback-usuario.md` na área, ou o usuário pediu;
+- algum avaliador dele reprovou na última avaliação (repete até aprovar);
+- é a 1ª rodada do loop, ou o grupo está há 3 rodadas sem avaliação.
+
+Chamar o grupo inteiro, não só um avaliador dele. O argumento da skill pode nomear grupos
+(ex.: "/rodada-avaliadores aparência som"): roda esses mais o QA.
+
+Cada avaliador recebe este prompt-base mais o foco da área:
 
 > Você é um avaliador independente e EXTREMAMENTE exigente de um jogo de corrida de combate 3D
 > para navegador (remake de Rock 'n' Roll Racing, em `C:\Projetos\rrRacing`). Sua área: **<ÁREA>**.
@@ -120,8 +134,6 @@ Focos:
   slot e senha, trocar de carro/piloto, fim de campanha, reiniciar corrida), fluxo de menus sem beco
   sem saída, regras da corrida (voltas, largada antes da linha, posições, pontos), cobertura dos
   testes (`src/**/*.test.ts`) e casos que faltam. Cada problema com passo a passo para reproduzir.
-
-Eventuais:
 - **Campanha** — fidelidade ao original (`referencias/original.md`: 6 planetas, divisões, pontos
   para subir, rivais, prêmios), curva de dificuldade entre planetas, economia (prêmios × preços de
   carros/melhorias/armas), progressão de carros, rivais que evoluem, garagem/loja entre corridas,

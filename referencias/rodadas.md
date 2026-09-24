@@ -125,3 +125,43 @@ Feito (sem nova avaliação):
   renderizador é recriado se o contexto for perdido.
 - Som: ver resumo do agente de som; locutor com voz grave sendo regerado fora da sessão
   (ver `referencias/locutor-pendente.md`).
+
+# Rodada 7 (2026-09-24) — rodada única, avaliadores em grupos
+
+Grupos chamados: todos (1ª rodada no formato de grupos; o commit mexeu em todas as áreas).
+Notas: Visual 7,4 · Carros 7 · Jogabilidade 6,5 · Interface 7,3 · Som 6,5 · Desempenho 5,5 · QA 6 ·
+Campanha 6 · Pistas 6 · Online 4 (nenhum aprovado).
+
+Feito antes da avaliação:
+- Itens 41–52 conferidos no código (maioria já feita); Voltar padronizado (item 44); `latencyHint`
+  'balanced' também no PC (item 50); GPU `powerPreference: 'default'` (item 52).
+- Item 54 (rolagem dos menus no celular): retratos rasterizados em PNG, `box-shadow` no lugar de
+  `filter: drop-shadow`, retratos/planetas/carros da corrida rápida pré-gerados no menu principal.
+- Item 53 (locutor "Let the carnage begin!" sem emoção): regravação em andamento.
+- Skill: avaliadores em grupos (Aparência, Jogo, Plataforma, Som, Online, QA sempre).
+
+Pendências (bloqueantes e altas primeiro):
+- Online (bloqueante, segurança): XSS pela cor do convidado (`game.ts` hostJoin sem validar `m.color`;
+  `menus.ts` sala sem `esc`). Altas: comando do convidado sem validação (trapaça/NaN), aba oculta do
+  convidado/host, sem heartbeat, convidado sem previsão (~200 ms de atraso na direção).
+- Som (bloqueante): item 53 ainda não publicado. Altas: picote sem medição; grafo de áudio pesado
+  (motor e trilha sintetizada); motor em alto giro 100% síntese.
+- Desempenho: médio do toque sem margem para baixar resolução; Apple sempre no nível alto; resolução
+  dinâmica mede o rAF e não o quadro desenhado; layout forçado por quadro (clientWidth após HUD);
+  materiais/geometrias por projétil sem dispose.
+- QA: vazamento de GPU a cada createRace (carros sem dispose); carregar senha sobrescreve slot ativo;
+  CONTINUAR morto após apagar save; áudio não retoma após pausa/aba oculta; sem webglcontextrestored;
+  poças reaproveitadas entre pistas (Effects sem reset).
+- Jogabilidade: curva com esterço total perde 23–38% da velocidade (itens 38/41); câmera aérea ainda
+  vai e volta (item 40, antecipação até 12 m); volante de toque não relativo ao dedo (item 46); munição
+  acaba nos primeiros 20 s; mureta pune demais.
+- Campanha: progressão de carros quebrada (Havac máx. pior que Dirt Devil máx.); economia termina na
+  metade; dificuldade estagna após Bogmire; fim de campanha fraco; compra de carro sem confirmação.
+- Pistas: relevo sorteado por planeta em vez de transcrito dos mapas (itens 2/19); cor do piso lavada
+  (Chem VI, New Mojave, Nho, Inferno).
+- Visual: explosão (clarão branco + disco chapado); poças como discos lisos; peça do Havac tapando o
+  cockpit; Nho sem identidade.
+- Carros: sem suspensão real (rodas no mesmo grupo da carroceria); Air Blade e Battle Trak fora do
+  alvo na vitrine; carros caros mais lentos.
+- Interface: item 54 parcial (miniaturas WebGL síncronas durante a rolagem; trocar cor refaz o menu);
+  barras de atributos pouco diferenciadas (item 13); miniaturas de armas toscas.

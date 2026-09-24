@@ -421,7 +421,8 @@ h2 { color: #ffb030; text-shadow: 2px 2px 0 #3a0e04; font-style: italic; }
 }
 
 /* ---------- Rodada 2: miniaturas, retratos, atributos, slots ---------- */
-.portrait { display: block; flex: none; border-radius: 12px; filter: drop-shadow(0 3px 4px rgba(0, 0, 0, 0.6)); }
+/* box-shadow em vez de filter: drop-shadow — o filtro obrigava a repintar cada retrato ao rolar o menu */
+.portrait { display: block; flex: none; border-radius: 12px; box-shadow: 0 3px 4px rgba(0, 0, 0, 0.6); }
 .car-img { display: block; width: 100%; max-width: 170px; aspect-ratio: 1; object-fit: contain; margin: -8px auto -14px; pointer-events: none; }
 .trk-img { display: block; width: 100%; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.12); margin-bottom: 6px; pointer-events: none; }
 .logo-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
@@ -680,7 +681,7 @@ h3 {
 .char-pick { display: grid; grid-template-columns: 236px 1fr; gap: 16px; align-items: start; }
 .char-feature { display: flex; flex-direction: column; align-items: center; gap: 10px; }
 .cf-portrait { position: relative; width: 208px; filter: drop-shadow(0 8px 14px rgba(0, 0, 0, 0.7)); }
-.cf-portrait .portrait { border-radius: 20px; filter: none; }
+.cf-portrait .portrait { border-radius: 20px; box-shadow: none; }
 .nameplate {
   position: relative; margin: -30px -12px 0; padding: 3px;
   background: linear-gradient(180deg, #ffffff 0%, #a8aebb 30%, #5a6070 48%, #e8ecf2 60%, #7a8090 80%, #3a3e48 100%);
@@ -707,7 +708,7 @@ h3 {
 .char-pick .char { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px 6px 7px; text-align: center; }
 .char-pick .char .portrait { width: 116px; height: 116px; }
 .char-pick .char b { font-size: 13px; line-height: 1.15; }
-.char-pick .char.sel .portrait { filter: drop-shadow(0 0 10px rgba(242, 195, 24, 0.6)); }
+.char-pick .char.sel .portrait { box-shadow: 0 0 10px rgba(242, 195, 24, 0.6); }
 @media (max-width: 640px) {
   .char-pick { grid-template-columns: 1fr; }
 }
@@ -808,4 +809,10 @@ h3 {
 @media (max-height: 460px) {
   .rv-portrait, .rv-portrait .portrait { width: 60px; height: auto; }
   .rv-portrait .portrait { height: 60px; }
+}
+
+/* celular: sem filtros de sombra nos menus (repintura cara na rolagem) e rolagem isolada do jogo */
+@media (pointer: coarse) {
+  .cf-portrait { filter: none; }
+  .overlay { overscroll-behavior: contain; }
 }

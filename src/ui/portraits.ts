@@ -1598,8 +1598,48 @@ export function portraitSvg(nameOrId: string, size = 96): string {
   if (!url) {
     url = URL.createObjectURL(new Blob([portraitSvgRaw(nameOrId, size)], { type: 'image/svg+xml' }));
     cache.set(k, url);
+    rasterize(k, url, size);
   }
   return `<img class="portrait" src="${url}" width="${size}" height="${size}" alt="${label}" draggable="false" decoding="async">`;
+}
+
+/**
+ * Troca o SVG por um PNG na resolução da tela. O SVG com filtros era re-rasterizado pelo navegador
+ * a cada repintura (rolagem de menu travava no celular); o PNG é só um bitmap.
+ */
+function rasterize(k: string, svgUrl: string, size: number): void {
+  if (typeof document === 'undefined') return;
+  const img = new Image();
+  img.onload = () => {
+    try {
+      const px = Math.round(size * Math.min(3, Math.max(1, window.devicePixelRatio || 1)));
+      const c = document.createElement('canvas');
+      c.width = c.height = px;
+      c.getContext('2d')!.drawImage(img, 0, 0, px, px);
+      c.toBlob((b) => {
+        if (!b) return;
+        const png = URL.createObjectURL(b);
+        cache.set(k, png);
+        document.querySelectorAll<HTMLImageElement>(`img.portrait[src="${svgUrl}"]`).forEach((el) => (el.src = png));
+      }, 'image/png');
+    } catch {
+      // canvas contaminado ou sem suporte: fica o SVG
+    }
+  };
+  img.src = svgUrl;
+}
+
+/** Prepara (em PNG) os retratos dos menus antes de abrir a tela, nos intervalos livres. */
+export function warmPortraits(ids: string[], sizes: number[]): void {
+  const jobs = ids.flatMap((id) => sizes.map((s) => () => portraitSvg(id, s)));
+  const idle = (window as unknown as { requestIdleCallback?: (f: () => void) => void }).requestIdleCallback ?? ((f: () => void) => setTimeout(f, 50));
+  const next = () => {
+    const job = jobs.shift();
+    if (!job) return;
+    job();
+    idle(next);
+  };
+  idle(next);
 }
 
 /** SVG do retrato (string com o <svg> embutido). */

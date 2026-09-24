@@ -18,7 +18,7 @@ import { DIFFICULTIES, DIFFICULTY_LABEL, type Difficulty } from '../sim/world';
 import type { SlotInfo } from '../core/storage';
 import { formatTime } from './hud';
 import { setTiltSteering, tiltSteeringEnabled, tiltSupported } from '../input/controls';
-import { portraitSvg } from './portraits';
+import { portraitSvg, warmPortraits } from './portraits';
 import { trackThumbnail } from './trackThumb';
 import { icon, iconizeHtml } from './icons';
 import { APP_VERSION } from '../version';
@@ -291,6 +291,41 @@ function planetRoute(current: number, champion = false): string {
 }
 
 let fillToken = 0;
+
+/** Gera (uma vez) a miniatura 3D de uma chave `id|cor|tamanho|estilo`, `planet|tema|tam` ou `item|...`. */
+function makeThumb(key: string): string {
+  let url = thumbReady.get(key);
+  if (!url) {
+    const [id, color, size, style] = key.split('|');
+    url =
+      id === 'item'
+        ? itemThumbnail(color as ShopItem, Number(size))
+        : id === 'planet'
+          ? planetThumbnail(color as ThemeId, Number(size))
+          : carThumbnail(id, Number(color), Number(size), (style as CarThumbStyle) || 'card');
+    url ||= BLANK;
+    thumbReady.set(key, url);
+  }
+  return url;
+}
+
+/**
+ * Gera miniaturas antes de abrirem a tela (no menu principal, nos intervalos livres): ao abrir a
+ * corrida rápida no celular elas já estão prontas, sem imagens surgindo durante a rolagem.
+ * Para assim que outro menu é aberto.
+ */
+function warmThumbs(keys: string[]): void {
+  const token = fillToken;
+  const idle = (window as unknown as { requestIdleCallback?: (f: () => void, o?: { timeout: number }) => void }).requestIdleCallback ?? ((f: () => void) => setTimeout(f, 60));
+  const next = () => {
+    if (token !== fillToken) return;
+    const key = keys.shift();
+    if (!key) return;
+    makeThumb(key);
+    idle(next);
+  };
+  idle(next);
+}
 /** Gera as miniaturas que faltam, uma por vez, sem travar a abertura do menu. */
 function fillThumbs(root: HTMLElement): void {
   const token = ++fillToken;
@@ -299,17 +334,7 @@ function fillThumbs(root: HTMLElement): void {
     const img = root.querySelector<HTMLImageElement>('img[data-thumb].loading');
     if (!img) return;
     const key = img.dataset.thumb!;
-    let url = thumbReady.get(key);
-    if (!url) {
-      const [id, color, size, style] = key.split('|');
-      url =
-        id === 'item'
-          ? itemThumbnail(color as ShopItem, Number(size))
-          : id === 'planet'
-            ? planetThumbnail(color as ThemeId, Number(size))
-            : carThumbnail(id, Number(color), Number(size), (style as CarThumbStyle) || 'card');
-      thumbReady.set(key, url || BLANK);
-    }
+    const url = makeThumb(key);
     root.querySelectorAll<HTMLImageElement>(`img.loading[data-thumb="${key}"]`).forEach((el) => {
       el.src = url || BLANK;
       el.classList.remove('loading');
@@ -466,6 +491,8 @@ export class Menus {
   showMain(hasSave: boolean): void {
     this.inCampaign = false;
     this.hasSave = hasSave;
+    // retratos da escolha de piloto já prontos (PNG) quando o jogador abrir a tela: rolagem lisa
+    warmPortraits(CHARACTERS.map((c) => c.id), [120, 208]);
     // sempre visível fora do app instalado: sem o convite do navegador, mostra o passo a passo
     const install = this.app.installed ? '' : `<button class="install" data-act="install">${icon('install')} Instalar o jogo</button>`;
     // no celular deitado os botões secundários vão em duas colunas; com número ímpar, o primeiro
@@ -493,6 +520,9 @@ export class Menus {
         ${this.helpBlock()}
         <p class="version">versão ${esc(APP_VERSION)}</p>
       </div>`);
+    // corrida rápida: planetas e carros já prontos quando o jogador abrir a tela
+    const themes = [...new Set(this.tracks.map((t) => PLANET_THEME[t.planet] ?? t.theme))];
+    warmThumbs([...themes.map((th) => `planet|${th}|64`), ...this.allCars.map((v) => `${v.id}|${this.quick.color}|200|card`)]);
   }
 
   private helpBlock(): string {

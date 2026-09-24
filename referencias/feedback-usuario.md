@@ -115,3 +115,5 @@ Cada item precisa ser atendido e verificado pelos avaliadores.
     principalmente na bateria, sem perder a fluidez.
 53. Locutor: a fala da largada "Let the carnage begin!" está sem emoção. Tem que soar gritada,
     empolgada, de apresentador de arena.
+54. Celular: na tela de iniciar corrida, ao rolar as opções (pista, pilotos) a rolagem demora para
+    renderizar. A rolagem dos menus tem que ser imediata e lisa no celular.
