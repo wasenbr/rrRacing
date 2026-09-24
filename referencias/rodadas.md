@@ -165,3 +165,56 @@ Pendências (bloqueantes e altas primeiro):
   alvo na vitrine; carros caros mais lentos.
 - Interface: item 54 parcial (miniaturas WebGL síncronas durante a rolagem; trocar cor refaz o menu);
   barras de atributos pouco diferenciadas (item 13); miniaturas de armas toscas.
+
+# Rodada 8 (2026-09-24) — rodada única, seguindo referencias/handoff-rodada8.md
+
+Grupos chamados: todos (todos reprovaram na rodada 7). Correções feitas por 8 agentes em paralelo
+(online, som, jogabilidade, estabilidade/desempenho, visual/carros, campanha, pistas, interface).
+Notas: Visual 7,4 · Carros 7 · Jogabilidade 7,3 · Pistas 6,5 · Campanha 7 · Interface 7,2 ·
+Desempenho 7 · Som 7,5 · Online 6,6 · QA 7,6 (nenhum aprovado; nenhum bloqueante).
+
+Feito:
+- Online: XSS da cor/nome fechado, validação de tudo que vem do host/convidado, clamp e limite de
+  taxa, ping 1 s/queda 8 s, host oculto simula por Worker, interpolação ~100 ms, previsão do próprio
+  carro com reconciliação, largada com "pronto", /api/turn com Origin e rate limit.
+- Som: item 53 republicado (3 takes fiéis pelo Whisper, F0 207–223 Hz); modo leve de áudio (toque,
+  nível baixo, ≤ 4 núcleos); motor com ruído único e camadas caladas fora do grafo; master ≤ −1 dBFS;
+  medição de picote (som/picote.json: 0 buracos com CPU 4x); suspend/resume com `interrupted` do iOS.
+- Jogabilidade: curva de 90° perde 2–7% (antes 15–28%); rampa de esterço digital; câmera aérea pela
+  direção da pista (máx. 4,5 m); volante de toque relativo ao dedo; CPU dosa munição; mureta leve.
+- Estabilidade/desempenho: dispose dos carros/sombra/PMREM, Effects.reset(), senha escolhe slot com
+  confirmação, CONTINUAR após apagar, validSave, contexto WebGL perdido/restaurado, resolução dinâmica
+  pelo quadro desenhado, queda automática de nível, opção Economia de bateria.
+- Visual/carros: explosão colorida com decal queimado e fumaça escura, poças com textura, Sundog
+  escondido no cockpit, faixa VOLTA sob o retrovisor, câmera encaixada na largada; pisos de Chem VI,
+  New Mojave, Nho e Inferno; suspensão (grupo `chassis` separado); Air Blade e Battle Trak retocados.
+- Campanha: CAR_POTENTIAL (máximos em escada), Estabilizadores do Havac, rivais por tier, revenda,
+  compra com confirmação, tela de campeão e volta à garagem, calendário da divisão.
+- Pistas: relevo.json transcrito em 6 pistas (uma por planeta) com poças nas casas do mapa.
+- Interface: fila ociosa de miniaturas (idleQueue.ts), toBlob, troca de cor só muda o src, barras
+  normalizadas 2–10 com FORTE/FRACO, miniaturas de armas no estilo dos carros, versão sem "+".
+
+Pendências (altas primeiro):
+- Visual: piso de Chem VI ainda marrom (luz quente/poeira/metal puxam); aviso da música no centro
+  sobre a contagem; minimapa pobre; anel ciano enorme na perseguição. (O avaliador disse faltar
+  capturas de Nho/Inferno/cockpit/explosão, mas elas existem: 05*, 06*, 50*, 51*.)
+- Pistas: relevo transcrito só em 6 de 36; escamas de Inferno claras no cockpit; capturas não mostram
+  as pistas transcritas.
+- Carros: curso da suspensão passa da folga do para-lama (item 51); Air Blade no máximo mais lento que
+  o Marauder no máximo; barras contradizem o visual (Battle Trak com poder de fogo FRACO); vitrine
+  traseira igual à frontal; Air Blade longe do alvo.
+- Jogabilidade: DERRAPAR vira freio (sobra 13–21% da velocidade); visão à frente curta na aérea;
+  pouca disputa na liderança; Scatter domina.
+- Campanha: paredão em Nho A; teste de economia circular; Inferno sem evolução; peças do Dirt Devil
+  quase não rendem; fim de campanha sem celebração.
+- Interface: rota de planetas da Nova Campanha abre vazia; item 55 (vão volante/armas ~17 px no
+  844x390); miniaturas de armas ainda toscas; barras exageram (Dirt Devil 2/10, contra item 18);
+  FORTE/FRACO sobre as barras; aviso da música no centro no celular.
+- Desempenho: item 52 só manual; queda de nível recompila shaders no meio da corrida; hud.message()
+  força layout por passo; picos p95 no médio/alto.
+- Som: motor em giro médio/alto 100% síntese (item 21); emoção do item 53 só por métrica; picote
+  sem medição em aparelho real.
+- Online: sem reconexão; placar não final; host sai → convidados sem resultado; previsão sem colisões;
+  toque curto de tiro perdido; canal confiável com head-of-line; sem indicador de ping.
+- QA: sem saída se o WebGL não voltar (e fase 'finished' trava); reiniciar/sair na campanha sem custo;
+  renderizador de miniaturas nunca liberado na corrida; faltam testes (largada atrás da linha, ré etc.).
