@@ -35,6 +35,22 @@ describe('mundo da corrida', () => {
     });
   }
 
+  it('todo o grid larga na passagem certa, mesmo em cima de um cruzamento (X)', () => {
+    const four = [...aiEntries(), { name: 'Humano', color: 0, spec: VEHICLES.marauder, ai: null }];
+    for (const def of TRACKS) {
+      const tr = new Track(def);
+      const w = createWorld(tr, four, 1, 1);
+      const n = tr.pieces.length;
+      for (const r of w.racers) expect([0, n - 1, n - 2], `${def.id} vaga ${r.id}`).toContain(r.car.pieceIndex);
+      // acelerando reto por 4 s, ninguém fica preso atrás da largada
+      w.started = true;
+      const go = { ...emptyInput(), throttle: 1 };
+      for (let i = 0; i < 240; i++) stepWorld(w, { [w.racers.length - 1]: go }, DT);
+      const me = w.racers[w.racers.length - 1].car.pieceIndex;
+      expect(me > 0 && me < n / 2, `${def.id} humano na peça ${me}`).toBe(true);
+    }
+  });
+
   it('é determinístico: mesma semente, mesmo resultado', () => {
     const run = () => {
       const w = createWorld(track, aiEntries(), 1, 7);

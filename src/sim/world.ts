@@ -177,18 +177,21 @@ export interface World {
 }
 
 /** Posições do grid: duas filas logo antes da linha, os primeiros da lista largam na frente. */
-function gridSlot(track: Track, slot: number): { x: number; z: number; heading: number; h: number } {
+function gridSlot(track: Track, slot: number): { x: number; z: number; heading: number; h: number; pieceIndex: number } {
   const row = Math.floor(slot / 2);
   const side = slot % 2 === 0 ? 1 : -1;
   const p = track.pointAtDist(-(4 + row * 7));
   const lat = track.halfWidth * 0.45;
-  return { x: p.x + leftX(p.heading) * side * lat, z: p.z + leftZ(p.heading) * side * lat, heading: p.heading, h: p.h };
+  return { x: p.x + leftX(p.heading) * side * lat, z: p.z + leftZ(p.heading) * side * lat, heading: p.heading, h: p.h, pieceIndex: p.pieceIndex };
 }
 
 export function createWorld(track: Track, entries: RacerEntry[], laps: number, seed = 1, prizes: number[] = PRIZES, difficulty: Difficulty = 'normal'): World {
   const racers: Racer[] = entries.map((e, i) => {
     const g = gridSlot(track, i);
     const car = createVehicleState(e.spec, g.x, g.z, g.heading, g.h);
+    // a peça já vem do grid: largando em cima de um cruzamento (X), a busca sem dica podia
+    // escolher a passagem perpendicular e as muretas ficavam atravessadas na frente do carro
+    car.pieceIndex = g.pieceIndex;
     return {
       ...e,
       id: i,
