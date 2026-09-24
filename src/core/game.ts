@@ -4,7 +4,7 @@ import { Announcer, Commentary } from '../audio/announcer';
 import { setSfxEnabled, toggleMute, unlockAudio } from '../audio/context';
 import { Music } from '../audio/music';
 import { EngineSound, RivalEngines, type RivalEngineInput } from '../audio/engine';
-import { sfxAssist, sfxBump, sfxBurn, sfxCountdown, sfxDrop, sfxExplosion, sfxFall, sfxFire, sfxHit, sfxLand, sfxLap, sfxPickup, sfxSkid, sfxWall } from '../audio/sfx';
+import { sfxAssist, sfxBump, sfxBurn, sfxCountdown, sfxDrop, sfxExplosion, sfxFall, sfxFire, sfxHit, sfxLand, sfxLap, sfxPickup, sfxSkid, sfxWall, prepareSfx } from '../audio/sfx';
 import { trackById, TRACKS } from '../data/tracks';
 import { VEHICLES } from '../data/vehicles';
 import {
@@ -14,24 +14,26 @@ import {
 import { buildSpec, CAR_PRICES, CHARACTERS, chargePrice, newCarSetup, tradeInValue, upgradePrice } from '../sim/garage';
 import { deleteSlot, listSlots, loadCampaign, loadFromSlot, loadPrefs, saveCampaign, savePrefs, saveToSlot } from './storage';
 import { canInstall, fullscreenSupported, initPwa, initViewport, isFullscreen, isInstalled, isIos, onFullscreenChange, onInstallChange, promptInstall, quitGame, toggleFullscreen } from '../ui/pwa';
-import { Controls, createTouchControls, isTouchDevice, setTouchAutoThrottle } from '../input/controls';
+import { Controls, createTouchControls, isTouchDevice, setTouchAutoThrottle, setTouchWeapons } from '../input/controls';
 import { CAMERA_LABELS, CameraRig, type CameraMode } from '../render/cameras';
 import { createCarMesh, type CarVisual } from '../render/cars';
 import { Effects } from '../render/effects';
 import { buildEnvironment, buildGround, buildSky, SUN_DIR } from '../render/environment';
-import { contactShadow } from '../render/textures';
+import { contactShadow, setMaxAnisotropy } from '../render/textures';
+import { freezeStatic, mergeStatic } from '../render/merge';
 import { PostFx } from '../render/postfx';
 import { RivalTag } from '../render/rivalTag';
 import { buildScenery } from '../render/scenery';
 import { levelTheme, THEMES } from '../render/themes';
 import { buildTrackMesh } from '../render/trackMesh';
+import { setRoadDetail } from '../render/trackStyle';
 import { emptyInput, type ControlInput } from '../sim/input';
 import { clamp, forwardX, forwardZ, leftX, leftZ, lerp, lerpAngle } from '../sim/math';
 import { Track, type TrackDef } from '../sim/track';
 import { CAR_SCALE, forwardSpeed, type VehicleSpec, type VehicleState } from '../sim/vehicle';
 import { createWorld, PRIZES, stepWorld, type Difficulty, type Racer, type RacerEntry, type World, type WorldEvent } from '../sim/world';
 import type { AiProfile } from '../sim/ai';
-import { Hud, formatTime } from '../ui/hud';
+import { Hud, ICONS, formatTime } from '../ui/hud';
 import { icon } from '../ui/icons';
 import { COLORS, Menus, WEAPON_LABEL, type CampaignReport, type HubData, type LobbyView, type NewCampaignOptions, type OnlineOptions, type QuickOptions, type ResultRow } from '../ui/menus';
 import { NetClient, NetHost, netErrorText, normalizeCode } from '../net/peer';
@@ -39,6 +41,8 @@ import { applySnapshot, MAX_PLAYERS, takeSnapshot, type ClientMsg, type HostMsg,
 
 const DT = 1 / 60;
 const COUNTDOWN = 3;
+/** ?semlimite: sem a trava de 30 qps do nível baixo (medição comparativa) */
+const NO_CAP30 = typeof location !== 'undefined' && new URLSearchParams(location.search).has('semlimite');
 /** online: o host manda o estado a cada 3 passos (20x por segundo) */
 const SNAP_EVERY = 3;
 const SNAP_MS = SNAP_EVERY * DT * 1000;
@@ -161,6 +165,13 @@ export class Game {
   private redraw = true;
   /** a resolução atual é a dos menus (reduzida) */
   private menuRes = false;
+  /** corrida limitada a 30 qps (nível baixo em aparelho lento) e média do tempo de quadro que decide */
+  private cap30 = false;
+  private slowAvg = 1 / 60;
+  /** relógio da última atualização do mapa de sombras */
+  private shadowAt = -Infinity;
+  /** notebook na bateria (fora da tomada): corrida a 30 qps para gastar menos */
+  private onBattery = false;
   private shake = 0;
   private bounce = 0;
   private bounceVel = 0;
@@ -175,6 +186,14 @@ export class Game {
   private sky: THREE.Mesh | null = null;
   private shadowGeo = new THREE.PlaneGeometry(2.6 * CAR_SCALE, 4.4 * CAR_SCALE).rotateX(-Math.PI / 2);
   private clock = 0;
+  /** preparando a GPU para a largada (texturas e shaders): não simula nem desenha */
+  private preparing = false;
+  private prepToken = 0;
+  /** cor do véu de poeira em alta velocidade (tom do piso do planeta) */
+  private speedDust = 0xc8c4c0;
+  /** vetores reaproveitados a cada quadro (menos lixo para o coletor de memória) */
+  private readonly poseTmp = { position: new THREE.Vector3(), velocity: new THREE.Vector3() };
+  private readonly hexCache = new Map<number, string>();
   /** o jogador saiu da tela cheia pelo botão: não forçar de novo */
   private leftFullscreen = false;
   private showcase: { group: THREE.Group; cam: THREE.PerspectiveCamera; center: THREE.Vector3; heading: number } | null = null;
@@ -184,22 +203,41 @@ export class Game {
 
   constructor(private root: HTMLElement) {
     this.quality = resolveQuality(this.prefs.quality, this.touch);
+    // notebook fora da tomada: corrida a 30 qps (metade do gasto de GPU/CPU). No celular/tablet não:
+    // lá 30 qps pareceria lento (o nível baixo já trava em 30 quando o aparelho não aguenta)
+    if (!this.touch)
+      (navigator as Navigator & { getBattery?: () => Promise<EventTarget & { charging: boolean }> }).getBattery?.().then((b) => {
+        const update = () => (this.onBattery = !b.charging);
+        update();
+        b.addEventListener('chargingchange', update);
+      }, () => {});
     this.shadows = this.quality.shadows;
     this.effects.setDensity(this.quality.particles);
-    this.renderer = new THREE.WebGLRenderer({ antialias: this.quality.antialias, powerPreference: 'high-performance' });
+    this.renderer = new THREE.WebGLRenderer({ antialias: this.quality.antialias, powerPreference: 'default' });
     this.renderer.shadowMap.enabled = this.shadows;
     this.renderer.shadowMap.type = this.quality.level === 'alto' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.1;
+    // teto de anisotropia pelo nível (o three limita cada textura por getMaxAnisotropy na hora do envio)
+    const caps = this.renderer.capabilities;
+    const maxAniso = Math.min(this.quality.anisotropy, caps.getMaxAnisotropy());
+    caps.getMaxAnisotropy = () => maxAniso;
+    setMaxAnisotropy(maxAniso);
+    this.dynRes.min = this.quality.minScale;
+    this.dynRes.scale = this.quality.startScale;
+    setRoadDetail(this.quality.level === 'alto');
     root.appendChild(this.renderer.domElement);
 
     this.scene.environmentIntensity = 0.7;
-    this.hemi = new THREE.HemisphereLight(0xffffff, 0x202020, 0.7);
+    // ambiente baixo (visual alvo): quem ilumina é o sol quente e rasante; sombras bem escuras
+    this.hemi = new THREE.HemisphereLight(0xffffff, 0x202020, 0.35);
     this.sun = new THREE.DirectionalLight(0xffffff, 2.5);
     this.sun.castShadow = this.shadows;
     this.sun.shadow.mapSize.set(this.quality.shadowMapSize, this.quality.shadowMapSize);
     this.sun.shadow.bias = -0.0004;
     this.sun.shadow.normalBias = 0.03;
+    // o mapa de sombras é redesenhado no máximo ~40 vezes por segundo (ver render)
+    this.renderer.shadowMap.autoUpdate = false;
     const sc = this.sun.shadow.camera;
     sc.left = sc.bottom = -50;
     sc.right = sc.top = 50;
@@ -208,6 +246,11 @@ export class Game {
     this.scene.add(this.hemi, this.sun, this.sun.target, this.effects.group);
     // bloom só na qualidade alta do PC: no celular e em placas simples pesa demais
     if (this.quality.bloom) this.postfx = new PostFx(this.renderer, this.scene);
+    // nível baixo: sem as luzes pontuais dos clarões (o sprite aditivo da explosão continua); ficam
+    // desligadas de vez para não recompilar shaders a cada explosão
+    if (!this.quality.flashLights) this.effects.group.traverse((o) => {
+      if ((o as THREE.PointLight).isPointLight) o.visible = false;
+    });
 
     // vinheta escura nas bordas da tela (visual alvo): CSS puro, custo zero na GPU
     const vignette = document.createElement('div');
@@ -256,7 +299,7 @@ export class Game {
       if (a === 'mute') this.hud.showToast(toggleMute() ? '🔇 Som desligado' : '🔊 Som ligado');
       if (a === 'fullscreen') void toggleFullscreen();
     });
-    initViewport(() => this.resize());
+    initViewport(root, () => this.resize());
     // Ctrl é o tiro no PC: um Ctrl+W acidental pede confirmação em vez de fechar a corrida
     window.addEventListener('beforeunload', (e) => {
       if (this.phase === 'racing' || this.phase === 'countdown') e.preventDefault();
@@ -317,26 +360,37 @@ export class Game {
     oldEnv?.dispose();
     this.sky = buildSky(theme);
     this.level.add(this.sky);
-    this.scene.fog = new THREE.Fog(theme.fog, 170, 520);
+    // névoa escura crescendo com a distância (só as câmeras em perspectiva chegam lá)
+    this.scene.fog = new THREE.Fog(theme.fog, 130, 420);
     this.hemi.color.set(theme.ambientSky);
     this.hemi.groundColor.set(theme.ambientGround);
-    this.sun.color.set(theme.sun);
-    // luz mais dramática: sol forte e ambiente contido (contraste de luz e sombra do visual alvo)
-    this.sun.intensity = theme.sunIntensity * 1.5;
+    // sol quente, baixo e lateral (SUN_DIR ~30°): compensa o ângulo com mais intensidade
+    this.sun.color.set(theme.sun).lerp(new THREE.Color(0xffc488), 0.22);
+    this.sun.intensity = theme.sunIntensity * 2.3;
     // luz de recorte vinda do lado oposto ao sol, na cor do planeta: destaca a silhueta dos carros
     let fill = this.scene.getObjectByName('fill') as THREE.DirectionalLight | undefined;
     if (!fill) {
       fill = new THREE.DirectionalLight(0xffffff, 1);
       fill.name = 'fill';
-      fill.position.set(-SUN_DIR.x, 0.6, -SUN_DIR.z);
       this.scene.add(fill);
     }
-    fill.color.set(theme.glow).lerp(new THREE.Color(theme.ambientSky), 0.4);
-    fill.intensity = 0.9;
-    const ground = buildGround(this.track, theme, this.shadows);
+    // (luz dramática por planeta: sol colorido e preenchimento contrastante, ambiente baixo)
+    fill.position.set(-SUN_DIR.x, 0.6, -SUN_DIR.z);
+    fill.color.set(theme.light.fill);
+    fill.intensity = theme.light.fillIntensity;
+    this.hemi.intensity = theme.light.hemi;
+    const ground = buildGround(this.track, theme, this.shadows, this.quality.level !== 'alto');
     const scenery = buildScenery(this.track, theme, def.theme, this.shadows, def.id.length * 7 + 3, this.quality.dense);
-    this.level.add(ground.mesh, buildTrackMesh(this.track, theme, this.shadows), scenery.group);
+    const trackMesh = buildTrackMesh(this.track, theme, this.shadows);
+    // cenário: peças paradas juntas por material em blocos de ~50 m (menos chamadas de desenho,
+    // sem perder o descarte do que está fora da tela); pista e chão não se mexem: matriz congelada
+    const moving = mergeStatic(scenery.group, { probe: [() => scenery.update(1.3), () => scenery.update(2.9)], cell: 50 });
+    freezeStatic(scenery.group, moving);
+    freezeStatic(trackMesh);
+    freezeStatic(ground.mesh);
+    this.level.add(ground.mesh, trackMesh, scenery.group);
     this.animated = [ground.update, scenery.update];
+    this.speedDust = new THREE.Color(theme.road).lerp(new THREE.Color(0xffffff), 0.35).getHex();
     this.scene.add(this.level);
     this.hud.setTrack(this.track);
   }
@@ -348,7 +402,8 @@ export class Game {
   /** Corrida rápida: rivais do planeta da pista, com carros do mesmo nível que o seu. */
   private quickSetup(o: QuickOptions): RaceSetup {
     const def = trackById(o.trackId);
-    const s = newCampaign(CHARACTERS[1].id, o.color, o.difficulty);
+    const pilot = CHARACTERS.find((ch) => ch.id === o.characterId)?.id ?? CHARACTERS[1].id;
+    const s = newCampaign(pilot, o.color, o.difficulty);
     s.planet = Math.max(0, PLANETS.findIndex((p) => p.theme === def.theme));
     const car = newCarSetup(o.vehicleId);
     // o carro do jogador tem o mesmo nível de melhorias dos rivais daquele planeta
@@ -363,7 +418,7 @@ export class Game {
       playerSpec: buildSpec(VEHICLES[o.vehicleId], car),
       prizes: PRIZES,
       difficulty: o.difficulty,
-      pilot: CHARACTERS[1].id,
+      pilot,
     };
   }
 
@@ -480,16 +535,26 @@ export class Game {
     });
     this.commentary.reset();
     this.setCamera(this.rig.mode, false);
-    const drop = this.touchEl?.querySelector('[data-a="drop"]');
-    if (drop) drop.textContent = WEAPON_LABEL[this.player.spec.rear].toUpperCase();
-    const assist = this.touchEl?.querySelector('[data-a="nitro"]');
-    if (assist) assist.textContent = (WEAPON_LABEL[this.player.spec.assist] ?? 'Nitro').toUpperCase();
+    const sp = this.player.spec;
+    const item = (id: string, fb: string) => ({ svg: ICONS[id] ?? ICONS[fb], label: WEAPON_LABEL[id] ?? fb });
+    setTouchWeapons(this.touchEl ?? null, { fire: item(sp.front, 'laser'), drop: item(sp.rear, 'mine'), nitro: item(sp.assist, 'nitro') });
   }
 
   private startRace(): void {
     this.createRace();
     this.countdown = COUNTDOWN;
     this.phase = 'countdown';
+    // a contagem só anda depois que a GPU tem tudo pronto (texturas e shaders); teto de 4 s
+    const token = ++this.prepToken;
+    this.preparing = true;
+    const ready = () => {
+      if (token === this.prepToken) this.preparing = false;
+    };
+    prepareSfx();
+    // o preparo também desenha a sombra (compila os shaders dela antes da contagem)
+    this.renderer.shadowMap.needsUpdate = true;
+    this.effects.warmup(this.renderer, this.scene, this.rig.active, this.track.def.theme).then(ready, ready);
+    setTimeout(ready, 4000);
     this.resultsTimer = 0;
     this.resultsShown = false;
     this.menus.hideAll();
@@ -552,7 +617,12 @@ export class Game {
     const w = this.root.clientWidth;
     const h = this.root.clientHeight;
     const scale = this.phase === 'menu' ? Math.min(this.dynRes.scale, 0.75) : this.dynRes.scale;
-    const pr = Math.min(window.devicePixelRatio, this.quality.maxPixelRatio) * scale;
+    // a resolução dinâmica não desce abaixo de 1 pixel de tela por pixel CSS no celular (fora do
+    // nível baixo): abaixo disso a imagem fica serrilhada/borrada demais. No PC médio desce até 0,75:
+    // numa GPU integrada, com piso 1 ela não tinha como aliviar e o jogo engasgava
+    const dpr = window.devicePixelRatio || 1;
+    const floor = this.quality.level === 'baixo' ? 0 : Math.min(dpr, 1) * (this.quality.level === 'medio' && !this.touch ? 0.75 : 1);
+    const pr = Math.max(floor, Math.min(dpr, this.quality.maxPixelRatio) * scale);
     this.redraw = true;
     this.renderer.setPixelRatio(pr);
     this.renderer.setSize(w, h);
@@ -575,25 +645,40 @@ export class Game {
     requestAnimationFrame((t) => this.frame(t));
     let frameDt = this.lastFrame ? Math.min((now - this.lastFrame) / 1000, 0.1) : DT;
     this.lastFrame = now;
-    this.clock += frameDt;
-    if (this.phase !== 'menu' && !document.hidden && this.dynRes.update(frameDt)) this.resize();
-    for (const fn of this.animated) fn(this.clock);
     // controles de toque só na corrida (largada e prova); menus, pausa e resultados ficam limpos
     if (this.touchEl) {
       const show = this.phase === 'countdown' || this.phase === 'racing';
       if (this.touchEl.classList.contains('off') === show) this.touchEl.classList.toggle('off', !show);
     }
-    // menus: cena de fundo a ~30 qps e em resolução reduzida; pausa: imagem congelada
+    // menu principal: a cena de fundo fica parada atrás do painel (câmera fixa), 5 qps bastam;
+    // resultados: ~30 qps (a corrida segue atrás); pausa: imagem congelada. Tudo em resolução reduzida
+    // (a troca de resolução e a primeira pintura dos botões acontecem ainda no preparo da largada)
     const menuRes = this.phase === 'menu';
     if (menuRes !== this.menuRes) {
       this.menuRes = menuRes;
       this.resize();
     }
-    if (this.phase === 'menu' || this.phase === 'paused') {
-      this.idleDt += frameDt;
-      if (this.phase === 'paused' ? !this.redraw : this.idleDt < 1 / 31) return;
-      frameDt = Math.min(this.idleDt, 0.1);
+    if (this.preparing && this.phase === 'countdown') return;
+    this.clock += frameDt;
+    // (na pausa não mede: sem desenho os quadros parecem rápidos e a escala subiria, forçando redesenho)
+    if (this.phase !== 'menu' && this.phase !== 'paused' && !this.resultsShown && !document.hidden && this.dynRes.update(frameDt)) this.resize();
+    for (const fn of this.animated) fn(this.clock);
+    // nível baixo em aparelho que não segura ~42 qps na corrida: trava em 30 qps estáveis (sem
+    // engasgos, menos calor); vale até recarregar a página. ?semlimite desliga (comparação)
+    if (this.quality.level === 'baixo' && !this.cap30 && this.phase === 'racing' && !NO_CAP30) {
+      this.slowAvg += (frameDt - this.slowAvg) * 0.03;
+      if (this.slowAvg > 1 / 42) this.cap30 = true;
     }
+    // resultados por cima da corrida também contam como menu (cena de fundo a ~30 qps)
+    const behindMenu = this.phase === 'menu' || this.phase === 'paused' || (this.phase === 'finished' && this.resultsShown);
+    // intervalo mínimo entre quadros desenhados. 29 ms = 30 qps (com o rAF oscilando, 16+16 ms às
+    // vezes dava 32,1 ms < 1/31 e o quadro caía para 20 qps; também acerta 1 a cada 4 quadros numa
+    // tela de 120 Hz). 12,5 ms: telas de 120/144 Hz desenham no máximo ~60–72 qps (o dobro de GPU e
+    // bateria por quase nada de diferença); em 60 Hz não muda nada
+    const minDt = this.phase === 'menu' ? 0.2 : behindMenu || this.cap30 || (this.onBattery && !NO_CAP30) ? 0.029 : 0.0125;
+    this.idleDt += frameDt;
+    if (this.phase === 'paused' ? !this.redraw : this.idleDt < minDt && !this.redraw) return;
+    frameDt = Math.min(this.idleDt, 0.1);
     this.idleDt = 0;
     this.redraw = false;
 
@@ -613,6 +698,12 @@ export class Game {
     const sinceSnap = guest ? performance.now() - this.net!.lastSnapAt : 0;
     const alpha = !simulating ? 1 : guest ? clamp(sinceSnap / SNAP_MS, 0, 1) : this.accumulator / DT;
     this.render(alpha, frameDt, simulating, guest ? Math.min(sinceSnap / 1000, 0.1) : this.accumulator);
+  }
+
+  private hexOf(c: number): string {
+    let h = this.hexCache.get(c);
+    if (!h) this.hexCache.set(c, (h = hex(c)));
+    return h;
   }
 
   /** Este aparelho é convidado numa corrida online (só mostra o que o host simula). */
@@ -662,6 +753,14 @@ export class Game {
       }
     }
     for (const e of this.world.events) this.onEvent(e);
+    // faíscas onde os carros raspam/batem na mureta (todos os carros)
+    for (const o of this.world.racers) {
+      const c = o.car;
+      if (!o.alive || c.wallImpact < 1.5) continue;
+      const q = this.track.query(c.x, c.z, c.pieceIndex);
+      const side = Math.sign(q.lateral) || 1;
+      this.effects.sparks(c.x + leftX(q.heading) * side, c.y + 0.45, c.z + leftZ(q.heading) * side, Math.round(clamp(c.wallImpact * 2, 3, 26)));
+    }
 
     const p = this.player;
     if (this.phase === 'racing' && p.progress.wrongWayTime > 1) this.hud.message('CONTRAMÃO!', 0.2, 'warn');
@@ -795,7 +894,7 @@ export class Game {
           const laps = this.world.laps;
           this.hud.setLap(e.lap, laps);
           const times = this.player.progress.lapTimes;
-          this.hud.message(e.lap === laps ? 'VOLTA FINAL!' : `VOLTA ${e.lap}`, 1.1, 'lap');
+          this.hud.message(e.lap === laps ? 'VOLTA FINAL!' : `VOLTA ${e.lap}`, 0.8, 'lap');
           this.hud.showToast(`Volta: ${formatTime(times[times.length - 1])} · armas recarregadas`);
           sfxLap(e.lap === laps);
         }
@@ -1455,6 +1554,7 @@ export class Game {
       view.shadow.rotation.y = heading;
       (view.shadow.material as THREE.MeshBasicMaterial).opacity = clamp(1 - lift / 4, 0, 1);
       view.shadow.scale.setScalar(1 + lift * 0.08);
+      if (i === this.playerId) this.effects.markPlayer(x, ground, z, heading, r.alive && !this.showcase && this.rig.mode !== 'cockpit');
       if (view.label) {
         // no cockpit e bem de perto na perseguição, a etiqueta taparia a visão
         const near = this.rig.mode !== 'iso' && Math.hypot(x - this.rig.active.position.x, z - this.rig.active.position.z) < 9;
@@ -1488,14 +1588,14 @@ export class Game {
             if (drift > 0.35 && Math.random() < drift) this.effects.dust(wx, ground, wz, dirt ? 0xb08a60 : 0xc8c4c0, 0.8 + drift * 0.6);
             else if (dirt && spd > 12 && Math.random() < 0.35) this.effects.dust(wx, ground, wz, 0xb08a60, 0.7);
             // em alta velocidade, um véu leve de poeira na cor do piso (sensação de velocidade)
-            else if (spd > r.spec.maxSpeed * 0.7 && Math.random() < 0.18) this.effects.dust(wx, ground, wz, new THREE.Color(THEMES[this.track.def.theme].road).lerp(new THREE.Color(0xffffff), 0.35).getHex(), 0.45);
+            else if (spd > r.spec.maxSpeed * 0.7 && Math.random() < 0.18) this.effects.dust(wx, ground, wz, this.speedDust, 0.45);
           }
         }
       }
       if (r.alive && v.nitroTime > 0 && simulating) {
         const bx = x - forwardX(heading) * 2.4 * CAR_SCALE;
         const bz = z - forwardZ(heading) * 2.4 * CAR_SCALE;
-        this.effects.nitro(bx, y + 0.55 * CAR_SCALE, bz, heading);
+        this.effects.nitro(bx, y + 0.55 * CAR_SCALE, bz, heading, forwardSpeed(v));
       }
       if (i === this.playerId) {
         visual.body.position.y = clamp(this.bounce, -0.25, 0.15);
@@ -1511,10 +1611,10 @@ export class Game {
     const pc = this.player.car;
     this.rig.update(
       {
-        position: new THREE.Vector3(pose.x, pose.y, pose.z),
+        position: this.poseTmp.position.set(pose.x, pose.y, pose.z),
         quaternion: pv.root.quaternion,
         heading: pose.heading,
-        velocity: new THREE.Vector3(pc.vx, pc.vy, pc.vz),
+        velocity: this.poseTmp.velocity.set(pc.vx, pc.vy, pc.vz),
         shake: this.shake,
         eye: pv.eye,
       },
@@ -1546,7 +1646,7 @@ export class Game {
           max: r.spec.nitroCharges,
           active: r.spec.assist === 'jump' ? !pc.grounded && pc.vy > 0 : pc.nitroTime > 0,
         },
-        cars: world.racers.filter((o) => o.alive).map((o) => ({ x: o.car.x, z: o.car.z, color: hex(o.color), me: o.id === this.playerId })),
+        cars: world.racers.filter((o) => o.alive).map((o) => ({ x: o.car.x, z: o.car.z, heading: o.car.heading, color: this.hexOf(o.color), me: o.id === this.playerId })),
       });
       // derrapagem: velocidade lateral em relação à direção do carro (pneus cantando)
       const lateral = Math.abs(pc.vx * Math.cos(pc.heading) - pc.vz * Math.sin(pc.heading));
@@ -1576,6 +1676,13 @@ export class Game {
     if (this.showcase) {
       this.showcase.cam.aspect = w / h;
       this.showcase.cam.updateProjectionMatrix();
+    }
+    // sombras a cada ~25 ms: a 60 qps, um quadro sim e outro não (a passada de sombra é ~1/3 das
+    // chamadas de desenho e 40% dos triângulos); a 30 qps, todo quadro. A sombra do carro atrasa no
+    // máximo 1/60 s, imperceptível; a do cenário não muda (o mapa guarda a matriz com que foi feito)
+    if (this.clock - this.shadowAt >= 0.024 || this.clock < this.shadowAt) {
+      this.renderer.shadowMap.needsUpdate = true;
+      this.shadowAt = this.clock;
     }
     if (this.postfx) this.postfx.render(cam);
     else this.renderer.render(this.scene, cam);

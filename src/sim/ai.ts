@@ -138,7 +138,8 @@ export function computeAiInput(world: World, r: Racer, dt: number): ControlInput
       // (óleo só com o perseguidor bem alinhado e perto: mancha solta a esmo só enche a pista)
       const oil = r.spec.rear === 'oil';
       const spread = r.spec.rear === 'scatter' ? 6 : oil ? 1.5 : 3;
-      if (r.rearCharges > 0 && ahead < -3 && ahead > (oil ? -10 : -16) && Math.abs(oc.lateral - me.lateral) < spread) {
+      // óleo só com o perseguidor a 12–25 m: longe o bastante para ele ver a mancha e poder desviar
+      if (r.rearCharges > 0 && ahead < (oil ? -12 : -3) && ahead > (oil ? -25 : -16) && Math.abs(oc.lateral - me.lateral) < spread) {
         if (world.rng() < 0.2 + ai.aggression * 0.5) st.wantDrop = true;
       }
     }
@@ -193,7 +194,9 @@ export function computeAiInput(world: World, r: Racer, dt: number): ControlInput
   if (humans.length) {
     const lead = Math.max(...humans.map((h) => raceDistance(world, h)));
     const gap = raceDistance(world, r) - lead;
-    targetSpeed *= gap > 80 ? diff.aheadSlow : gap < -80 ? diff.behindBoost : 1;
+    // no Fácil/Normal o elástico age antes (50 m): a liderança troca mais de mãos
+    const band = world.difficulty === 'hard' ? 80 : 50;
+    targetSpeed *= gap > band ? diff.aheadSlow : gap < -band ? diff.behindBoost : 1;
   }
 
   if (speed < targetSpeed) input.throttle = 1;

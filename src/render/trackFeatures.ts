@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { forwardX, forwardZ, leftX, leftZ } from '../sim/math';
 import { reverseWarpSide, type Piece, type Track } from '../sim/track';
 import type { Theme } from './themes';
-import { canvas, roadMaps as roadMapsRaw, tex, wallMaps as wallMapsRaw } from './trackStyle';
+import { addRoadDirt, canvas, roadMaps as roadMapsRaw, tex, wallMaps as wallMapsRaw } from './trackStyle';
+import { WALL_OFFSET } from './trackMesh';
 
 // Pistas com vãos/cruzamentos têm vários trechos: as texturas do planeta são geradas uma vez só.
 const memo = <T,>(fn: (t: Theme) => T) => {
@@ -42,10 +43,11 @@ function addCrossings(group: THREE.Group, track: Track, theme: Theme, shadows: b
   if (!xs.length) return;
   const W = track.halfWidth;
   const L = xs[0].length;
-  const WALL = 0.45;
+  const WALL = WALL_OFFSET;
   const rm = roadMaps(theme);
-  const roadMat = new THREE.MeshStandardMaterial({ map: rm.map.clone(), normalMap: rm.normal, roughness: rm.roughness, metalness: rm.metalness });
+  const roadMat = new THREE.MeshStandardMaterial({ map: rm.map.clone(), normalMap: rm.normal, roughnessMap: rm.roughnessMap, roughness: 1, metalness: rm.metalness, envMapIntensity: 0.55 });
   roadMat.map!.needsUpdate = true;
+  addRoadDirt(roadMat, theme);
   // a textura do piso cobre 2W x 2W metros, como na faixa contínua
   roadMat.map!.repeat.set(1, L / (W * 2));
   if (rm.emissive) {
@@ -55,7 +57,7 @@ function addCrossings(group: THREE.Group, track: Track, theme: Theme, shadows: b
   }
   const wm = wallMaps(theme);
   const wallMat = new THREE.MeshStandardMaterial({ map: wm.map, normalMap: wm.normal, roughness: wm.roughness, metalness: wm.metalness });
-  const railMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(theme.rail[0]), roughness: 0.4, metalness: 0.5 });
+  const railMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(theme.curb), roughness: 0.78, metalness: 0 });
   const accentMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(theme.rail[1]), emissive: new THREE.Color(theme.rail[1]), emissiveIntensity: 0.4 });
   const done: { x: number; z: number }[] = [];
   for (const p of xs) {
@@ -122,7 +124,7 @@ function hazardTexture(): THREE.CanvasTexture {
 function addGapEnds(group: THREE.Group, track: Track, theme: Theme, shadows: boolean): void {
   const n = track.pieces.length;
   const W = track.halfWidth;
-  const WALL = 0.45;
+  const WALL = WALL_OFFSET;
   const wm = wallMaps(theme);
   const wallMat = new THREE.MeshStandardMaterial({ map: wm.map, normalMap: wm.normal, roughness: wm.roughness, metalness: wm.metalness });
   let hz: THREE.CanvasTexture | null = null;
@@ -173,7 +175,7 @@ function arrowsTexture(color: string, glow: string): THREE.CanvasTexture {
         ctx.lineTo(10, y + 52);
         ctx.closePath();
         ctx.shadowColor = glow;
-        ctx.shadowBlur = 14;
+        ctx.shadowBlur = 5;
         ctx.fillStyle = color;
         ctx.fill();
       }
@@ -192,7 +194,7 @@ function addWarps(group: THREE.Group, track: Track): void {
       fwdMat ??= new THREE.MeshStandardMaterial({
         map: arrowsTexture('#3cff6a', '#aaffc0'),
         emissive: 0x2aff5a,
-        emissiveIntensity: 1.6,
+        emissiveIntensity: 1.1,
         emissiveMap: null,
         transparent: true,
         depthWrite: false,
@@ -208,7 +210,7 @@ function addWarps(group: THREE.Group, track: Track): void {
       revMat ??= new THREE.MeshStandardMaterial({
         map: arrowsTexture('#ff2a1a', '#ffb0a0'),
         emissive: 0xff2a10,
-        emissiveIntensity: 1.8,
+        emissiveIntensity: 1.3,
         transparent: true,
         depthWrite: false,
         polygonOffset: true,

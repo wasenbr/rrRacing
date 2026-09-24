@@ -24,7 +24,8 @@ function onOrientation(e: DeviceOrientationEvent): void {
   const angle = screen.orientation?.angle ?? (window as Window & { orientation?: number }).orientation ?? 0;
   const tilt = angle === 90 ? e.beta : angle === 270 || angle === -90 ? -e.beta : e.gamma;
   const a = Math.abs(tilt) < TILT_DEAD ? 0 : (Math.abs(tilt) - TILT_DEAD) / (TILT_FULL - TILT_DEAD);
-  tiltSteer = clamp(Math.sign(tilt) * a, -1, 1);
+  // mesma resposta progressiva do volante de toque: inclinações pequenas corrigem de leve
+  tiltSteer = Math.sign(tilt) * Math.pow(clamp(a, 0, 1), 1.5);
 }
 
 function listenTilt(): void {
@@ -197,21 +198,21 @@ export function createTouchControls(root: HTMLElement, controls: Controls): HTML
   el.innerHTML = `
     <div class="touch-left">
       <div class="touch-actions">
-        <button data-a="drop" class="act drop" aria-label="Arma traseira">MINA</button>
-        <button data-a="fire" class="act fire" aria-label="Atirar">TIRO</button>
-        <button data-a="nitro" class="act nitro" aria-label="Nitro">NITRO</button>
+        <button data-a="drop" class="act drop" aria-label="Arma traseira"><i class="t-ic"></i><span>MINA</span></button>
+        <button data-a="fire" class="act fire" aria-label="Atirar"><i class="t-ic"></i><span>TIRO</span></button>
+        <button data-a="nitro" class="act nitro" aria-label="Nitro"><i class="t-ic"></i><span>NITRO</span></button>
       </div>
-      <div class="steer" aria-label="Volante: arraste para os lados">
+      <div class="steer" aria-label="Volante: toque à esquerda ou à direita">
         <span class="arrow l">◀</span><span class="knob"></span><span class="arrow r">▶</span>
       </div>
     </div>
     <div class="touch-right">
       <div class="touch-rcol">
-        <button data-a="sharp" class="sharp" aria-label="Curva fechada">CURVA</button>
-        <button data-a="brake" class="brake" aria-label="Freio e ré">FREIO</button>
+        <button data-a="sharp" class="sharp" aria-label="Derrapar (freio de mão)"><i class="t-ic">${icon('drift')}</i><span>DERRAPAR</span></button>
+        <button data-a="brake" class="brake" aria-label="Freio e ré"><i class="t-ic">${icon('brake')}</i><span>FREIO</span></button>
       </div>
       <button data-a="gas" class="gas" aria-label="Acelerar">ACEL</button>
-      <button data-a="fire" class="fire2" aria-label="Atirar">TIRO</button>
+      <button data-a="fire" class="fire2" aria-label="Atirar"><i class="t-ic"></i><span>TIRO</span></button>
     </div>
     <div class="rotate-hint" aria-live="polite"><div><span class="rot-phone">${icon('phone')}</span><b>Gire o celular</b><small>O jogo é na horizontal. A corrida fica pausada.</small></div></div>
     <div class="touch-top">
@@ -270,7 +271,7 @@ export function createTouchControls(root: HTMLElement, controls: Controls): HTML
     btn.addEventListener('lostpointercapture', up);
   });
 
-  // volante: o dedo pousa em qualquer ponto e arrasta; o lado (e a distância) define a direção
+  // volante: o dedo pousa em qualquer ponto e arrasta; o lado em que está define a direção
   const steer = el.querySelector<HTMLElement>('.steer')!;
   const knob = steer.querySelector<HTMLElement>('.knob')!;
   let steerPointer = -1;
@@ -283,18 +284,21 @@ export function createTouchControls(root: HTMLElement, controls: Controls): HTML
     el.querySelector('.touch-actions .fire')?.classList.toggle('on', on);
     if (on) navigator.vibrate?.(12);
   };
+  // retângulo lido só no toque inicial: ler a cada movimento, logo depois de mexer nas classes e no
+  // transform do botão, forçava recálculo de layout (até 120x por segundo no iPad)
+  let r = steer.getBoundingClientRect();
+  // volante digital, igual ao teclado: metade esquerda da faixa = esquerda total, metade direita =
+  // direita total, faixa do meio = reto. O jogador dosa a curva tocando/soltando (como nas setas do
+  // PC). O esterço analógico pela posição do polegar dava curva de menos ou de mais sem querer
+  const MID = 0.12; // meia-largura da faixa neutra, em fração da largura
   const setFrom = (e: PointerEvent) => {
-    const r = steer.getBoundingClientRect();
     setSlideFire(e.clientY < r.top - r.height * 0.35);
-    const rel = (e.clientX - (r.left + r.width / 2)) / (r.width * 0.32);
-    // zona morta pequena e resposta cheia perto das bordas; passando da ponta da faixa = curva fechada
-    const v = Math.abs(rel) < 0.12 ? 0 : clamp(Math.sign(rel) * Math.min(1, (Math.abs(rel) - 0.12) / 0.7 + 0.35), -1, 1);
-    const sharp = Math.abs(rel) > 1.3;
-    controls.setTouchSteer(v, sharp);
-    steer.classList.toggle('sharp', sharp);
+    const rel = (e.clientX - (r.left + r.width / 2)) / r.width;
+    const v = rel < -MID ? -1 : rel > MID ? 1 : 0;
+    controls.setTouchSteer(v);
     knob.style.transform = `translateX(${v * r.width * 0.32}px)`;
-    steer.classList.toggle('l', v < 0);
-    steer.classList.toggle('r', v > 0);
+    if (steer.classList.contains('l') !== v < 0) steer.classList.toggle('l', v < 0);
+    if (steer.classList.contains('r') !== v > 0) steer.classList.toggle('r', v > 0);
   };
   const release = (e: PointerEvent) => {
     if (e.pointerId !== steerPointer) return;
@@ -302,12 +306,14 @@ export function createTouchControls(root: HTMLElement, controls: Controls): HTML
     setSlideFire(false);
     controls.setTouchSteer(0);
     knob.style.transform = '';
-    steer.classList.remove('l', 'r', 'sharp');
+    steer.classList.remove('l', 'r', 'sharp', 'held');
   };
   steer.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     if (steerPointer !== -1) return;
     steerPointer = e.pointerId;
+    r = steer.getBoundingClientRect();
+    steer.classList.add('held');
     steer.setPointerCapture(e.pointerId);
     setFrom(e);
   });
@@ -326,6 +332,30 @@ export function createTouchControls(root: HTMLElement, controls: Controls): HTML
   });
   el.addEventListener('contextmenu', (e) => e.preventDefault());
   return el;
+}
+
+/** Arma/assistência atual de um botão de toque: ícone (SVG) + nome curto. */
+export interface TouchItem {
+  svg: string;
+  label: string;
+}
+
+/**
+ * Mostra nos botões de ação o ícone e o nome das armas do carro atual (dianteira no TIRO,
+ * traseira no botão de mina/óleo, assistência no de nitro/pulo).
+ */
+export function setTouchWeapons(el: HTMLElement | null, items: { fire: TouchItem; drop: TouchItem; nitro: TouchItem }): void {
+  if (!el) return;
+  for (const [a, it] of Object.entries(items) as [keyof typeof items, TouchItem][]) {
+    el.querySelectorAll<HTMLButtonElement>(`button[data-a="${a}"]`).forEach((btn) => {
+      const ic = btn.querySelector('.t-ic');
+      const tx = btn.querySelector('span');
+      if (ic) ic.innerHTML = it.svg;
+      // o TIRO segue escrito "TIRO" (ação), com o ícone da arma dianteira
+      if (tx && a !== 'fire') tx.textContent = it.label.toUpperCase();
+      btn.dataset.item = it.label;
+    });
+  }
 }
 
 /** Mostra/esconde o botão de acelerar (com aceleração automática ele some e o freio cresce). */

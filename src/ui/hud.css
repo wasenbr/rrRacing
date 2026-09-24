@@ -44,7 +44,7 @@
 .rh-mid { display: flex; flex-direction: column; gap: 6px; }
 
 /* armas: placa com ícone, contador grande */
-.rh-weapons { display: flex; gap: 6px; }
+.rh-weapons { display: flex; gap: 10px; padding: 7px 7px 0 0; }
 .rh-weapons .w { position: relative; display: flex; flex-direction: column; align-items: center; }
 .rh-weapons .ic {
   width: 50px;
@@ -61,16 +61,25 @@
 .rh-weapons .assist.nitro .ic { background: linear-gradient(180deg, #8ae4ff, #1a8ae0 60%, #0a3a7a); color: #021a30; }
 .rh-weapons .assist.jump .ic { background: linear-gradient(180deg, #a0ff7a, #30b020 60%, #0a4a08); color: #042a00; }
 .rh-weapons .w svg { width: 30px; height: 30px; filter: drop-shadow(0 1px 0 rgba(255, 255, 255, 0.55)); }
+/* cargas: selo redondo no canto de cima, fora da borda do ícone */
 .rh-weapons .w b {
   position: absolute;
-  right: -6px;
-  bottom: 10px;
-  font-size: 22px;
+  top: -7px;
+  right: -8px;
+  z-index: 1;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  border-radius: 11px;
+  border: 2px solid var(--rh-edge);
+  background: radial-gradient(circle at 40% 30%, #3a3a44, #0c0c10);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.7);
+  font-size: 14px;
   line-height: 1;
   color: #fff;
-  -webkit-text-stroke: 1.5px #000;
-  paint-order: stroke fill;
-  text-shadow: 0 2px 0 #000;
 }
 .rh-weapons .w small {
   font-family: 'Trebuchet MS', sans-serif;
@@ -155,6 +164,8 @@
 }
 .rh-center.show { opacity: 1; transform: scale(1); }
 .rh-center.m-count { font-size: 120px; }
+/* "VOLTA N": menor e no alto, para não tapar a pista à frente do carro */
+.rh-center.m-lap { font-size: 38px; top: 9%; }
 .rh-center.m-go { background-image: linear-gradient(180deg, #fff 0%, #7aff6a 45%, #0a8a10 100%); }
 .rh-center.m-warn { background-image: linear-gradient(180deg, #fff 0%, #ff7a5a 45%, #a00a00 100%); font-size: 52px; }
 
@@ -184,11 +195,10 @@
 /* telas pequenas (celular deitado) */
 @media (max-height: 520px), (max-width: 700px) {
   .rh-mapframe { width: 92px; height: 92px; padding: 3px; }
-  .rh-weapons { gap: 4px; }
+  .rh-weapons { gap: 8px; padding: 6px 6px 0 0; }
   .rh-weapons .ic { width: 38px; height: 34px; }
   .rh-weapons .w svg { width: 22px; height: 22px; }
-  /* contador abaixo do ícone, na largura dele: não invade a arma seguinte */
-  .rh-weapons .w b { position: static; width: 38px; margin-top: -5px; text-align: center; font-size: 16px; -webkit-text-stroke: 1.2px #000; }
+  .rh-weapons .w b { top: -6px; right: -7px; min-width: 18px; height: 18px; font-size: 12px; border-width: 1.5px; }
   .rh-weapons .w small { display: none; }
   .rh-armor i { width: 9px; height: 9px; }
   .rh-armor { gap: 2px; padding: 3px 4px; }

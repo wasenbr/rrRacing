@@ -68,3 +68,60 @@ Feito:
 - Som: efeitos fora do compressor (impactos +5 a +8 dB na mix), soft-clip só de segurança, motor com
   formantes que abrem com a rotação, nitro grave, locutor com loudness igualado e takes calmos
   descartados, trilha sintetizada com seções e levada por planeta, efeitos de interface com corpo.
+
+# Rodada 5 (2026-09-24)
+
+Notas: Visual 6,5 · Carros 7,5 · Jogabilidade 7,4 · Interface 7 · Som 7,5 (nenhum aprovado).
+
+Feito:
+- Visual (item 28): poeira/areia nas juntas do piso em todos os planetas (padrão de cada planeta
+  mantido), meio-fio claro arredondado em todas as pistas com o detalhe do planeta, luz lateral baixa e
+  quente com ambiente 0,35, terreno escurecido e névoa escura; explosões com clarão, fumaça escura,
+  detritos e luz de um pool; turbo como chama nos escapes; Nho com piso de gelo acinzentado; câmera de
+  perseguição mais perto e marcador ciano sob o carro do jogador; cockpit com capô visível; anisotropia.
+- Carros: Air Blade com barbatana em foice, asas varridas e cauda afilada; números e sujeira na
+  pintura; armas maiores e cromadas; bônus do piloto em azul nas barras da garagem.
+- Jogabilidade: pan pelo vetor direita da câmera (antes invertia atrás), queda de volume suave; plasma
+  17, míssil 30, sundog 14; +1 carga da arma da frente no meio da volta; Battle Trak com 2 scatters;
+  CPU ataca quando fica presa atrás; câmera aérea com mais antecipação. Posição média mista:
+  2,20–2,74 sem armas e 2,01–2,78 com armas (Battle Trak levemente forte com armas).
+- Interface: retratos pintados (volumes, luz de recorte, fundo com névoa; Tarquinn azul-gelo); rivais
+  maiores; controles de toque menores e translúcidos em telas baixas; medição de fps por nível
+  (`desempenho.json`), 30 fps no nível baixo quando necessário; pausa não redesenha; miniaturas de
+  pista com largada, sentido, saltos e vãos.
+- Som: locutor regerado com Chatterbox (exagero 1,5–1,8) clonando voz humana gritada CC-BY
+  (F0 mediano 168→276 Hz); motor com gravação CC0 de V8 em loops por rotação + síntese de queima;
+  laser mais grave e sujo; ducking reforçado; trilha sintetizada sem pausas secas.
+
+# Rodada 6 (2026-09-24) — última com avaliadores (usuário pediu para parar as avaliações)
+
+Notas: Visual 7 · Carros 7 · Jogabilidade 7,6 · Interface 7,5 · Som 7 (nenhum aprovado).
+Usuário: itens 39 (direção por toque sensível demais) e 40 (vista aérea balança demais).
+
+Feito (sem nova avaliação):
+- Visual: camada de sujeira em manchas sobre as placas; vinheta forte; luz por planeta; Drakonis
+  magenta/ciano com nebulosa e chão rachado; Nho com sol baixo, aurora e neve com relevo; cenário
+  dobrado nesses dois; capô real no cockpit (vincos, entrada de ar, para-lamas, faróis), Havac com
+  listras, saia e emissor do Sundog; céu do Inferno com brasas e fumaça; retrovisor acima do teto
+  (sem a "moeda gigante"); perseguição mais alta; faíscas na mureta; fumaça de explosão mais longa;
+  Mojave com mureta de metal areia/ferrugem; minimapa com marcadores maiores e seta do jogador;
+  capturas 50_explosao_* e 51_faiscas_mureta nas evidências.
+- Carros: Battle Trak com casco claro, para-brisa preto brilhante, torreta e cano maiores; Marauder
+  baixo e alongado; Dirt Devil com cúpula de fusca; cor de vitrine por modelo na loja; escala visual
+  pela área e pelo volume (nenhum carro cresce); Air Blade com barbatana fundida ao casco; barras da
+  loja em escala absoluta e FORTE/FRACO só com diferença real (`attributeTags`).
+- Jogabilidade: óleo cai 6 m atrás, ativa após 0,25 s, CPU só solta em quem está a 12–25 m, humano
+  roda 0,5 s no Fácil/Normal; perfis mais nítidos (Havac veloz, Dirt Devil curva, Battle Trak
+  aderência); elástico a 50 m no Fácil/Normal; letreiro de volta menor, no alto, 0,8 s. Posição média
+  mista: 2,34–2,61 sem armas, 2,13–2,63 com armas.
+- Item 39: direção por toque e por inclinação com zona morta e curva progressiva.
+- Item 40: vista aérea com antecipação menor e suavizada à parte, zoom até +12% e lento, tremor só
+  em pancada forte.
+- Interface: retratos mais pintados (todos os pilotos e os 8 rivais) com placa metálica também nas
+  miniaturas; nível Médio sem antialias (antes pior que o Alto); Baixo mais leve; botões de toque
+  ≥ 56 px com ícone; CURVA → DERRAPAR; prévia do ganho na aba Melhorias; armas da loja em 3D; ícone
+  do app novo; escolha de piloto na corrida rápida.
+- Miniaturas: falha de WebGL não fica mais no cache (planetas sumiam da rota da Nova Campanha) e o
+  renderizador é recriado se o contexto for perdido.
+- Som: ver resumo do agente de som; locutor com voz grave sendo regerado fora da sessão
+  (ver `referencias/locutor-pendente.md`).

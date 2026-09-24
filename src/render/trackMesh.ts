@@ -1,9 +1,10 @@
 import * as THREE from 'three';
-import { createRng, forwardX, forwardZ, leftX, leftZ } from '../sim/math';
+import { createRng, forwardX, forwardZ, leftX, leftZ, wrapAngle } from '../sim/math';
 import { JUMP_HEIGHT, type CenterPoint, type Track } from '../sim/track';
 import type { Theme } from './themes';
 import { addTrackFeatures, roadMaps, wallMaps } from './trackFeatures';
-import { edgeCurve, pipeTexture, spikeStarGeometry, wallGeometry } from './trackStyle';
+import { concreteNormal, fbm } from './textures';
+import { addRoadDirt, edgeCurve, pipeTexture, roadDetailHigh, spikeStarGeometry, wallGeometry } from './trackStyle';
 
 export function canvasTexture(w: number, h: number, draw: (ctx: CanvasRenderingContext2D) => void, color = true): THREE.CanvasTexture {
   const c = document.createElement('canvas');
@@ -48,6 +49,32 @@ function arrowTexture(): THREE.CanvasTexture {
   });
 }
 
+/**
+ * Pontos da linha central que a malha precisa: nas retas planas, um a cada 4 m (a textura segue a
+ * distância, então nada muda); nas curvas, um a cada `bendStep` pontos; em rampas, saltos e
+ * lombadas (altura não linear), todos. Troca de peça sempre fica. Corta ~70% dos triângulos.
+ */
+function simplifyRun(pts: CenterPoint[], bendStep: number): CenterPoint[] {
+  if (pts.length < 3) return pts;
+  const out = [pts[0]];
+  let since = 0;
+  for (let i = 1; i < pts.length - 1; i++) {
+    since++;
+    const a = pts[i - 1];
+    const c = pts[i];
+    const b = pts[i + 1];
+    const bend = Math.abs(wrapAngle(b.heading - c.heading)) > 1e-5 || Math.abs(wrapAngle(c.heading - a.heading)) > 1e-5;
+    const kink = Math.abs(b.h - c.h - (c.h - a.h)) > 1e-4;
+    const limit = kink ? 1 : bend ? bendStep : 8;
+    if (since >= limit || c.pieceIndex !== b.pieceIndex || c.pieceIndex !== a.pieceIndex) {
+      out.push(c);
+      since = 0;
+    }
+  }
+  out.push(pts[pts.length - 1]);
+  return out;
+}
+
 /** Ponto de um perfil transversal: deslocamento lateral e altura (relativa à pista). */
 interface ProfilePoint {
   l: number;
@@ -88,8 +115,117 @@ function sweep(pts: CenterPoint[], profile: ProfilePoint[], uScale: number, vSca
   return geo;
 }
 
+/**
+ * Como `sweep`, mas com vértices compartilhados entre os pontos do perfil (normais suaves: peças
+ * arredondadas como o meio-fio). u vai de 0 a 1 ao longo do perfil; v em metros / vScale.
+ */
+function sweepSmooth(pts: CenterPoint[], profile: ProfilePoint[], vScale: number): THREE.BufferGeometry {
+  const pos: number[] = [];
+  const uv: number[] = [];
+  const idx: number[] = [];
+  const acc = [0];
+  for (let k = 1; k < profile.length; k++) acc.push(acc[k - 1] + Math.hypot(profile[k].l - profile[k - 1].l, profile[k].y - profile[k - 1].y));
+  const total = acc[acc.length - 1] || 1;
+  const P = profile.length;
+  for (const p of pts) {
+    const lx = leftX(p.heading);
+    const lz = leftZ(p.heading);
+    profile.forEach((q, k) => {
+      pos.push(p.x + lx * q.l, p.h + q.y, p.z + lz * q.l);
+      uv.push(acc[k] / total, p.dist / vScale);
+    });
+  }
+  for (let i = 0; i < pts.length - 1; i++)
+    for (let k = 0; k < P - 1; k++) {
+      const a = i * P + k;
+      idx.push(a, a + 1, a + P, a + 1, a + P + 1, a + P);
+    }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/** Meio-fio: altura e perfil arredondado (largura = WALL_OFFSET). */
+export const CURB_HEIGHT = 0.42;
+
+/** Perfil do meio-fio de um lado, da borda interna para fora (e = distância a partir da borda do piso). */
+function curbProfile(W: number, side: 1 | -1, C: number): ProfilePoint[] {
+  const out: { e: number; y: number }[] = [{ e: -0.03, y: -0.02 }];
+  const N = 10;
+  for (let k = 0; k <= N; k++) {
+    const t = (k / N) * Math.PI;
+    // meia-lua achatada: sobe rápido por dentro, topo largo e cai em curva por fora
+    out.push({ e: (C / 2) * (1 - Math.cos(t)), y: CURB_HEIGHT * Math.pow(Math.sin(t), 0.7) });
+  }
+  out.push({ e: C, y: -0.4 });
+  const prof = out.map((q) => ({ l: side * (W + q.e), y: q.y }));
+  // face para cima/fora: o perfil vai da esquerda (l maior) para a direita
+  return side > 0 ? prof.reverse() : prof;
+}
+
+const curbCache = new WeakMap<Theme, { map: THREE.Texture; emissive: THREE.Texture | null }>();
+/**
+ * Textura do meio-fio: concreto cor de osso/areia, gasto, com areia acumulada no pé interno
+ * (junto ao piso) e uma faixa de destaque do planeta na face externa (u: 0 = fora, 1 = dentro,
+ * trocado no lado direito — a faixa é simétrica em torno do topo).
+ */
+function curbMaps(theme: Theme): { map: THREE.Texture; emissive: THREE.Texture | null } {
+  const hit = curbCache.get(theme);
+  if (hit) return hit;
+  const S = 128;
+  const n = fbm(S, 4, 4, 83, 0.55);
+  const stripe = theme.railStyle === 'lip' || theme.railStyle === 'spiked' ? theme.rail[1] : theme.railStyle === 'bumper' || theme.railStyle === 'ice' ? theme.rail[0] : null;
+  const rng = createRng(5);
+  const map = canvasTexture(S, S, (ctx) => {
+    ctx.fillStyle = theme.curb;
+    ctx.fillRect(0, 0, S, S);
+    const img = ctx.getImageData(0, 0, S, S);
+    const dust = new THREE.Color(theme.dust);
+    for (let y = 0; y < S; y++)
+      for (let x = 0; x < S; x++) {
+        const i = (y * S + x) * 4;
+        const u = x / (S - 1);
+        // simétrico: 0 nas duas bases, 1 no topo
+        const top = Math.sin(u * Math.PI);
+        const v = n[y * S + x];
+        const k = 0.78 + v * 0.3 + (rng() - 0.5) * 0.08;
+        // areia/sujeira acumulada nas bases e manchas escuras de uso
+        const sand = Math.max(0, 1 - top * 2.2) * (0.6 + v * 0.6);
+        for (let c = 0; c < 3; c++) {
+          const base = img.data[i + c] * k;
+          const dc = (c === 0 ? dust.r : c === 1 ? dust.g : dust.b) * 255 * (0.7 + v * 0.4);
+          img.data[i + c] = Math.min(255, base + (dc - base) * Math.min(1, sand));
+        }
+      }
+    ctx.putImageData(img, 0, 0);
+    // lascas e riscos
+    for (let i = 0; i < 90; i++) {
+      ctx.fillStyle = `rgba(40,30,20,${0.08 + rng() * 0.18})`;
+      ctx.fillRect(rng() * S, rng() * S, 1 + rng() * 3, 1 + rng() * 2);
+    }
+    if (stripe) {
+      ctx.fillStyle = stripe;
+      for (const x0 of [0.14, 0.86 - 0.08]) ctx.fillRect(S * x0, 0, S * 0.08, S);
+    }
+  });
+  let emissive: THREE.Texture | null = null;
+  if (stripe && theme.railStyle === 'spiked')
+    emissive = canvasTexture(S, S, (ctx) => {
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, S, S);
+      ctx.fillStyle = stripe;
+      for (const x0 of [0.14, 0.86 - 0.08]) ctx.fillRect(S * x0, 0, S * 0.08, S);
+    });
+  const out = { map, emissive };
+  curbCache.set(theme, out);
+  return out;
+}
+
 /** Distância lateral da face externa da mureta (onde começa o paredão). */
-export const WALL_OFFSET = 0.45;
+export const WALL_OFFSET = 0.8;
 
 /** Gera a malha 3D da pista (piso, muretas, paredões, largada) com a cara do planeta. */
 export function buildTrackMesh(track: Track, theme: Theme, shadows: boolean): THREE.Group {
@@ -112,25 +248,31 @@ function buildRun(group: THREE.Group, pts: CenterPoint[], theme: Theme, W: numbe
     map: rm.map,
     normalMap: rm.normal,
     normalScale: new THREE.Vector2(0.9, 0.9),
-    roughness: rm.roughness,
+    roughnessMap: rm.roughnessMap,
+    roughness: 1,
     metalness: rm.metalness,
+    // reflexo contido: o piso não "lava" com o céu; o brilho vem do sol rasante nas placas limpas
+    envMapIntensity: 0.55,
   });
+  addRoadDirt(roadMat, theme);
   if (rm.emissive) {
     roadMat.emissiveMap = rm.emissive;
     roadMat.emissive = new THREE.Color(0xffffff);
     roadMat.emissiveIntensity = theme.roadGlow;
   }
   // a mesma textura cobre (2W x 2W) metros; o piso vai um pouco além para encostar na mureta
-  const road = new THREE.Mesh(sweep(pts, [{ l: W + 0.05, y: 0 }, { l: -W - 0.05, y: 0 }], W * 2, W * 2), roadMat);
+  // malhas contínuas com menos pontos nas retas (o posicionamento de enfeites usa todos)
+  const gp = simplifyRun(pts, roadDetailHigh() ? 1 : 2);
+  const road = new THREE.Mesh(sweep(gp, [{ l: W + 0.05, y: 0 }, { l: -W - 0.05, y: 0 }], W * 2, W * 2), roadMat);
   road.receiveShadow = shadows;
   group.add(road);
 
-  addWalls(group, pts, theme, W, G, shadows);
-  addRails(group, pts, theme, W, shadows);
+  addWalls(group, pts, gp, theme, W, G, shadows);
+  addRails(group, pts, gp, theme, W, shadows);
 
   // fundo do bloco (aparece na câmera de perseguição durante saltos)
   const under = new THREE.Mesh(
-    sweep(pts, [{ l: -W - WALL_OFFSET, y: -0.7 }, { l: W + WALL_OFFSET, y: -0.7 }], 8, 8),
+    sweep(gp, [{ l: -W - WALL_OFFSET, y: -0.7 }, { l: W + WALL_OFFSET, y: -0.7 }], 8, 8),
     new THREE.MeshStandardMaterial({ color: new THREE.Color(theme.skirt).multiplyScalar(0.4), roughness: 0.9 }),
   );
   group.add(under);
@@ -138,7 +280,7 @@ function buildRun(group: THREE.Group, pts: CenterPoint[], theme: Theme, W: numbe
 
 /* ------------------------------------------------------------------ */
 
-function addWalls(group: THREE.Group, pts: CenterPoint[], theme: Theme, W: number, G: number, shadows: boolean): void {
+function addWalls(group: THREE.Group, pts: CenterPoint[], gp: CenterPoint[], theme: Theme, W: number, G: number, shadows: boolean): void {
   const wm = wallMaps(theme);
   const mat = new THREE.MeshStandardMaterial({
     map: wm.map,
@@ -153,7 +295,7 @@ function addWalls(group: THREE.Group, pts: CenterPoint[], theme: Theme, W: numbe
     mat.emissiveIntensity = theme.walls === 'demonic' ? 1.6 : 1.2;
   }
   for (const side of [1, -1] as const) {
-    const wall = new THREE.Mesh(wallGeometry(pts, side * (W + WALL_OFFSET), G - 0.5, side), mat);
+    const wall = new THREE.Mesh(wallGeometry(gp, side * (W + WALL_OFFSET), G - 0.5, side), mat);
     wall.receiveShadow = shadows;
     group.add(wall);
   }
@@ -214,10 +356,10 @@ function addWalls(group: THREE.Group, pts: CenterPoint[], theme: Theme, W: numbe
 }
 
 /** Mureta: um estilo por planeta, tudo instanciado (poucas chamadas de desenho). */
-function addRails(group: THREE.Group, pts: CenterPoint[], theme: Theme, W: number, shadows: boolean): void {
+function addRails(group: THREE.Group, pts: CenterPoint[], gp: CenterPoint[], theme: Theme, W: number, shadows: boolean): void {
   const q = new THREE.Quaternion();
   const one = new THREE.Vector3(1, 1, 1);
-  const segs = Math.floor(pts.length / 1.5);
+  const segs = Math.floor(pts.length / 2.5);
   const main = new THREE.Color(theme.rail[0]);
   const second = new THREE.Color(theme.rail[1]);
   const along = (spacing: number, fn: (p: CenterPoint, side: 1 | -1, k: number) => void) => {
@@ -236,76 +378,68 @@ function addRails(group: THREE.Group, pts: CenterPoint[], theme: Theme, W: numbe
   const tube = (off: number, lift: number, r: number, mat: THREE.Material) => {
     for (const side of [1, -1]) {
       const curve = edgeCurve(pts, side * off, lift);
-      const m = new THREE.Mesh(new THREE.TubeGeometry(curve, segs, r, 10, curve.closed), mat);
-      m.castShadow = shadows;
-      m.receiveShadow = shadows;
-      group.add(m);
-    }
-  };
-  const box = (inner: number, outer: number, hgt: number, mat: THREE.Material) => {
-    for (const side of [1, -1]) {
-      const i = side * inner;
-      const o = side * outer;
-      let prof: ProfilePoint[] = [{ l: i, y: -0.05 }, { l: i, y: hgt }, { l: o, y: hgt }, { l: o, y: -0.4 }];
-      if (side > 0) prof = prof.reverse();
-      const m = new THREE.Mesh(sweep(pts, prof, 1, 4), mat);
+      const m = new THREE.Mesh(new THREE.TubeGeometry(curve, segs, r, 8, curve.closed), mat);
       m.castShadow = shadows;
       m.receiveShadow = shadows;
       group.add(m);
     }
   };
 
+  // meio-fio claro e arredondado em todas as pistas (visual alvo); o estilo do planeta vira detalhe
+  const C = WALL_OFFSET;
+  const H = CURB_HEIGHT;
+  const cm = curbMaps(theme);
+  const curbMat = new THREE.MeshStandardMaterial({ map: cm.map, normalMap: concreteNormal(), normalScale: new THREE.Vector2(0.6, 0.6), roughness: 0.78, metalness: 0 });
+  if (cm.emissive) {
+    curbMat.emissiveMap = cm.emissive;
+    curbMat.emissive = new THREE.Color(0xffffff);
+    curbMat.emissiveIntensity = 1.2;
+  }
+  for (const side of [1, -1] as const) {
+    const m = new THREE.Mesh(sweepSmooth(gp, curbProfile(W, side, C), 3), curbMat);
+    m.castShadow = shadows;
+    m.receiveShadow = shadows;
+    group.add(m);
+  }
+
   switch (theme.railStyle) {
-    case 'lip': {
-      // Chem VI: friso metálico baixo com faixa vermelha no topo
-      const t = canvasTexture(64, 64, (ctx) => {
-        ctx.fillStyle = theme.rail[0];
-        ctx.fillRect(0, 0, 64, 64);
-        ctx.fillStyle = theme.rail[1];
-        ctx.fillRect(0, 20, 64, 22);
-        ctx.fillStyle = 'rgba(0,0,0,0.4)';
-        for (let x = 0; x < 64; x += 16) ctx.fillRect(x, 0, 2, 64);
-      });
-      box(W, W + WALL_OFFSET, 0.42, new THREE.MeshStandardMaterial({ map: t, metalness: 0.7, roughness: 0.35 }));
+    case 'lip':
+      // Chem VI: a faixa vermelha do friso original está pintada no meio-fio
       break;
-    }
     case 'tube': {
-      // Drakonis: tubo roxo com bulbos (a mureta orgânica do original)
-      const mat = new THREE.MeshStandardMaterial({ color: main, emissive: second, emissiveIntensity: 0.25, roughness: 0.3, metalness: 0.15 });
-      tube(W + 0.2, 0.3, 0.3, mat);
+      // Drakonis: tubo roxo fino na face externa e bulbos orgânicos sobre o meio-fio
+      tube(W + C * 0.95, 0.06, 0.1, new THREE.MeshStandardMaterial({ color: main, emissive: second, emissiveIntensity: 0.3, roughness: 0.3, metalness: 0.15 }));
       const bulbs: THREE.Matrix4[] = [];
-      along(1.3, (p, side) => {
+      along(2.6, (p, side) => {
         q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), p.heading);
-        bulbs.push(new THREE.Matrix4().compose(at(p, side * (W + 0.2), 0.32), q, new THREE.Vector3(1, 0.85, 1.35)));
+        bulbs.push(new THREE.Matrix4().compose(at(p, side * (W + C * 0.55), H - 0.02), q, new THREE.Vector3(1, 0.8, 1.4)));
       });
-      instanced(new THREE.SphereGeometry(0.38, 12, 8), new THREE.MeshStandardMaterial({ color: main.clone().multiplyScalar(1.2), emissive: main, emissiveIntensity: 0.35, roughness: 0.25 }), bulbs);
+      instanced(new THREE.SphereGeometry(0.2, 12, 8), new THREE.MeshStandardMaterial({ color: main.clone().multiplyScalar(1.2), emissive: main, emissiveIntensity: 0.5, roughness: 0.25 }), bulbs);
       break;
     }
     case 'cable': {
-      // Bogmire: cabo preto baixo com estrelas de espinhos prateadas
-      tube(W + 0.2, 0.42, 0.13, new THREE.MeshStandardMaterial({ color: main, roughness: 0.5, metalness: 0.4 }));
+      // Bogmire: cabo preto por fora do meio-fio com estrelas de espinhos prateadas
+      tube(W + C + 0.08, 0.18, 0.07, new THREE.MeshStandardMaterial({ color: main, roughness: 0.5, metalness: 0.4 }));
       const stars: THREE.Matrix4[] = [];
       along(2.4, (p, side, k) => {
         q.setFromEuler(new THREE.Euler(k * 0.7, p.heading + k, 0));
-        stars.push(new THREE.Matrix4().compose(at(p, side * (W + 0.2), 0.45), q, one));
+        stars.push(new THREE.Matrix4().compose(at(p, side * (W + C + 0.08), 0.2), q, new THREE.Vector3(0.75, 0.75, 0.75)));
       });
       instanced(spikeStarGeometry(0.55), new THREE.MeshStandardMaterial({ color: second, metalness: 0.85, roughness: 0.5, envMapIntensity: 0.5 }), stars);
       break;
     }
     case 'bumper': {
-      // New Mojave: tubo verde com luzes amarelas
-      tube(W + 0.2, 0.3, 0.3, new THREE.MeshStandardMaterial({ color: main, roughness: 0.45, metalness: 0.3 }));
+      // New Mojave: faixa verde no meio-fio e luzes amarelas encaixadas no topo
       const lamps: THREE.Matrix4[] = [];
-      along(1.6, (p, side) => {
+      along(3.2, (p, side) => {
         q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), p.heading);
-        lamps.push(new THREE.Matrix4().compose(at(p, side * (W + 0.2), 0.52), q, one));
+        lamps.push(new THREE.Matrix4().compose(at(p, side * (W + C * 0.5), H - 0.01), q, one));
       });
-      instanced(new THREE.BoxGeometry(0.62, 0.28, 0.5), new THREE.MeshStandardMaterial({ color: second, emissive: second, emissiveIntensity: 1.3, roughness: 0.3 }), lamps);
+      instanced(new THREE.BoxGeometry(0.26, 0.08, 0.42), new THREE.MeshStandardMaterial({ color: second, emissive: second, emissiveIntensity: 1.4, roughness: 0.3 }), lamps, false);
       break;
     }
     case 'ice': {
-      // Nho: tubo de gelo translúcido com pingentes para fora
-      tube(W + 0.2, 0.28, 0.3, new THREE.MeshStandardMaterial({ color: main, emissive: 0x0a2a80, emissiveIntensity: 0.6, roughness: 0.08, metalness: 0.1, transparent: true, opacity: 0.9 }));
+      // Nho: meio-fio de neve com faixa azul e pingentes de gelo para fora
       const icicles: THREE.Matrix4[] = [];
       const rng = createRng(12);
       along(0.5, (p, side) => {
@@ -319,21 +453,12 @@ function addRails(group: THREE.Group, pts: CenterPoint[], theme: Theme, W: numbe
       break;
     }
     case 'spiked': {
-      // Inferno: mureta preta com friso vermelho e chifres curvos
-      box(W, W + WALL_OFFSET, 0.45, new THREE.MeshStandardMaterial({ color: main, roughness: 0.35, metalness: 0.6 }));
-      for (const side of [1, -1]) {
-        const m = new THREE.Mesh(
-          sweep(pts, side > 0 ? [{ l: W + WALL_OFFSET, y: 0.46 }, { l: W, y: 0.46 }] : [{ l: -W, y: 0.46 }, { l: -W - WALL_OFFSET, y: 0.46 }], 1, 4),
-          new THREE.MeshStandardMaterial({ color: second, emissive: second, emissiveIntensity: 0.9 }),
-        );
-        m.scale.set(1, 1, 1);
-        group.add(m);
-      }
+      // Inferno: faixa vermelha incandescente no meio-fio e chifres curvos para fora
       const horns: THREE.Matrix4[] = [];
       along(1.8, (p, side) => {
         const out = new THREE.Vector3(leftX(p.heading) * side, 1.4, leftZ(p.heading) * side).normalize();
         q.setFromUnitVectors(new THREE.Vector3(0, 1, 0), out);
-        horns.push(new THREE.Matrix4().compose(at(p, side * (W + WALL_OFFSET * 0.6), 0.45), q, one));
+        horns.push(new THREE.Matrix4().compose(at(p, side * (W + C * 0.85), 0.18), q, new THREE.Vector3(0.9, 0.9, 0.9)));
       });
       const horn = new THREE.ConeGeometry(0.16, 0.85, 7).translate(0, 0.42, 0);
       instanced(horn, new THREE.MeshStandardMaterial({ color: 0x1a1414, roughness: 0.3, metalness: 0.7, emissive: 0x300400 }), horns);

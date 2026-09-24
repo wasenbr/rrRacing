@@ -118,7 +118,7 @@ export function trackThumbnail(def: TrackDef, width = 200, height = 130): string
   }
   const pad = Math.round(Math.min(width, height) * 0.12);
   const map = trackTransform(track, width, height, pad);
-  const w = Math.max(5, Math.min(width, height) * 0.075);
+  const w = Math.max(5, Math.min(width, height) * 0.095);
   const hs = track.pieces.map((p) => p.h0 + p.dh / 2);
   const hMin = Math.min(...hs);
   const hMax = Math.max(...hs);
@@ -181,7 +181,7 @@ export function trackThumbnail(def: TrackDef, width = 200, height = 130): string
     ctx.globalAlpha = 1;
     ctx.setLineDash([]);
   }
-  // marcações: rampas de salto, lombadas e vãos
+  // marcações bem visíveis: rampas de salto, lombadas, vãos, sentido da prova e largada
   const across = (p: Piece, s: number, half: number) => {
     const pt = track.pointOn(p, s);
     const [x, y] = map(pt.x, pt.z);
@@ -192,59 +192,153 @@ export function trackThumbnail(def: TrackDef, width = 200, height = 130): string
     const dy = (y2 - y) / len;
     return { x, y, dx, dy, nx: -dy * half, ny: dx * half };
   };
+  // marcas e selos em escala generosa: a miniatura costuma aparecer menor que o tamanho gerado
+  const u = Math.max(1.2, Math.min(width, height) / 100);
+  // sentido da prova: chevrons brancos ao longo do circuito
+  const road = track.pieces.filter((p) => p.code !== 'G' && p.code !== 'J');
+  ctx.lineCap = 'round';
+  for (let i = 1; i < road.length; i += Math.max(2, Math.floor(road.length / 5))) {
+    const p = road[i];
+    const a = across(p, p.length * 0.5, w * 0.3);
+    ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+    ctx.lineWidth = 1.3 * u;
+    ctx.beginPath();
+    ctx.moveTo(a.x + a.nx - a.dx * w * 0.2, a.y + a.ny - a.dy * w * 0.2);
+    ctx.lineTo(a.x + a.dx * w * 0.2, a.y + a.dy * w * 0.2);
+    ctx.lineTo(a.x - a.nx - a.dx * w * 0.2, a.y - a.ny - a.dy * w * 0.2);
+    ctx.stroke();
+  }
+  ctx.lineCap = 'butt';
+  let jumps = 0;
+  let gaps = 0;
   for (const p of track.pieces) {
     if (p.code === 'J') {
-      // seta amarela apontando para o lado do salto
-      const a = across(p, p.length * 0.6, w * 0.5);
+      jumps++;
+      // rampa: seta amarela grande com brilho, apontando o sentido do salto
+      const a = across(p, p.length * 0.55, w * 0.85);
+      ctx.save();
+      ctx.shadowColor = '#fff27a';
+      ctx.shadowBlur = 8 * u;
       ctx.fillStyle = '#ffd21a';
-      ctx.strokeStyle = '#000';
-      ctx.lineWidth = 1;
+      ctx.strokeStyle = '#1a1000';
+      ctx.lineWidth = 1.4 * u;
       ctx.beginPath();
-      ctx.moveTo(a.x + a.dx * w * 0.6, a.y + a.dy * w * 0.6);
-      ctx.lineTo(a.x + a.nx - a.dx * w * 0.3, a.y + a.ny - a.dy * w * 0.3);
-      ctx.lineTo(a.x - a.nx - a.dx * w * 0.3, a.y - a.ny - a.dy * w * 0.3);
+      ctx.moveTo(a.x + a.dx * w * 1.0, a.y + a.dy * w * 1.0);
+      ctx.lineTo(a.x + a.nx - a.dx * w * 0.45, a.y + a.ny - a.dy * w * 0.45);
+      ctx.lineTo(a.x - a.nx - a.dx * w * 0.45, a.y - a.ny - a.dy * w * 0.45);
       ctx.closePath();
       ctx.fill();
+      ctx.shadowBlur = 0;
       ctx.stroke();
+      ctx.restore();
     } else if (p.code === 'B') {
+      // lombadas: três chevrons laranja
       ctx.strokeStyle = '#ff8a2a';
-      ctx.lineWidth = 1.4;
+      ctx.lineWidth = 2 * u;
       for (const f of [0.25, 0.5, 0.75]) {
-        const a = across(p, p.length * f, w * 0.45);
+        const a = across(p, p.length * f, w * 0.5);
         ctx.beginPath();
-        ctx.moveTo(a.x + a.nx, a.y + a.ny);
-        ctx.lineTo(a.x - a.nx, a.y - a.ny);
+        ctx.moveTo(a.x + a.nx - a.dx * w * 0.25, a.y + a.ny - a.dy * w * 0.25);
+        ctx.lineTo(a.x + a.dx * w * 0.1, a.y + a.dy * w * 0.1);
+        ctx.lineTo(a.x - a.nx - a.dx * w * 0.25, a.y - a.ny - a.dy * w * 0.25);
         ctx.stroke();
       }
     } else if (p.code === 'G') {
-      // vão: sem piso; rota do salto tracejada e faixas de perigo nas bordas
+      gaps++;
+      // vão: buraco escuro com brilho vermelho, rota do salto tracejada e faixas de perigo nas bordas
+      ctx.save();
+      ctx.shadowColor = '#ff2a1a';
+      ctx.shadowBlur = 8 * u;
       piecePath(p);
-      ctx.lineWidth = 1.2;
-      ctx.setLineDash([2, 3]);
-      ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+      ctx.lineWidth = w + 3;
+      ctx.strokeStyle = '#070406';
+      ctx.stroke();
+      ctx.restore();
+      piecePath(p);
+      ctx.lineWidth = 1.3 * u;
+      ctx.setLineDash([2 * u, 2.5 * u]);
+      ctx.strokeStyle = 'rgba(255,255,255,0.9)';
       ctx.stroke();
       ctx.setLineDash([]);
       for (const s of [0.4, p.length - 0.4]) {
-        const a = across(p, s, w * 0.62);
-        ctx.lineWidth = 3;
+        const a = across(p, s, w * 0.75);
+        ctx.lineWidth = 3.4 * u;
         ctx.strokeStyle = '#ffd21a';
         ctx.beginPath();
         ctx.moveTo(a.x + a.nx, a.y + a.ny);
         ctx.lineTo(a.x - a.nx, a.y - a.ny);
         ctx.stroke();
-        ctx.setLineDash([2, 2]);
+        ctx.setLineDash([2 * u, 2 * u]);
         ctx.strokeStyle = '#111';
         ctx.stroke();
         ctx.setLineDash([]);
       }
     }
   }
-  // largada quadriculada
-  const [sx, sy] = map(track.pieces[0].x0, track.pieces[0].z0);
-  const s = Math.max(3, w * 0.35);
-  for (let i = 0; i < 4; i++) {
-    ctx.fillStyle = (i + Math.floor(i / 2)) % 2 ? '#111' : '#fff';
-    ctx.fillRect(sx - s + (i % 2) * s, sy - s + Math.floor(i / 2) * s, s, s);
+  // largada: faixa quadriculada atravessando a pista inteira + bandeirinha
+  {
+    const p0 = track.pieces[0];
+    const a = across(p0, 0.2, (w + 4) / 2);
+    const n = 6;
+    const sq = (w + 4) / n;
+    for (let row = 0; row < 2; row++)
+      for (let i = 0; i < n; i++) {
+        const t0 = -0.5 + i / n;
+        const cx = a.x + a.nx * 2 * (t0 + 0.5 / n) + a.dx * sq * (row - 0.5);
+        const cy = a.y + a.ny * 2 * (t0 + 0.5 / n) + a.dy * sq * (row - 0.5);
+        ctx.fillStyle = (i + row) % 2 ? '#111' : '#fff';
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate(Math.atan2(a.dy, a.dx));
+        ctx.fillRect(-sq / 2, -sq / 2, sq + 0.3, sq + 0.3);
+        ctx.restore();
+      }
+    const fx = a.x + a.nx * 1.25;
+    const fy = a.y + a.ny * 1.25;
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1.2 * u;
+    ctx.beginPath();
+    ctx.moveTo(fx, fy);
+    ctx.lineTo(fx, fy - 9 * u);
+    ctx.stroke();
+    for (let i = 0; i < 6; i++) {
+      ctx.fillStyle = (i + Math.floor(i / 3)) % 2 ? '#111' : '#fff';
+      ctx.fillRect(fx + (i % 3) * 2.2 * u, fy - 9 * u + Math.floor(i / 3) * 2.2 * u, 2.2 * u, 2.2 * u);
+    }
+  }
+  // selos: número da pista na cor do planeta e contagem de saltos e vãos
+  const num = def.id.match(/(\d+)$/)?.[1] ?? '';
+  ctx.font = `900 ${Math.round(15 * u)}px system-ui, sans-serif`;
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'center';
+  if (num) {
+    const r = 11 * u;
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.beginPath();
+    ctx.arc(6 * u + r, 6 * u + r, r + 1.5 * u, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = tone(css(t.glow), 1);
+    ctx.beginPath();
+    ctx.arc(6 * u + r, 6 * u + r, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#111';
+    ctx.fillText(num, 6 * u + r, 6.5 * u + r);
+  }
+  const tags: [string, string, number][] = [];
+  if (jumps) tags.push(['#ffd21a', 'SALTO', jumps]);
+  if (gaps) tags.push(['#ff4a2a', 'VÃO', gaps]);
+  ctx.font = `800 ${Math.round(9 * u)}px system-ui, sans-serif`;
+  let tx = width - 5 * u;
+  for (const [color, label, n] of tags) {
+    const text = n > 1 ? `${label} ×${n}` : label;
+    const tw = ctx.measureText(text).width + 8 * u;
+    const ty = height - 5 * u - 12 * u;
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(tx - tw, ty, tw, 12 * u);
+    ctx.fillStyle = color;
+    ctx.fillRect(tx - tw, ty, 2.5 * u, 12 * u);
+    ctx.fillText(text, tx - tw / 2 + 1.2 * u, ty + 6.5 * u);
+    tx -= tw + 4 * u;
   }
   const url = c.toDataURL('image/png');
   cache.set(key, url);

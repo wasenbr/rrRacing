@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { createRng, leftX, leftZ } from '../sim/math';
 import type { CenterPoint } from '../sim/track';
-import { fbm, normalMap } from './textures';
+import { fbm, maxAnisotropy, normalMap } from './textures';
 import type { Theme } from './themes';
 
 /**
@@ -22,7 +22,10 @@ export function tex(c: HTMLCanvasElement, srgb = true): THREE.CanvasTexture {
   const t = new THREE.CanvasTexture(c);
   if (srgb) t.colorSpace = THREE.SRGBColorSpace;
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.anisotropy = 8;
+  // piso e paredes vistos em ângulo rasante (cockpit): anisotropia máxima + mipmaps trilineares
+  t.anisotropy = maxAnisotropy;
+  t.generateMipmaps = true;
+  t.minFilter = THREE.LinearMipmapLinearFilter;
   return t;
 }
 
@@ -50,8 +53,114 @@ function heightFrom(c: HTMLCanvasElement): Float32Array {
 /* Piso                                                                 */
 /* ------------------------------------------------------------------ */
 
-/** Quantas células do padrão cabem na largura da pista. */
-const CELLS = 10;
+/** Desfoque de caixa separável (raio r, repetição nas bordas), aplicado duas vezes (quase gaussiano). */
+function blur(src: Float32Array, n: number, r: number): Float32Array {
+  let a = src;
+  for (let pass = 0; pass < 2; pass++) {
+    const tmp = new Float32Array(n * n);
+    const out = new Float32Array(n * n);
+    const k = 1 / (2 * r + 1);
+    for (let y = 0; y < n; y++)
+      for (let x = 0; x < n; x++) {
+        let acc = 0;
+        for (let d = -r; d <= r; d++) acc += a[y * n + ((x + d + n) % n)];
+        tmp[y * n + x] = acc * k;
+      }
+    for (let y = 0; y < n; y++)
+      for (let x = 0; x < n; x++) {
+        let acc = 0;
+        for (let d = -r; d <= r; d++) acc += tmp[((y + d + n) % n) * n + x];
+        out[y * n + x] = acc * k;
+      }
+    a = out;
+  }
+  return a;
+}
+
+const smooth = (a: number, b: number, v: number) => {
+  const t = Math.min(1, Math.max(0, (v - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+};
+
+/**
+ * Metal gasto do visual alvo: poeira/areia (cor do planeta) acumulada ao longo das juntas e numa
+ * faixa junto ao meio-fio, manchas irregulares e grão fino; o fundo das juntas continua escuro.
+ * Pinta direto no canvas de cor e devolve a quantidade de poeira por pixel (vira rugosidade).
+ */
+function grime(color: HTMLCanvasElement, height: HTMLCanvasElement, theme: Theme, amount: number): Float32Array {
+  const S = color.width;
+  const n = height.width;
+  const hh = heightFrom(height);
+  const groove = new Float32Array(n * n);
+  for (let i = 0; i < hh.length; i++) groove[i] = smooth(0.42, 0.22, hh[i]);
+  const near = blur(groove, n, 3);
+  const patch = fbm(n, 6, 4, 57, 0.55);
+  const rng = createRng(29);
+  const dc = new THREE.Color(theme.dust);
+  const dr = dc.r * 255;
+  const dg = dc.g * 255;
+  const db = dc.b * 255;
+  const ctx = color.getContext('2d')!;
+  const img = ctx.getImageData(0, 0, S, S);
+  const d = img.data;
+  const out = new Float32Array(S * S);
+  const scale = n / S;
+  for (let y = 0; y < S; y++) {
+    const sy = Math.min(n - 1, Math.floor(y * scale));
+    for (let x = 0; x < S; x++) {
+      const si = sy * n + Math.min(n - 1, Math.floor(x * scale));
+      const side = Math.abs(x / (S - 1) - 0.5) * 2;
+      const grain = rng();
+      // manchas + juntas + faixa de areia junto às bordas (onde os pneus não varrem)
+      let a = (patch[si] - 0.42) * 2.1 + near[si] * 1.7 + smooth(0.7, 0.97, side) * 1.1 + 0.28;
+      a = Math.min(1, Math.max(0, a)) * amount;
+      a *= 0.45 + 0.55 * grain;
+      const i = (y * S + x) * 4;
+      const k = 0.7 + grain * 0.55;
+      const m = a * 0.9;
+      let r = d[i] + (dr * k - d[i]) * m;
+      let g = d[i + 1] + (dg * k - d[i + 1]) * m;
+      let b = d[i + 2] + (db * k - d[i + 2]) * m;
+      // fundo da junta: fenda escura (a poeira fica em volta)
+      const dark = 1 - groove[si] * 0.55 * (1 - patch[si] * 0.4);
+      r *= dark;
+      g *= dark;
+      b *= dark;
+      d[i] = r;
+      d[i + 1] = g;
+      d[i + 2] = b;
+      out[y * S + x] = a;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  return out;
+}
+
+function grayCanvasTexture(values: Float32Array, size: number, map: (v: number) => number): THREE.CanvasTexture {
+  const c = canvas(size, size, (ctx) => {
+    const img = ctx.createImageData(size, size);
+    for (let i = 0; i < values.length; i++) {
+      const g = Math.max(0, Math.min(255, map(values[i]) * 255));
+      img.data[i * 4] = img.data[i * 4 + 1] = img.data[i * 4 + 2] = g;
+      img.data[i * 4 + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+  });
+  return tex(c, false);
+}
+
+/**
+ * Resolução do piso: 2x na qualidade alta (piso nítido de perto na perseguição e no cockpit);
+ * celular e placas simples ficam com a textura normal (menos memória e geração mais rápida).
+ */
+let roadDetail = 1;
+export function setRoadDetail(hi: boolean): void {
+  roadDetail = hi ? 2 : 1;
+}
+
+export function roadDetailHigh(): boolean {
+  return roadDetail > 1;
+}
 
 export interface RoadMaps {
   map: THREE.Texture;
@@ -59,6 +168,8 @@ export interface RoadMaps {
   normal: THREE.Texture;
   roughness: number;
   metalness: number;
+  /** rugosidade por pixel: poeira fosca, metal limpo mais brilhante (multiplica `roughness` = 1) */
+  roughnessMap: THREE.Texture;
 }
 
 /**
@@ -66,7 +177,10 @@ export interface RoadMaps {
  * Desenha também um mapa de alturas (canais ficam fundos) que vira normal map.
  */
 export function roadMaps(theme: Theme): RoadMaps {
+  // desenho em coordenadas lógicas de 512 px; os canvas reais têm `roadDetail` vezes isso
   const S = 512;
+  const K = roadDetail;
+  const CELLS = theme.cells;
   const cell = S / CELLS;
   const rng = createRng(7);
   const noise = fbm(128, 8, 4, 33);
@@ -82,7 +196,8 @@ export function roadMaps(theme: Theme): RoadMaps {
   const edge = S * 0.018;
 
   // o que é desenhado em cada padrão: cor, linhas (emissivo) e alturas
-  const color = canvas(S, S, (ctx) => {
+  const color = canvas(S * K, S * K, (ctx) => {
+    ctx.scale(K, K);
     ctx.fillStyle = theme.road;
     ctx.fillRect(0, 0, S, S);
     // variação suave da cor (manchas)
@@ -96,15 +211,16 @@ export function roadMaps(theme: Theme): RoadMaps {
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, S, S);
   });
-  const height = canvas(S / 2, S / 2, (ctx) => {
+  const HS = (S / 2) * K;
+  const height = canvas(HS, HS, (ctx) => {
     ctx.fillStyle = '#b0b0b0';
-    ctx.fillRect(0, 0, S / 2, S / 2);
+    ctx.fillRect(0, 0, HS, HS);
   });
   const c = color.getContext('2d')!;
   const g = glow.getContext('2d')!;
   const h = height.getContext('2d')!;
   h.save();
-  h.scale(0.5, 0.5);
+  h.scale(0.5 * K, 0.5 * K);
 
   if (theme.roadPattern === 'grid') {
     // placas metálicas (alvo visual do usuário): cada placa quadrada é dividida em dois triângulos
@@ -306,31 +422,12 @@ export function roadMaps(theme: Theme): RoadMaps {
       h.fillRect(S * x - 10, 0, 20, S);
     }
   }
-  if (theme.roadPattern !== 'dirt' && theme.roadPattern !== 'ice') {
-    // poeira assentada: manchas cor de areia (mais nas bordas, onde os carros não varrem) e grão fino
-    const dustNoise = fbm(128, 16, 4, 71);
-    const dustCanvas = canvas(128, 128, (ctx) => {
-      const img = ctx.createImageData(128, 128);
-      for (let y = 0; y < 128; y++)
-        for (let x = 0; x < 128; x++) {
-          const i = y * 128 + x;
-          const side = Math.abs(x / 127 - 0.5) * 2; // 0 no meio, 1 nas bordas
-          const a = Math.max(0, dustNoise[i] - 0.52 + side * side * 0.35) * 1.6;
-          img.data[i * 4] = 196;
-          img.data[i * 4 + 1] = 170;
-          img.data[i * 4 + 2] = 128;
-          img.data[i * 4 + 3] = Math.min(255, a * 255);
-        }
-      ctx.putImageData(img, 0, 0);
-    });
-    c.globalAlpha = 0.34;
-    c.drawImage(dustCanvas, 0, 0, S, S);
-    c.globalAlpha = 1;
-    for (let i = 0; i < 5000; i++) {
-      c.fillStyle = `rgba(${200 + rng() * 40},${176 + rng() * 30},${130 + rng() * 30},${0.04 + rng() * 0.08})`;
-      c.fillRect(rng() * S, rng() * S, 1 + rng() * 1.5, 1 + rng() * 1.5);
-    }
-  }
+  // poeira/areia acumulada nas juntas e perto do meio-fio, grão fino e metal gasto (visual alvo)
+  h.restore();
+  const dustAmt = theme.roadPattern === 'dirt' ? 0.35 : theme.roadPattern === 'ice' ? 0.75 : theme.roadPattern === 'hex' ? 0.8 : 1;
+  const rough = grime(color, height, theme, dustAmt);
+  h.save();
+  h.scale(0.5 * K, 0.5 * K);
   // borda fina contornando a pista (como a linha vermelha de Chem VI)
   c.fillStyle = theme.roadEdge;
   c.fillRect(0, 0, edge, S);
@@ -348,12 +445,79 @@ export function roadMaps(theme: Theme): RoadMaps {
 
   const hh = heightFrom(height);
   // grão fino por cima do relevo
-  const fine = fbm(S / 2, 64, 2, 9);
+  const fine = fbm(HS, 64 * K, 2, 9);
   for (let i = 0; i < hh.length; i++) hh[i] = hh[i] * 0.85 + fine[i] * 0.15;
-  const normal = normalMap(hh, S / 2, theme.roadPattern === 'dirt' ? 2.2 : 3.2);
+  const normal = normalMap(hh, HS, (theme.roadPattern === 'dirt' ? 2.2 : 3.2) * K);
+  normal.generateMipmaps = true;
+  normal.minFilter = THREE.LinearMipmapLinearFilter;
+  normal.anisotropy = maxAnisotropy;
   const roughness = theme.roadPattern === 'ice' ? 0.22 : theme.roadPattern === 'dirt' ? 0.95 : 0.55;
-  const metalness = theme.roadPattern === 'dirt' ? 0 : theme.roadPattern === 'scales' ? 0.35 : 0.25;
-  return { map: tex(color), emissive: theme.roadGlow > 0 ? tex(glow) : null, normal, roughness, metalness };
+  const metalness = theme.roadPattern === 'dirt' ? 0 : theme.roadPattern === 'scales' ? 0.4 : 0.3;
+  const roughMap = grayCanvasTexture(rough, S * K, (d) => (theme.roadPattern === 'dirt' ? 0.95 : theme.roadPattern === 'ice' ? 0.2 + d * 0.7 : theme.roadPattern === 'scales' ? 0.58 + d * 0.4 : 0.45 + d * 0.55));
+  return { map: tex(color), emissive: theme.roadGlow > 0 ? tex(glow) : null, normal, roughness, metalness, roughnessMap: roughMap };
+}
+
+let dirtTex: THREE.DataTexture | null = null;
+/** Três ruídos independentes de baixa frequência (R, G, B), repetíveis, para a sujeira do piso. */
+function dirtNoise(): THREE.DataTexture {
+  if (dirtTex) return dirtTex;
+  const n = 128;
+  const a = fbm(n, 3, 4, 301, 0.55);
+  const b = fbm(n, 5, 4, 419, 0.55);
+  const c = fbm(n, 4, 3, 523, 0.6);
+  const data = new Uint8Array(n * n * 4);
+  for (let i = 0; i < n * n; i++) {
+    data[i * 4] = a[i] * 255;
+    data[i * 4 + 1] = b[i] * 255;
+    data[i * 4 + 2] = c[i] * 255;
+    data[i * 4 + 3] = 255;
+  }
+  dirtTex = new THREE.DataTexture(data, n, n, THREE.RGBAFormat);
+  dirtTex.wrapS = dirtTex.wrapT = THREE.RepeatWrapping;
+  dirtTex.magFilter = THREE.LinearFilter;
+  dirtTex.minFilter = THREE.LinearMipmapLinearFilter;
+  dirtTex.generateMipmaps = true;
+  dirtTex.needsUpdate = true;
+  return dirtTex;
+}
+
+/**
+ * Poeira e graxa em escala de mundo sobre as placas (visual alvo): manchas grandes de areia do
+ * planeta, placas mais escuras/limpas e borrões de graxa lisos. Multiplica cor e rugosidade, então
+ * a repetição da textura do piso some. Custa uma leitura de textura por pixel (serve no celular).
+ */
+export function addRoadDirt(mat: THREE.MeshStandardMaterial, theme: Theme): void {
+  const amount = theme.roadPattern === 'dirt' ? 0.35 : theme.roadPattern === 'ice' ? 0.55 : 0.9;
+  const dust = new THREE.Color(theme.dust);
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.dirtMap = { value: dirtNoise() };
+    sh.uniforms.dirtColor = { value: dust };
+    sh.uniforms.dirtAmount = { value: amount };
+    sh.vertexShader = 'varying vec2 vDirtPos;\n' + sh.vertexShader.replace(
+      '#include <begin_vertex>',
+      '#include <begin_vertex>\n  vDirtPos = (modelMatrix * vec4(transformed, 1.0)).xz;',
+    );
+    sh.fragmentShader = 'uniform sampler2D dirtMap; uniform vec3 dirtColor; uniform float dirtAmount; varying vec2 vDirtPos;\n' + sh.fragmentShader
+      .replace(
+        '#include <map_fragment>',
+        `#include <map_fragment>
+  vec3 dn = texture2D(dirtMap, vDirtPos * 0.019).rgb;
+  float dFine = texture2D(dirtMap, vDirtPos * 0.071 + vec2(0.37, 0.61)).g;
+  // areia: manchas grandes (~50 m) recortadas por detalhe médio (~14 m)
+  float dirt = smoothstep(0.38, 0.72, dn.r * 0.65 + dFine * 0.5 - 0.08) * dirtAmount;
+  // graxa: borrões escuros e lisos onde não há areia
+  float grease = smoothstep(0.58, 0.8, dn.b) * (1.0 - dirt) * dirtAmount;
+  diffuseColor.rgb *= mix(0.78, 1.1, dn.g);
+  diffuseColor.rgb = mix(diffuseColor.rgb, dirtColor * (0.62 + 0.5 * dFine), dirt * 0.85);
+  diffuseColor.rgb *= 1.0 - grease * 0.45;`,
+      )
+      .replace(
+        '#include <roughnessmap_fragment>',
+        `#include <roughnessmap_fragment>
+  roughnessFactor = clamp(roughnessFactor * (1.0 + dirt * 0.45) * (1.0 - grease * 0.4), 0.05, 1.0);`,
+      );
+  };
+  mat.customProgramCacheKey = () => 'road-dirt';
 }
 
 /* ------------------------------------------------------------------ */
@@ -510,42 +674,105 @@ export function wallMaps(theme: Theme): WallMaps {
       strength = 4;
       break;
     }
-    case 'camo': {
-      // painéis blindados com camuflagem em hexágonos (New Mojave)
-      const cols = ['#2a4214', '#44621e', '#1a2a0c', '#5a3a14'];
-      for (let i = 0; i < 90; i++) {
-        c.fillStyle = cols[Math.floor(rng() * cols.length)];
+    case 'riveted': {
+      // New Mojave: painéis de chapa cor de areia, gastos pelo sol, com escorridos de ferrugem,
+      // divisões rebaixadas e fileiras de rebites (combina com o deserto; luzes amarelas na mureta)
+      const noise = fbm(S, 8, 4, 71, 0.55);
+      const img = c.getImageData(0, 0, S, S);
+      const sand = new THREE.Color(base);
+      for (let y = 0; y < S; y++)
+        for (let x = 0; x < S; x++) {
+          const i = (y * S + x) * 4;
+          const v = noise[y * S + x];
+          // ferrugem: manchas + escorrido vertical (mais forte embaixo de cada painel)
+          const py = (y % (S / 2)) / (S / 2);
+          const rust = Math.max(0, Math.min(1, (v - 0.5) * 3 + py * 0.5 - 0.15));
+          const k = 0.8 + v * 0.35;
+          img.data[i] = Math.min(255, (sand.r * 255 * k) * (1 - rust) + 120 * rust * k);
+          img.data[i + 1] = Math.min(255, (sand.g * 255 * k) * (1 - rust) + 58 * rust * k);
+          img.data[i + 2] = Math.min(255, (sand.b * 255 * k) * (1 - rust) + 26 * rust * k);
+          img.data[i + 3] = 255;
+        }
+      c.putImageData(img, 0, 0);
+      // escorridos finos de ferrugem descendo dos rebites
+      for (let i = 0; i < 40; i++) {
         const x = rng() * S;
         const y = rng() * S;
-        const r = 10 + rng() * 22;
-        c.beginPath();
-        for (let k = 0; k < 6; k++) {
-          const a = (k * Math.PI) / 3;
-          c.lineTo(x + Math.cos(a) * r, y + Math.sin(a) * r * 1.3);
-        }
-        c.fill();
+        const gr = c.createLinearGradient(0, y, 0, y + 30 + rng() * 40);
+        gr.addColorStop(0, 'rgba(110,48,14,0.55)');
+        gr.addColorStop(1, 'rgba(110,48,14,0)');
+        c.fillStyle = gr;
+        c.fillRect(x, y, 2 + rng() * 3, 70);
       }
-      // divisões dos painéis e faixas amarelas
-      c.strokeStyle = 'rgba(0,0,0,0.7)';
-      h.strokeStyle = '#202020';
+      // divisões dos painéis: fenda escura com borda clara (chanfro)
       for (const ctx of [c, h]) {
+        ctx.strokeStyle = ctx === c ? 'rgba(20,10,4,0.85)' : '#202020';
         ctx.lineWidth = 4;
         ctx.beginPath();
         for (let x = 0; x <= S; x += S / 4) {
           ctx.moveTo(x, 0);
           ctx.lineTo(x, S);
         }
-        ctx.moveTo(0, S / 2);
-        ctx.lineTo(S, S / 2);
+        for (const y of [0, S / 2, S]) {
+          ctx.moveTo(0, y);
+          ctx.lineTo(S, y);
+        }
         ctx.stroke();
       }
-      c.fillStyle = 'rgba(210,190,60,0.5)';
-      for (let x = S / 8; x < S; x += S / 4) {
-        c.fillRect(x - 1, 8, 2, S / 2 - 16);
+      c.strokeStyle = 'rgba(255,235,200,0.25)';
+      c.lineWidth = 1.5;
+      c.beginPath();
+      for (let x = 3; x <= S; x += S / 4) {
+        c.moveTo(x, 0);
+        c.lineTo(x, S);
       }
-      speckle(c, S, S, 3000, 0.25, 6);
-      roughness = 0.7;
-      metalness = 0.35;
+      c.stroke();
+      // rebites: fileiras junto às divisões
+      for (let py = 0; py < S; py += S / 2)
+        for (let px = 0; px < S; px += S / 4)
+          for (const [rx, ry] of [
+            ...[0.12, 0.37, 0.63, 0.88].map((t) => [8, t * (S / 2)]),
+            ...[0.12, 0.37, 0.63, 0.88].map((t) => [S / 4 - 8, t * (S / 2)]),
+            ...[0.25, 0.5, 0.75].map((t) => [t * (S / 4), 8]),
+            ...[0.25, 0.5, 0.75].map((t) => [t * (S / 4), S / 2 - 8]),
+          ]) {
+            const x = px + rx;
+            const y = py + ry;
+            c.fillStyle = 'rgba(0,0,0,0.45)';
+            c.beginPath();
+            c.arc(x + 1, y + 1.2, 3, 0, Math.PI * 2);
+            c.fill();
+            c.fillStyle = '#c9ae86';
+            c.beginPath();
+            c.arc(x, y, 2.6, 0, Math.PI * 2);
+            c.fill();
+            c.fillStyle = 'rgba(255,245,220,0.7)';
+            c.beginPath();
+            c.arc(x - 0.8, y - 0.8, 1, 0, Math.PI * 2);
+            c.fill();
+            const hg = h.createRadialGradient(x, y, 0, x, y, 3.2);
+            hg.addColorStop(0, '#ffffff');
+            hg.addColorStop(1, '#808080');
+            h.fillStyle = hg;
+            h.beginPath();
+            h.arc(x, y, 3.2, 0, Math.PI * 2);
+            h.fill();
+          }
+      // faixa de perigo amarela e preta no topo de cada painel (o amarelo do original)
+      for (let x = 0; x < S; x += 16) {
+        c.fillStyle = (x / 16) % 2 ? 'rgba(20,16,10,0.85)' : accent;
+        c.beginPath();
+        c.moveTo(x, 12);
+        c.lineTo(x + 16, 12);
+        c.lineTo(x + 8, 22);
+        c.lineTo(x - 8, 22);
+        c.closePath();
+        c.fill();
+      }
+      speckle(c, S, S, 3000, 0.22, 6);
+      roughness = 0.62;
+      metalness = 0.45;
+      strength = 4;
       break;
     }
     case 'icerock': {

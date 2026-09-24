@@ -1,12 +1,13 @@
 """
 Pós-tratamento das falas do locutor (roda depois de gerar.py; só precisa de ffmpeg, numpy e scipy).
 
-  1. Rejeita takes sem emoção (F0 mediano < 150 Hz ou faixa de entonação estreita) quando a frase
-     tem outras versões: tira do manifest e apaga o mp3. A lista vem da medição de F0 abaixo e da
-     avaliação de som (`REJEITAR`).
+  1. Rejeita takes reprovados na avaliação de ouvido (`REJEITAR`) quando a frase tem outras versões:
+     tira do manifest e apaga o mp3. (gerar.py escolher já prefere takes com F0 mediano entre 130 e
+     220 Hz e faixa de entonação >= 12 semitons.)
   2. Apara silêncio no começo/fim e encurta pausas internas longas (sem cortar palavras).
-  3. Nomes com voz grave demais (F0 < 150 Hz) sobem de tom (rubberband, preservando formantes):
-     o nome não tem outra versão para trocar.
+  3. Nada sobe de tom (afinar para cima deixava a voz estridente). Só o contrário: take que ficou
+     agudo demais (F0 mediano > 225 Hz) desce até 4 semitons (rubberband, formantes preservados),
+     para toda a narração ficar na mesma voz grave de arena.
   4. Exclamações longas ficam mais rápidas (sem mudar o tom), até 1,25x: exclamações ≤ 1,5 s,
      largada ≤ 2,5 s, demais frases ≤ 2,2 s, quando possível.
   5. Normaliza o loudness de todas as falas para o mesmo nível (LOUD_ALVO LUFS) e limita o pico.
@@ -23,7 +24,9 @@ DIR = os.path.join(HERE, '..', '..', 'public', 'audio', 'locutor')
 FFMPEG = os.environ.get('FFMPEG', 'ffmpeg')
 LOUD_ALVO = -18.0
 PICO = 0.79  # ~ -2 dBFS
-REJEITAR = {'hotFury_0.mp3', 'fadesLast_0.mp3', 'start_3.mp3', 'wipedOut_2.mp3', 'jamsFirst_0.mp3'}
+# gerar.py escolher já descarta takes sem emoção (F0); aqui só os que a avaliação de ouvido reprovar
+REJEITAR: set = set()
+AGUDO_MAX, AGUDO_ALVO = 225.0, 205.0
 EXCLAMACAO = {'wow', 'ouch', 'holyToledo', 'lastLap'}
 SR = 16000
 
@@ -42,12 +45,31 @@ def duration(path):
 
 
 def loudness(path):
-    r = run([FFMPEG, '-hide_banner', '-i', path, '-af', 'ebur128', '-f', 'null', '-']).stderr
+    # a medida integrada precisa de >= 400 ms: nomes curtos ("Kat!") são medidos repetidos 3x
+    r = run([FFMPEG, '-hide_banner', '-i', path, '-af', 'aloop=loop=2:size=2000000,ebur128', '-f', 'null', '-']).stderr
     v = re.findall(r'I:\s+(-?[\d.]+) LUFS', r)
     return float(v[-1]) if v else -70.0
 
 
 def f0(path):
+    """
+    F0 mediano (Hz) e faixa de entonação (semitons, percentis 10–90). Usa o Praat (parselmouth,
+    GPL; `pip install praat-parselmouth`), que acerta a oitava em voz gritada; sem ele, cai numa
+    autocorrelação simples.
+    """
+    try:
+        import parselmouth
+    except ImportError:
+        return f0_autocorr(path)
+    snd = parselmouth.Sound(pcm(path), sampling_frequency=SR)
+    a = snd.to_pitch_ac(time_step=0.01, pitch_floor=70, pitch_ceiling=600).selected_array['frequency']
+    a = a[a > 0]
+    if len(a) < 5:
+        return 0.0, 0.0
+    return float(np.median(a)), float(12 * np.log2(np.percentile(a, 90) / np.percentile(a, 10)))
+
+
+def f0_autocorr(path):
     """F0 mediano (Hz) e faixa de entonação (semitons, percentis 10–90) por autocorrelação."""
     x = pcm(path)
     y = sosfilt(butter(4, 900, 'low', fs=SR, output='sos'), x)
@@ -106,7 +128,8 @@ def main():
                 except FileNotFoundError:
                     pass
             m['lines'][k] = keep
-    used = sorted({f for lst in m['lines'].values() for f in lst})
+    used = sorted({f for lst in m['lines'].values() for f in lst} |
+                  {f for by in m.get('combos', {}).values() for lst in by.values() for f in lst})
 
     tmp = tempfile.mkdtemp()
     for f in used:
@@ -120,12 +143,12 @@ def main():
         a = os.path.join(tmp, 'a.mp3')
         ffmpeg_filter(p, a, trim)
         chain = []
-        # 3. nome grave demais sobe de tom
+        # 3. take agudo demais desce de tom (nunca sobe)
         med, _ = f0(a)
-        if name and 0 < med < 150:
-            semis = 3 if med < 135 else 1.5
-            chain.append(f'rubberband=pitch={2 ** (semis / 12):.4f}:formant=preserved')
-            print(f'{f}: F0 {med:.0f} Hz, +{semis} semitons')
+        if med > AGUDO_MAX:
+            semis = min(4.0, 12 * np.log2(med / AGUDO_ALVO))
+            chain.append(f'rubberband=pitch={2 ** (-semis / 12):.4f}:formant=preserved')
+            print(f'{f}: F0 {med:.0f} Hz, -{semis:.1f} semitons')
         # 4. frases longas mais rápidas (tom igual)
         d = duration(a)
         alvo = 1.5 if k in EXCLAMACAO else 2.5 if k == 'start' else 2.2
@@ -140,7 +163,7 @@ def main():
         gain = LOUD_ALVO - loudness(b)
         ffmpeg_filter(b, p, f'volume={gain:.2f}dB,alimiter=limit={PICO}:attack=1:release=40:level=disabled')
     m['tratado'] = True
-    m['tratamento'] = f'tratar.py: {LOUD_ALVO} LUFS, silêncio aparado, nomes graves afinados, frases longas aceleradas'
+    m['tratamento'] = f'tratar.py: {LOUD_ALVO} LUFS, silêncio aparado, takes agudos baixados (> 225 Hz), frases longas aceleradas'
     json.dump(m, open(mpath, 'w', encoding='utf8'), indent=2, ensure_ascii=False)
     print('ok:', len(used), 'falas')
 

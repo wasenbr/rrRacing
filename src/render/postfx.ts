@@ -13,7 +13,9 @@ export class PostFx {
   private renderPass: RenderPass;
 
   constructor(renderer: THREE.WebGLRenderer, scene: THREE.Scene) {
-    this.composer = new EffectComposer(renderer);
+    // alvo com MSAA (WebGL2): sem ele o bloom desenhava sem antisserrilhado e as bordas ficavam em escada
+    const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: renderer.capabilities.isWebGL2 ? 4 : 0 });
+    this.composer = new EffectComposer(renderer, target);
     this.renderPass = new RenderPass(scene, new THREE.PerspectiveCamera());
     this.composer.addPass(this.renderPass);
     this.composer.addPass(new UnrealBloomPass(new THREE.Vector2(256, 256), 0.55, 0.45, 2.4));

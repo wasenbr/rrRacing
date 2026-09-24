@@ -173,44 +173,79 @@ function firepowerRaw(s: VehicleSpec): number {
   return front + rear;
 }
 
-/** Valor bruto de cada atributo. Curvas: o giro pesa mais que a aderência (a esteira gruda, mas vira devagar). */
+/** Parte do empurrão do turbo que conta no arranque (2 cargas de 1,3 s por volta, gastas nas saídas de curva). */
+const TURBO_SHARE = 0.15;
+
+/**
+ * Valor bruto de cada atributo. Aceleração: motor + parte do turbo (quem tem turbo sai mais forte das
+ * curvas). Curvas: giro × aderência^0,15 (o giro pesa mais: a esteira gruda, mas vira devagar).
+ */
 function rawAttributes(s: VehicleSpec): CarAttributes {
   return {
-    accel: s.accel,
+    accel: s.accel + TURBO_SHARE * s.nitroAccel,
     speed: s.maxSpeed,
-    handling: s.steerRate * s.steerRate * Math.sqrt(s.grip),
+    handling: s.steerRate * Math.pow(s.grip, 0.15),
     armor: s.armor,
     firepower: firepowerRaw(s),
   };
 }
 
-/** Barra do pior carro de fábrica em cada atributo e do melhor (acima disso só com melhorias). */
-const BAR_LO = 0.2;
-const BAR_HI = 0.7;
-let factory: Record<keyof CarAttributes, [number, number]> | null = null;
-
 /**
- * Faixa de cada atributo entre os carros de fábrica: as barras vão de 0,2 (o pior deles) a 0,7
- * (o melhor), e as melhorias enchem o resto. Assim cada carro mostra forças e fraquezas claras em
- * relação aos outros, e a garagem ainda mostra o ganho das peças.
+ * Escala ABSOLUTA de cada atributo (piso → barra vazia, teto → barra cheia), igual para todos os carros.
+ * Antes a barra ia do pior ao melhor carro de fábrica, e 3 % de diferença virava meia barra (o Havac
+ * saía "forte" em velocidade com a mesma final do Marauder). Agora a barra é proporcional ao valor real:
+ * carros iguais têm barras iguais, e o que muda pouco muda pouco. Os tetos ficam acima dos carros de
+ * fábrica (~0,4–0,6) para que as melhorias e o piloto ainda encham a barra.
+ * - velocidade: 35–51 m/s (≈ 126–184 km/h)
+ * - aceleração: 20–56 m/s² (0–100 km/h de ≈ 1,4 s a ≈ 0,5 s)
+ * - curvas: giro × aderência^0,15 de 2,2 a 7
+ * - blindagem: 50–140 pontos
+ * - poder de fogo: 30–170 de dano esperado por volta
  */
-function factoryRanges(): Record<keyof CarAttributes, [number, number]> {
-  if (factory) return factory;
-  const raws = Object.values(VEHICLES).map(rawAttributes);
-  const keys = Object.keys(ATTRIBUTE_LABEL) as (keyof CarAttributes)[];
-  factory = Object.fromEntries(keys.map((k) => [k, [Math.min(...raws.map((r) => r[k])), Math.max(...raws.map((r) => r[k]))]])) as Record<keyof CarAttributes, [number, number]>;
-  return factory;
-}
+const ATTRIBUTE_SCALE: Record<keyof CarAttributes, [number, number]> = {
+  speed: [35, 51],
+  accel: [20, 56],
+  handling: [2.2, 7],
+  armor: [50, 140],
+  firepower: [30, 170],
+};
 
 export function carAttributes(spec: VehicleSpec): CarAttributes {
   const raw = rawAttributes(spec);
-  const ranges = factoryRanges();
   const out = {} as CarAttributes;
   for (const k of Object.keys(raw) as (keyof CarAttributes)[]) {
-    const [lo, hi] = ranges[k];
-    const t = hi > lo ? (raw[k] - lo) / (hi - lo) : 0.5;
-    out[k] = Math.max(0.05, Math.min(1, BAR_LO + (BAR_HI - BAR_LO) * t));
+    const [lo, hi] = ATTRIBUTE_SCALE[k];
+    out[k] = Math.max(0.05, Math.min(1, (raw[k] - lo) / (hi - lo)));
   }
+  return out;
+}
+
+/**
+ * Quanto um atributo precisa passar da média dos outros carros de fábrica para ganhar "forte"/"fraco"
+ * (relativo). Diferenças menores que isso existem, mas não são marca do carro.
+ */
+const STANDOUT: Record<keyof CarAttributes, number> = { speed: 0.05, accel: 0.08, handling: 0.1, armor: 0.07, firepower: 0.2 };
+
+export type AttributeTag = 'good' | 'bad';
+
+/**
+ * Marca "forte"/"fraco" só quando o carro se destaca de fato: compara o valor com a média dos outros
+ * carros de fábrica. No máximo um "forte" (o maior destaque) e um "fraco" (a maior falta).
+ */
+export function attributeTags(spec: VehicleSpec): Partial<Record<keyof CarAttributes, AttributeTag>> {
+  const raw = rawAttributes(spec);
+  const others = Object.values(VEHICLES).filter((v) => v.id !== spec.id).map(rawAttributes);
+  let good: [keyof CarAttributes, number] | null = null;
+  let bad: [keyof CarAttributes, number] | null = null;
+  for (const k of Object.keys(raw) as (keyof CarAttributes)[]) {
+    const mean = others.reduce((a, r) => a + r[k], 0) / Math.max(1, others.length);
+    const d = mean > 0 ? (raw[k] - mean) / mean / STANDOUT[k] : 0;
+    if (d >= 1 && (!good || d > good[1])) good = [k, d];
+    if (d <= -1 && (!bad || d < bad[1])) bad = [k, d];
+  }
+  const out: Partial<Record<keyof CarAttributes, AttributeTag>> = {};
+  if (good) out[good[0]] = 'good';
+  if (bad) out[bad[0]] = 'bad';
   return out;
 }
 

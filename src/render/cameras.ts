@@ -24,14 +24,20 @@ export interface CarPose {
 export const ISO_ELEVATION = (32 * Math.PI) / 180;
 const ISO_DIR = new THREE.Vector3(-1, Math.SQRT2 * Math.tan(ISO_ELEVATION), -1).normalize();
 const ISO_DISTANCE = 120;
-const COCKPIT_OFFSET = new THREE.Vector3(0, 0.55, 0.35);
-/** inclinação do cockpit para cima: horizonte perto de 40% da altura da tela, rivais à vista */
-const COCKPIT_PITCH = 0.09;
+/**
+ * Olhos um pouco acima e atrás dos do piloto: o capô e os para-lamas (cockpitRig) ocupam a faixa
+ * de baixo da tela (~1/4) sem tapar a pista.
+ */
+const COCKPIT_OFFSET = new THREE.Vector3(0, 0.38, -0.05);
+/** leve inclinação para baixo: horizonte perto de 40–45% da altura (a partir do topo) */
+const COCKPIT_PITCH = -0.06;
 const BACK = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
 
 /** Perseguição: distância horizontal e altura mínimas até o carro (m). */
-const CHASE_MIN_DIST = 6;
-const CHASE_MIN_HEIGHT = 2.6;
+const CHASE_MIN_DIST = 5.8;
+const CHASE_MIN_HEIGHT = 3.8;
+/** Perseguição: atraso máximo (distância horizontal) em alta velocidade — o carro não "foge" da tela. */
+const CHASE_MAX_DIST = 8.2;
 
 export class CameraRig {
   mode: CameraMode = 'iso';
@@ -39,6 +45,8 @@ export class CameraRig {
   readonly persp: THREE.PerspectiveCamera;
   readonly mirror: THREE.PerspectiveCamera;
   private isoTarget = new THREE.Vector3();
+  /** antecipação suavizada da vista aérea */
+  private isoLead = new THREE.Vector3();
   private chasePos = new THREE.Vector3();
   private first = true;
   private aspect = 1;
@@ -50,7 +58,7 @@ export class CameraRig {
   constructor() {
     this.iso = new THREE.OrthographicCamera(-1, 1, 1, -1, 1, 400);
     this.persp = new THREE.PerspectiveCamera(70, 1, 0.05, 600);
-    this.mirror = new THREE.PerspectiveCamera(55, 3, 0.5, 300);
+    this.mirror = new THREE.PerspectiveCamera(55, 3, 2.5, 300);
   }
 
   get active(): THREE.Camera {
@@ -90,16 +98,20 @@ export class CameraRig {
     if (!this.first && this.mode !== 'cockpit' && ref.distanceTo(car.position) > 40) this.first = true;
 
     if (this.mode === 'iso') {
-      // olha à frente do carro, na direção do movimento (mais pista à frente em alta velocidade)
+      // olha à frente do carro, na direção do movimento. A antecipação é suavizada à parte e devagar:
+      // derrapagem, batida ou rodada não jogam a câmera de um lado para o outro (item 40); o carro em
+      // si é seguido de perto, então ele fica parado na tela.
       const flat = car.velocity.clone().setY(0);
       const speed = flat.length();
-      const lead = flat.multiplyScalar(0.45);
-      lead.clampLength(0, 14);
-      const target = car.position.clone().add(lead);
-      this.isoTarget.lerp(target, this.first ? 1 : 1 - Math.exp(-dt * 8));
-      // abre o zoom com a velocidade (até +28%) — o cenário passa mais rápido na tela
-      const wantZoom = 1 + Math.min(1, Math.max(0, (speed - 12) / 24)) * 0.28;
-      this.zoom += (wantZoom - this.zoom) * (1 - Math.exp(-dt * 2));
+      const lead = flat.multiplyScalar(0.4);
+      lead.clampLength(0, 12);
+      if (this.first) this.isoLead.copy(lead);
+      else this.isoLead.lerp(lead, 1 - Math.exp(-dt * 1.5));
+      const target = car.position.clone().add(this.isoLead);
+      this.isoTarget.lerp(target, this.first ? 1 : 1 - Math.exp(-dt * 10));
+      // zoom abre pouco e devagar com a velocidade (até +12%), sem "respirar" a cada freada
+      const wantZoom = 1 + Math.min(1, Math.max(0, (speed - 15) / 25)) * 0.12;
+      this.zoom += (wantZoom - this.zoom) * (1 - Math.exp(-dt * 0.8));
       const halfH = ((this.aspect < 1 ? this.isoView * 1.5 : this.isoView) / 2) * this.zoom;
       if (Math.abs(this.iso.top - halfH) > 0.01) {
         this.iso.top = halfH;
@@ -108,7 +120,9 @@ export class CameraRig {
         this.iso.right = halfH * this.aspect;
         this.iso.updateProjectionMatrix();
       }
-      this.iso.position.copy(this.isoTarget).addScaledVector(ISO_DIR, ISO_DISTANCE).addScaledVector(shake, 0.5);
+      // tremor na vista aérea só em pancada forte, e fraco
+      const isoShake = car.shake > 0.25 ? 0.15 : 0;
+      this.iso.position.copy(this.isoTarget).addScaledVector(ISO_DIR, ISO_DISTANCE).addScaledVector(shake, isoShake);
       this.iso.lookAt(this.isoTarget);
     } else if (this.mode === 'cockpit') {
       const baseFov = this.aspect < 1 ? 85 : 70;
@@ -131,20 +145,27 @@ export class CameraRig {
         this.persp.fov += (fov - this.persp.fov) * Math.min(1, dt * 4);
         this.persp.updateProjectionMatrix();
       }
-      const desired = car.position.clone().addScaledVector(fwd, -7.5 - fast * 1.5).add(new THREE.Vector3(0, 3.4, 0));
+      // mais alta e um pouco mais atrás: o carro fica no terço de baixo e quem passa ao lado não
+      // "atravessa" o modelo na tela; mira longe, na pista à frente
+      const desired = car.position.clone().addScaledVector(fwd, -6.8 - fast * 0.7).add(new THREE.Vector3(0, 4.4, 0));
       if (this.first) this.chasePos.copy(desired);
       else {
         // segue mais rápido quando o carro gira bruscamente (rodada, pancada): não fica para trás
         const off = this.chasePos.clone().sub(car.position).setY(0);
         const behind = off.lengthSq() > 0.01 ? -off.normalize().dot(fwd) : 1;
-        const rate = behind < 0.5 ? 12 : 5;
+        // (transição contínua: o salto de 5 para 12 dava um tranco na câmera no meio da curva)
+        const rate = 5 + 7 * Math.min(1, Math.max(0, (0.7 - behind) / 0.4));
         this.chasePos.lerp(desired, 1 - Math.exp(-dt * rate));
       }
       // nunca encosta no carro: distância horizontal e altura mínimas (o carro inteiro cabe no
       // terço de baixo da tela, com barbatanas e armas à vista)
       const flatOff = this.chasePos.clone().sub(car.position).setY(0);
       const d = flatOff.length();
-      if (d < CHASE_MIN_DIST) {
+      if (d > CHASE_MAX_DIST) {
+        flatOff.setLength(CHASE_MAX_DIST);
+        this.chasePos.x = car.position.x + flatOff.x;
+        this.chasePos.z = car.position.z + flatOff.z;
+      } else if (d < CHASE_MIN_DIST) {
         if (d < 0.1) flatOff.copy(fwd).multiplyScalar(-1);
         flatOff.setLength(CHASE_MIN_DIST);
         this.chasePos.x = car.position.x + flatOff.x;
@@ -152,11 +173,12 @@ export class CameraRig {
       }
       if (this.chasePos.y < car.position.y + CHASE_MIN_HEIGHT) this.chasePos.y = car.position.y + CHASE_MIN_HEIGHT;
       this.persp.position.copy(this.chasePos).add(shake);
-      this.persp.lookAt(car.position.clone().addScaledVector(fwd, 9).add(new THREE.Vector3(0, 0.6, 0)));
+      this.persp.lookAt(car.position.clone().addScaledVector(fwd, 16).add(new THREE.Vector3(0, 2.6, 0)));
     }
 
-    // retrovisor (usado no cockpit): olha para trás, acima do aerofólio
-    const mirrorPos = new THREE.Vector3(0, 1.7, -2.6).applyQuaternion(car.quaternion).add(car.position);
+    // retrovisor (usado no cockpit): olha para trás de cima do teto (o exterior do próprio carro
+    // some no cockpit); o plano próximo de 2,5 m corta itens colados na câmera (a "moeda gigante")
+    const mirrorPos = new THREE.Vector3(0, 2.1, -0.6).applyQuaternion(car.quaternion).add(car.position);
     this.mirror.position.copy(mirrorPos);
     this.mirror.quaternion.copy(car.quaternion);
     this.mirror.rotateX(-0.08);

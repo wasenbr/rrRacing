@@ -145,7 +145,6 @@ export class Music {
         });
         this.decks.push({ el, fade, level, analyser });
       }
-      this.synth = new SynthRock(a.ctx, this.gain);
     }
     this.applyVolume();
     return true;
@@ -177,11 +176,13 @@ export class Music {
       }
       return;
     }
-    // trilha sintetizada: troca de música só quando muda de planeta
-    if (this.currentTheme !== theme || !this.synth!.playing) {
+    // trilha sintetizada: troca de música só quando muda de planeta. Criada só quando é usada: o
+    // grafo dela (com reverb de convolução) consumia CPU de áudio mesmo calado
+    this.synth ??= new SynthRock(audio()!.ctx, this.gain!);
+    if (this.currentTheme !== theme || !this.synth.playing) {
       this.currentTheme = theme;
       const song = SONGS[THEME_SONG[theme]];
-      this.synth!.play(song);
+      this.synth.play(song);
       this.onTrackChange?.(`${song.name} (trilha sintetizada)`);
     }
   }

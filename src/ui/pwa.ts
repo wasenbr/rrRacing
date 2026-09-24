@@ -31,26 +31,27 @@ export function initPwa(): void {
 }
 
 /**
- * Mantém o jogo do tamanho da área realmente visível. No iPhone o Safari não tem tela cheia
- * e, ao girar o aparelho, informa o tamanho novo com atraso e deixa a página rolada;
- * aqui a altura vira a variável CSS --app-h, a rolagem volta a zero e o jogo é redimensionado.
+ * Mantém o jogo do tamanho da área realmente visível. O tamanho vem do próprio elemento (CSS
+ * inset 0), observado por ResizeObserver: no iPhone a rotação e a barra do navegador terminam
+ * depois dos eventos e o visualViewport chega a informar alturas erradas (ou com zoom).
+ * Aqui também se bloqueia o zoom por pinça/duplo toque, que o iOS aceita mesmo com user-scalable=no.
  */
-export function initViewport(onChange: () => void): void {
+export function initViewport(root: HTMLElement, onChange: () => void): void {
   const apply = () => {
-    const h = window.visualViewport?.height ?? window.innerHeight;
-    document.documentElement.style.setProperty('--app-h', `${Math.round(h)}px`);
     window.scrollTo(0, 0);
     onChange();
   };
   const settle = () => {
     apply();
     // o iOS termina a animação de rotação/barra depois do evento
-    for (const ms of [100, 300, 700]) setTimeout(apply, ms);
+    for (const ms of [100, 300, 700, 1200]) setTimeout(apply, ms);
   };
   window.addEventListener('resize', apply);
   window.addEventListener('orientationchange', settle);
   window.visualViewport?.addEventListener('resize', apply);
   window.visualViewport?.addEventListener('scroll', () => window.scrollTo(0, 0));
+  if ('ResizeObserver' in window) new ResizeObserver(apply).observe(root);
+  for (const ev of ['gesturestart', 'gesturechange', 'dblclick']) document.addEventListener(ev, (e) => e.preventDefault(), { passive: false });
   apply();
 }
 

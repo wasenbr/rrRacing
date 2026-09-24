@@ -44,10 +44,14 @@ function voice(a: AudioOut, vol: number, pan: number, near = 1): GainNode {
   return g;
 }
 
-/** Abaixa música e motor por um instante quando o efeito está perto (o impacto salta na mixagem). */
+/**
+ * Abaixa música e motor por um instante quando o efeito está perto (o impacto salta na mixagem).
+ * Os efeitos grandes (explosão, míssil) também ganham um realce transitório de +1,5–3 dB.
+ */
 function punch(vol: number, amount: number, recover = 0.4): void {
   if (vol < 0.25) return;
-  duck(amount * Math.min(1, vol), recover);
+  const v = Math.min(1, vol);
+  duck(amount * v, recover, amount >= 0.45 ? 3 * v : amount >= 0.3 ? 1.5 * v : 0);
 }
 
 /** Envelope percussivo (ataque exponencial curto, queda exponencial). */
@@ -100,12 +104,17 @@ function metalRing(ctx: BaseAudioContext, out: AudioNode, base: number, peak: nu
 }
 
 /** Saturação leve para "sujar" camadas sintéticas (soa menos videogame de 8 bits). */
+const dirtCurves = new Map<number, Float32Array<ArrayBuffer>>();
 function dirt(ctx: BaseAudioContext, out: AudioNode, amount = 2.5): WaveShaperNode {
   const w = ctx.createWaveShaper();
-  const c = new Float32Array(512);
-  for (let i = 0; i < 512; i++) {
-    const x = (i / 511) * 2 - 1;
-    c[i] = Math.tanh(x * amount) / Math.tanh(amount);
+  let c = dirtCurves.get(amount);
+  if (!c) {
+    c = new Float32Array(512);
+    for (let i = 0; i < 512; i++) {
+      const x = (i / 511) * 2 - 1;
+      c[i] = Math.tanh(x * amount) / Math.tanh(amount);
+    }
+    dirtCurves.set(amount, c);
   }
   w.curve = c;
   w.connect(out);
@@ -127,33 +136,104 @@ function sample(a: AudioOut, out: AudioNode, name: SfxName | SfxName[], o: Sampl
 /* Armas                                                                */
 /* ------------------------------------------------------------------ */
 
-/** VK Plasma Rifle: disparo de plasma grosso (amostra) + estalo e soco grave. */
+/**
+ * VK Plasma Rifle: canhão de plasma sujo, não "pew" de ficção científica. A amostra de plasma toca
+ * grave (0,6–0,7x, o chirp descendente vira um rosnado curto) e passa por distorção e passa-baixa;
+ * um estalo seco marca o disparo, um soco grave dá peso e a cauda é crepitação (estalos de ruído
+ * aleatórios decaindo), sem tom que "canta".
+ */
 export function sfxLaser(vol = 1, pan = 0): void {
   const a = audio();
   if (!a || vol < 0.02) return;
   const { ctx } = a;
   const out = voice(a, vol, pan, vol);
   const p = vary(0.07);
-  punch(vol, 0.2, 0.25);
-  const has = sample(a, out, ['plasma_a', 'plasma_b', 'plasma_c'], { vol: 0.95, rate: 0.82 * p });
+  punch(vol, 0.3, 0.25);
+  // corpo: amostra grave → distorção → passa-baixa (tira o brilho de "pew")
+  const body = filter(ctx, 'lowpass', 2400, 0.6, out);
+  const has = sample(a, dirt(ctx, body, 3.5), ['plasma_a', 'plasma_b', 'plasma_c'], { vol: 0.75, rate: (0.6 + Math.random() * 0.1) * p, duration: 0.15, fadeOut: 0.07 });
   if (!has) {
-    const bp = filter(ctx, 'bandpass', 1500 * p, 0.9, env(ctx, dirt(ctx, out), 0.9, 0.003, 0.22));
-    osc(ctx, 'sawtooth', 1900 * p, 180 * p, 0.22, bp);
-    osc(ctx, 'square', 1780 * p, 170 * p, 0.22, bp);
+    const bp = filter(ctx, 'bandpass', 900 * p, 0.8, env(ctx, dirt(ctx, out, 3.5), 0.7, 0.003, 0.16));
+    osc(ctx, 'sawtooth', 700 * p, 260 * p, 0.16, bp);
+    osc(ctx, 'square', 660 * p, 240 * p, 0.16, bp);
   }
-  // ataque grave (soco + camada suja) e estalo do disparo: dão peso à amostra
-  sample(a, out, 'batida_soco', { vol: 0.55, rate: 1.5 * p });
-  osc(ctx, 'sine', 180 * p, 55, 0.16, env(ctx, dirt(ctx, out, 3), 0.9, 0.002, 0.16));
-  noiseSrc(ctx, filter(ctx, 'highpass', 4500, 0.7, env(ctx, out, 0.3, 0.001, 0.04)), 0.05);
-  // cauda de plasma crepitando (~250 ms), caindo de agudo para médio
-  const t = ctx.currentTime;
-  const tail = ctx.createBiquadFilter();
-  tail.type = 'bandpass';
-  tail.Q.value = 2.5;
-  tail.frequency.setValueAtTime(2600 * p, t);
-  tail.frequency.exponentialRampToValueAtTime(700 * p, t + 0.26);
-  tail.connect(env(ctx, out, 0.35, 0.01, 0.25));
-  noiseSrc(ctx, tail, 0.3);
+  sample(a, out, 'batida_soco', { vol: 0.6, rate: 1.4 * p, duration: 0.14, fadeOut: 0.08 });
+  // camadas sintéticas: pré-gravadas (os inimigos atiram muito; montar ~60 nós de áudio por tiro
+  // custava ~3,5 ms e causava travadas e som picotado). Enquanto a gravação não fica pronta, ao vivo.
+  synthLayer(ctx, out, 'plasma', 0.4, laserSynth, p);
+}
+
+/** Parte sintética do plasma: estalo, soco grave, rosnado descendente e crepitação. */
+function laserSynth(ctx: BaseAudioContext, out: AudioNode, t: number, p = 1): void {
+  // estalo do disparo: ruído curtíssimo saturado (o "crack" da descarga)
+  noiseSrc(ctx, filter(ctx, 'bandpass', 2600, 0.8, env(ctx, dirt(ctx, out, 4), 0.9, 0.0005, 0.025, t)), 0.04, t);
+  noiseSrc(ctx, filter(ctx, 'highpass', 5000, 0.7, env(ctx, out, 0.35, 0.0005, 0.012, t)), 0.02, t);
+  // soco grave (camada suja)
+  osc(ctx, 'sine', 150 * p, 50, 0.14, env(ctx, dirt(ctx, out, 3), 0.9, 0.002, 0.14, t), t);
+  // cauda grave: dente de serra varrendo de ~260 para ~55 Hz em 0,25 s, bem distorcida e abafada
+  // (rosnado pesado que desce, não "pew" agudo)
+  const growlEnv = ctx.createGain();
+  growlEnv.gain.setValueAtTime(0.0001, t);
+  growlEnv.gain.exponentialRampToValueAtTime(1, t + 0.006);
+  growlEnv.gain.setValueAtTime(1, t + 0.14);
+  growlEnv.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
+  growlEnv.connect(out);
+  const growl = ctx.createBiquadFilter();
+  growl.type = 'lowpass';
+  growl.Q.value = 1.2;
+  growl.frequency.setValueAtTime(1400, t);
+  growl.frequency.exponentialRampToValueAtTime(260, t + 0.25);
+  growl.connect(growlEnv);
+  const gd = dirt(ctx, growl, 6);
+  osc(ctx, 'sawtooth', 260 * p, 55 * p, 0.25, gd, t);
+  osc(ctx, 'square', 130 * p, 40 * p, 0.25, gd, t).detune.value = 12;
+  // crepitação: estalos aleatórios cada vez mais fracos e mais graves (~130 ms), por cima do rosnado
+  const n = 6 + Math.floor(Math.random() * 3);
+  for (let i = 0; i < n; i++) {
+    const k = i / n;
+    const tt = t + 0.02 + k * 0.11 + Math.random() * 0.012;
+    const f = (1800 - k * 1100) * (0.8 + Math.random() * 0.4);
+    noiseSrc(ctx, filter(ctx, 'bandpass', f, 1.2, env(ctx, dirt(ctx, out, 3), (0.32 - k * 0.26) * (0.6 + Math.random() * 0.6), 0.0005, 0.008 + Math.random() * 0.012, tt)), 0.03, tt);
+  }
+}
+
+/* Camadas sintéticas pré-gravadas (OfflineAudioContext): algumas variações sorteadas por disparo. */
+type Synth = (ctx: BaseAudioContext, out: AudioNode, t: number, p?: number) => void;
+const BAKE_VARIANTS = 4;
+const bakes = new Map<string, AudioBuffer[]>();
+
+/**
+ * Toca uma camada sintética pré-gravada (variação de afinação `p` pela velocidade de reprodução).
+ * Tiros, impactos e explosões são frequentes: montar dezenas de nós de áudio por disparo pesava na
+ * thread principal (travadas) e na de áudio (som picotado). Até a gravação ficar pronta, toca ao vivo.
+ */
+function synthLayer(ctx: BaseAudioContext, out: AudioNode, name: string, len: number, synth: Synth, p: number): void {
+  const list = bakes.get(name) ?? bake(name, len, synth);
+  if (list.length) playBuffer(ctx, list[Math.floor(Math.random() * list.length)], out, { rate: p });
+  else synth(ctx, out, ctx.currentTime, p);
+}
+
+function bake(name: string, len: number, synth: Synth): AudioBuffer[] {
+  const done: AudioBuffer[] = [];
+  const a = audio();
+  if (!a || typeof OfflineAudioContext === 'undefined') return done;
+  bakes.set(name, done);
+  const rate = a.ctx.sampleRate;
+  for (let i = 0; i < BAKE_VARIANTS; i++) {
+    const off = new OfflineAudioContext(1, Math.ceil(len * rate), rate);
+    synth(off, off.destination, 0);
+    off.startRendering().then((b) => done.push(b), () => {});
+  }
+  return done;
+}
+
+/** Pré-grava as camadas sintéticas dos efeitos frequentes (chamar com o áudio já criado). */
+export function prepareSfx(): void {
+  const all: [string, number, Synth][] = [
+    ['plasma', 0.4, laserSynth], ['missil', 0.3, missileSynth], ['sundog', 0.55, sundogSynth], ['impacto', 0.2, hitSynth],
+    ['explosao_g', 2.4, explosionBigSynth], ['explosao_p', 1, explosionSmallSynth],
+  ];
+  for (const [name, len, synth] of all) if (!bakes.has(name)) bake(name, len, synth);
 }
 
 /** Rogue Missile: estouro do lançamento + foguete rasgando o ar. */
@@ -166,8 +246,7 @@ export function sfxMissile(vol = 1, pan = 0): void {
   const t = ctx.currentTime;
   punch(vol, 0.45, 0.45);
   // estouro do tubo: soco + ruído curto saturado
-  osc(ctx, 'sine', 120 * p, 40, 0.2, env(ctx, out, 1.3, 0.002, 0.22));
-  noiseSrc(ctx, filter(ctx, 'lowpass', 3000, 0.7, env(ctx, dirt(ctx, out, 3), 1.2, 0.001, 0.12)), 0.14);
+  synthLayer(ctx, out, 'missil', 0.3, missileSynth, p);
   sample(a, out, 'batida_soco', { vol: 0.7, rate: 0.9 * p });
   // foguete: ronco + jato
   const rocket = sample(a, out, 'missil_lancamento', { vol: 0.7, rate: 1.25 * p, duration: 0.7, fadeOut: 0.45 });
@@ -188,6 +267,11 @@ export function sfxMissile(vol = 1, pan = 0): void {
   }
 }
 
+function missileSynth(ctx: BaseAudioContext, out: AudioNode, t: number, p = 1): void {
+  osc(ctx, 'sine', 120 * p, 40, 0.2, env(ctx, out, 1.3, 0.002, 0.22, t), t);
+  noiseSrc(ctx, filter(ctx, 'lowpass', 3000, 0.7, env(ctx, dirt(ctx, out, 3), 1.2, 0.001, 0.12, t)), 0.14, t);
+}
+
 /** Sundog Beam: esfera de energia teleguiada (zumbido pulsante subindo). */
 export function sfxSundog(vol = 1, pan = 0): void {
   const a = audio();
@@ -195,10 +279,13 @@ export function sfxSundog(vol = 1, pan = 0): void {
   const { ctx } = a;
   const out = voice(a, vol, pan, vol);
   const p = vary(0.06);
-  const t = ctx.currentTime;
   punch(vol, 0.25, 0.3);
   sample(a, out, 'sundog', { vol: 0.9, rate: 1.35 * p, duration: 0.7, fadeOut: 0.3 });
-  const o = osc(ctx, 'sawtooth', 220 * p, 880 * p, 0.45, filter(ctx, 'lowpass', 2400, 4, env(ctx, dirt(ctx, out), 0.45, 0.01, 0.45)));
+  synthLayer(ctx, out, 'sundog', 0.55, sundogSynth, p);
+}
+
+function sundogSynth(ctx: BaseAudioContext, out: AudioNode, t: number, p = 1): void {
+  const o = osc(ctx, 'sawtooth', 220 * p, 880 * p, 0.45, filter(ctx, 'lowpass', 2400, 4, env(ctx, dirt(ctx, out), 0.45, 0.01, 0.45, t)), t);
   const lfo = ctx.createOscillator();
   lfo.frequency.value = 28;
   const depth = ctx.createGain();
@@ -207,7 +294,7 @@ export function sfxSundog(vol = 1, pan = 0): void {
   depth.connect(o.frequency);
   lfo.start(t);
   lfo.stop(t + 0.5);
-  osc(ctx, 'sine', 150 * p, 60, 0.12, env(ctx, out, 0.7, 0.002, 0.12));
+  osc(ctx, 'sine', 150 * p, 60, 0.12, env(ctx, out, 0.7, 0.002, 0.12, t), t);
 }
 
 /** Disparo frontal conforme a arma do carro. */
@@ -231,19 +318,11 @@ export function sfxExplosion(vol = 1, big = true, pan = 0): void {
     : sample(a, out, ['explosao_curta_a', 'explosao_curta_b'], { vol: 0.9, rate: 1.05 * p });
   // estalo de ataque: a explosão chega de uma vez (sem ele a pequena demora a "abrir")
   sample(a, out, 'batida_soco', { vol: big ? 0.6 : 0.9, rate: 0.75 * p });
-  noiseSrc(ctx, filter(ctx, 'lowpass', 5000, 0.7, env(ctx, dirt(ctx, out, 3), big ? 0.6 : 0.9, 0.001, 0.08)), 0.1);
   sample(a, out, 'explosao_sub', { vol: big ? 1 : 0.55, rate: big ? 0.9 : 1.2, duration: big ? 2 : 0.8, fadeOut: 0.4 });
   if (big) sample(a, out, 'explosao_cauda', { vol: 0.6, rate: 0.85 * p, t: t + 0.05 });
-  // corpo sintético: ruído com passa-baixa fechando (mais baixo quando há amostra)
-  const lp = ctx.createBiquadFilter();
-  lp.type = 'lowpass';
-  lp.Q.value = 0.9;
-  lp.frequency.setValueAtTime(big ? 3200 : 3800, t);
-  lp.frequency.exponentialRampToValueAtTime(big ? 120 : 220, t + len * 0.8);
-  lp.connect(env(ctx, dirt(ctx, out, 2), (big ? 1 : 0.7) * (crunch ? 0.45 : 1), 0.004, len));
-  noiseSrc(ctx, lp, len + 0.1, t, 0.7);
-  // soco grave
-  osc(ctx, 'sine', (big ? 85 : 140) * p, 28, big ? 0.7 : 0.3, env(ctx, out, big ? 1.1 : 0.7, 0.003, big ? 0.8 : 0.35));
+  // estalo, corpo de ruído e soco grave (o corpo fica mais baixo quando há amostra)
+  if (big) synthLayer(ctx, out, crunch ? 'explosao_g' : 'explosao_g_so', len + 0.2, crunch ? explosionBigSynth : explosionBigAlone, p);
+  else synthLayer(ctx, out, crunch ? 'explosao_p' : 'explosao_p_so', len + 0.2, crunch ? explosionSmallSynth : explosionSmallAlone, p);
   // detritos metálicos caindo
   const debris = big ? 6 : 2;
   for (let i = 0; i < debris; i++) {
@@ -256,6 +335,23 @@ export function sfxExplosion(vol = 1, big = true, pan = 0): void {
   else punch(vol, 0.5, 0.5);
 }
 
+function explosionSynth(ctx: BaseAudioContext, out: AudioNode, t: number, p: number, big: boolean, crunch: boolean): void {
+  const len = big ? 2.2 : 0.8;
+  noiseSrc(ctx, filter(ctx, 'lowpass', 5000, 0.7, env(ctx, dirt(ctx, out, 3), big ? 0.6 : 0.9, 0.001, 0.08, t)), 0.1, t);
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.Q.value = 0.9;
+  lp.frequency.setValueAtTime(big ? 3200 : 3800, t);
+  lp.frequency.exponentialRampToValueAtTime(big ? 120 : 220, t + len * 0.8);
+  lp.connect(env(ctx, dirt(ctx, out, 2), (big ? 1 : 0.7) * (crunch ? 0.45 : 1), 0.004, len, t));
+  noiseSrc(ctx, lp, len + 0.1, t, 0.7);
+  osc(ctx, 'sine', (big ? 85 : 140) * p, 28, big ? 0.7 : 0.3, env(ctx, out, big ? 1.1 : 0.7, 0.003, big ? 0.8 : 0.35, t), t);
+}
+const explosionBigSynth: Synth = (c, o, t, p = 1) => explosionSynth(c, o, t, p, true, true);
+const explosionBigAlone: Synth = (c, o, t, p = 1) => explosionSynth(c, o, t, p, true, false);
+const explosionSmallSynth: Synth = (c, o, t, p = 1) => explosionSynth(c, o, t, p, false, true);
+const explosionSmallAlone: Synth = (c, o, t, p = 1) => explosionSynth(c, o, t, p, false, false);
+
 /** Tiro acertando o carro: pancada metálica pesada. */
 export function sfxHit(vol = 1, pan = 0): void {
   const a = audio();
@@ -267,8 +363,12 @@ export function sfxHit(vol = 1, pan = 0): void {
   const has = sample(a, out, ['impacto_metal_a', 'impacto_metal_b', 'impacto_placa'], { vol: 1, rate: 0.85 * p });
   sample(a, out, 'batida_grave', { vol: 0.7, rate: 0.8 * p }); // corpo grave do impacto
   if (!has) metalRing(ctx, out, 430 * p, 0.55, 0.35);
-  noiseSrc(ctx, filter(ctx, 'bandpass', 2500 * p, 0.8, env(ctx, out, 0.6, 0.001, 0.06)), 0.08);
-  osc(ctx, 'sine', 170 * p, 55, 0.12, env(ctx, out, 0.8, 0.002, 0.12));
+  synthLayer(ctx, out, 'impacto', 0.2, hitSynth, p);
+}
+
+function hitSynth(ctx: BaseAudioContext, out: AudioNode, t: number, p = 1): void {
+  noiseSrc(ctx, filter(ctx, 'bandpass', 2500 * p, 0.8, env(ctx, out, 0.6, 0.001, 0.06, t)), 0.08, t);
+  osc(ctx, 'sine', 170 * p, 55, 0.12, env(ctx, out, 0.8, 0.002, 0.12, t), t);
 }
 
 /** Arma traseira: mina (Bear Claw), leque de minas (KO Scatterpack) ou óleo (BF's Slipsauce). */
@@ -342,17 +442,18 @@ export function sfxPickup(kind: 'money' | 'armor', vol = 1, pan = 0): void {
   const a = audio();
   if (!a) return;
   const { ctx } = a;
-  const out = voice(a, vol * 1.2, pan);
+  // subidos na avaliação de som (estavam -28 e -33 dB RMS, somiam na mixagem)
+  const out = voice(a, vol * (kind === 'money' ? 2.7 : 3.4), pan);
   const t0 = ctx.currentTime;
   if (kind === 'money') {
     // caixa registradora: "ka" metálico + sino "ching" com parciais inarmônicos
-    sample(a, out, 'impacto_placa', { vol: 0.35, rate: 1.8 });
-    noiseSrc(ctx, filter(ctx, 'highpass', 3000, 0.7, env(ctx, out, 0.35, 0.001, 0.05)), 0.06);
+    sample(a, out, 'impacto_placa', { vol: 0.2, rate: 1.8 });
+    noiseSrc(ctx, filter(ctx, 'highpass', 3000, 0.7, env(ctx, out, 0.25, 0.001, 0.05)), 0.06);
     const t = t0 + 0.06;
     // sino "ching" sujo: parciais inarmônicos com leve saturação (não soa senoide de videogame)
     const bell = dirt(ctx, filter(ctx, 'lowpass', 7000, 0.7, out), 2.2);
     [1568, 2093, 2637, 3321, 4186].forEach((f, i) => {
-      const o = osc(ctx, i % 2 ? 'triangle' : 'sine', f, f * 0.997, 0.6, env(ctx, bell, 0.2 / (1 + i * 0.35), 0.002, 0.55 - i * 0.07, t), t);
+      const o = osc(ctx, i % 2 ? 'triangle' : 'sine', f, f * 0.997, 0.85, env(ctx, bell, 0.3 / (1 + i * 0.35), 0.002, 0.8 - i * 0.1, t), t);
       o.detune.value = (Math.random() * 2 - 1) * 12;
     });
     metalRing(ctx, out, 1175, 0.14, 0.4, t);
@@ -427,29 +528,73 @@ export function sfxFall(vol = 1, pan = 0): void {
   sample(a, out, 'explosao_curta_b', { vol: 0.5, rate: 0.7, t: t + 1.1 });
 }
 
-/** Rodada no óleo: pneus cantando. */
+/**
+ * Rodada no óleo: derrapagem longa de pneu (~0,7 s). Ruído em duas bandas largas (corpo ~1,3 kHz e
+ * chiado ~2,6 kHz) com tremor rápido (a borracha "pulando" no asfalto), um tom de pneu cantando
+ * que cai de afinação, o "splash" do óleo no começo e um baque grave do carro girando.
+ */
 export function sfxSkid(vol = 1, pan = 0): void {
   const a = audio();
   if (!a || vol < 0.05) return;
   const { ctx } = a;
-  const out = voice(a, vol * 1.6, pan, vol);
+  // subido na avaliação de som (estava -38 dB RMS, sumia na mixagem)
+  const out = voice(a, vol * 0.45, pan, vol);
   const t = ctx.currentTime;
-  const bp = ctx.createBiquadFilter();
-  bp.type = 'bandpass';
-  bp.Q.value = 9;
-  bp.frequency.setValueAtTime(1500, t);
-  bp.frequency.linearRampToValueAtTime(1100, t + 0.9);
-  bp.connect(env(ctx, out, 0.9, 0.03, 0.9));
-  noiseSrc(ctx, bp, 1);
-  const o = osc(ctx, 'triangle', 1250, 950, 0.9, env(ctx, out, 0.12, 0.03, 0.85));
+  const p = vary(0.06);
+  const hold = 0.55;
+  const tail = 0.28;
+  // envelope com sustentação: sobe rápido, segura ~0,45 s e cai
+  const sus = ctx.createGain();
+  sus.gain.setValueAtTime(0.0001, t);
+  sus.gain.exponentialRampToValueAtTime(1, t + 0.03);
+  sus.gain.setValueAtTime(1, t + hold);
+  sus.gain.exponentialRampToValueAtTime(0.0001, t + hold + tail);
+  sus.connect(dirt(ctx, out, 1.8));
+  // tremor da borracha
+  const wob = ctx.createGain();
+  wob.gain.value = 0.75;
+  wob.connect(sus);
   const lfo = ctx.createOscillator();
-  lfo.frequency.value = 23;
+  lfo.frequency.value = 17 + Math.random() * 6;
+  const lfoDepth = ctx.createGain();
+  lfoDepth.gain.value = 0.25;
+  lfo.connect(lfoDepth);
+  lfoDepth.connect(wob.gain);
+  lfo.start(t);
+  lfo.stop(t + hold + tail + 0.05);
+  const body = ctx.createBiquadFilter();
+  body.type = 'bandpass';
+  body.Q.value = 2.2;
+  body.frequency.setValueAtTime(1450 * p, t);
+  body.frequency.linearRampToValueAtTime(1050 * p, t + hold + tail);
+  body.connect(wob);
+  noiseSrc(ctx, body, hold + tail + 0.05);
+  const hiss = ctx.createBiquadFilter();
+  hiss.type = 'bandpass';
+  hiss.Q.value = 3;
+  hiss.frequency.setValueAtTime(2700 * p, t);
+  hiss.frequency.linearRampToValueAtTime(2200 * p, t + hold + tail);
+  const hg = ctx.createGain();
+  hg.gain.value = 0.55;
+  hiss.connect(hg);
+  hg.connect(wob);
+  noiseSrc(ctx, hiss, hold + tail + 0.05);
+  // pneu cantando: tom que cai, com vibrato rápido
+  const tone = ctx.createGain();
+  tone.gain.value = 0.16;
+  tone.connect(sus);
+  const o = osc(ctx, 'triangle', 1250 * p, 900 * p, hold + tail, tone, t);
+  const vib = ctx.createOscillator();
+  vib.frequency.value = 23;
   const depth = ctx.createGain();
   depth.gain.value = 40;
-  lfo.connect(depth);
+  vib.connect(depth);
   depth.connect(o.frequency);
-  lfo.start(t);
-  lfo.stop(t + 1);
+  vib.start(t);
+  vib.stop(t + hold + tail + 0.05);
+  // óleo espirrando + baque grave do carro rodando
+  sample(a, out, 'oleo', { vol: 0.5, rate: 0.9 * p });
+  osc(ctx, 'sine', 85 * p, 45, 0.25, env(ctx, out, 0.45, 0.005, 0.25, t), t);
 }
 
 /* ------------------------------------------------------------------ */
@@ -480,10 +625,10 @@ export function sfxCountdown(go: boolean): void {
   const a = audio();
   if (!a) return;
   const { ctx } = a;
-  const out = voice(a, go ? 0.6 : 1.1, 0);
+  const out = voice(a, go ? 0.6 : 3.2, 0);
   const t = ctx.currentTime;
   const f = go ? 880 : 440;
-  const dur = go ? 0.7 : 0.22;
+  const dur = go ? 0.7 : 0.3;
   // clunk do relé do semáforo
   sample(a, out, 'mina_clunk', { vol: 0.8, rate: go ? 1.2 : 1.5 });
   // tom: duas ondas quadradas desafinadas pela "caixa"
@@ -532,7 +677,7 @@ export function sfxBurn(vol = 1, pan = 0): void {
   const a = audio();
   if (!a || vol < 0.05) return;
   const { ctx } = a;
-  const out = voice(a, vol * 1.4, pan);
+  const out = voice(a, vol * 3.5, pan);
   const t = ctx.currentTime;
   // rugido: banda 300 Hz–3 kHz com tremor lento (chamas)
   const roar = env(ctx, out, 0.7, 0.03, 0.45);

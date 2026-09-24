@@ -230,7 +230,7 @@ export class Track {
   }
 
   /** Projeta um ponto do mundo sobre a linha central de uma peça. */
-  project(p: Piece, x: number, z: number): { s: number; lateral: number; outside: number } {
+  project(p: Piece, x: number, z: number, out: { s: number; lateral: number; outside: number } = { s: 0, lateral: 0, outside: 0 }): { s: number; lateral: number; outside: number } {
     let s: number;
     let lateral: number;
     if (p.turn === 0) {
@@ -248,12 +248,17 @@ export class Track {
       s = a * ARC_RADIUS;
       lateral = p.turn * (ARC_RADIUS - r);
     }
-    const outside = s < 0 ? -s : s > p.length ? s - p.length : 0;
-    return { s, lateral, outside };
+    out.s = s;
+    out.lateral = lateral;
+    out.outside = s < 0 ? -s : s > p.length ? s - p.length : 0;
+    return out;
   }
 
-  private sampleFor(p: Piece, x: number, z: number): TrackSample {
-    const pr = this.project(p, x, z);
+  /** rascunhos da consulta (evitam criar objetos a cada chamada: ~2 mil consultas por segundo) */
+  private readonly prTmp = { s: 0, lateral: 0, outside: 0 };
+  private readonly prBest = { s: 0, lateral: 0, outside: 0 };
+
+  private sampleFor(p: Piece, pr: { s: number; lateral: number; outside: number }): TrackSample {
     const s = clamp(pr.s, 0, p.length);
     const t = s / p.length;
     return {
@@ -277,23 +282,36 @@ export class Track {
    */
   query(x: number, z: number, hint = -1): TrackSample {
     const n = this.pieces.length;
-    let best: TrackSample | null = null;
+    let best = -1;
     let bestScore = Infinity;
-    const consider = (i: number) => {
-      const sample = this.sampleFor(this.pieces[((i % n) + n) % n], x, z);
-      const score = Math.hypot(sample.outside, sample.lateral);
-      if (score < bestScore) {
-        bestScore = score;
-        best = sample;
-      }
-    };
+    // só a peça vencedora vira amostra completa
     if (hint >= 0) {
-      for (let d = -1; d <= 2; d++) consider(hint + d);
+      for (let d = -1; d <= 2; d++) {
+        const i = (((hint + d) % n) + n) % n;
+        const score = this.score(this.pieces[i], x, z);
+        if (score < bestScore) {
+          bestScore = score;
+          best = i;
+          Object.assign(this.prBest, this.prTmp);
+        }
+      }
     }
-    if (!best || bestScore > this.halfWidth + 3) {
-      for (let i = 0; i < n; i++) consider(i);
+    if (best < 0 || bestScore > this.halfWidth + 3) {
+      for (let i = 0; i < n; i++) {
+        const score = this.score(this.pieces[i], x, z);
+        if (score < bestScore) {
+          bestScore = score;
+          best = i;
+          Object.assign(this.prBest, this.prTmp);
+        }
+      }
     }
-    return best!;
+    return this.sampleFor(this.pieces[best], this.prBest);
+  }
+
+  private score(p: Piece, x: number, z: number): number {
+    const pr = this.project(p, x, z, this.prTmp);
+    return Math.hypot(pr.outside, pr.lateral);
   }
 
   /** Ponto da linha central a uma distância (em metros) da linha de chegada. */

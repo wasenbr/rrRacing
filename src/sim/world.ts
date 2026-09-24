@@ -12,7 +12,7 @@ export const WEAPONS = {
   /** Rogue Missiles: a arma mais forte — teleguiado suave para a frente, joga o alvo para cima */
   missile: { speed: 58, life: 2.4, damage: 30, knock: 9, hop: 7, turnRate: 2.2 },
   /** Sundog Beams: lento, persegue o alvo em qualquer direção (até para trás), pouco dano; some na mureta */
-  sundog: { speed: 42, life: 2.2, damage: 12, knock: 2, hop: 0, turnRate: 2.5 },
+  sundog: { speed: 42, life: 2.2, damage: 14, knock: 2, hop: 0, turnRate: 2.5 },
   /** Bear Claw Mines */
   mine: { damage: 32, hop: 9, radius: 1.6, armTime: 0.6, life: 40 },
   /** KO Scatterpack: leque de minas pequenas atrás do carro */
@@ -176,11 +176,11 @@ export interface World {
   difficulty: Difficulty;
 }
 
-/** Posições do grid: duas filas logo depois da linha, os primeiros da lista largam na frente. */
+/** Posições do grid: duas filas logo antes da linha, os primeiros da lista largam na frente. */
 function gridSlot(track: Track, slot: number): { x: number; z: number; heading: number; h: number } {
   const row = Math.floor(slot / 2);
   const side = slot % 2 === 0 ? 1 : -1;
-  const p = track.pointAtDist(3 + (3 - row) * 7);
+  const p = track.pointAtDist(-(4 + row * 7));
   const lat = track.halfWidth * 0.45;
   return { x: p.x + leftX(p.heading) * side * lat, z: p.z + leftZ(p.heading) * side * lat, heading: p.heading, h: p.h };
 }
@@ -270,7 +270,8 @@ export function createWorld(track: Track, entries: RacerEntry[], laps: number, s
 
 /** Distância total percorrida (para classificar). */
 export function raceDistance(world: World, r: Racer): number {
-  return (r.progress.lap - 1) * world.track.totalLength + r.progress.lastDist;
+  const d = r.progress.beforeLine ? r.progress.lastDist - world.track.totalLength : r.progress.lastDist;
+  return (r.progress.lap - 1) * world.track.totalLength + d;
 }
 
 function updatePlaces(world: World): void {
@@ -351,7 +352,8 @@ function fire(world: World, r: Racer): void {
 function drop(world: World, r: Racer): void {
   const car = r.car;
   const kind = r.spec.rear;
-  const back = (kind === 'oil' ? 3.8 : 3.2) * CAR_SCALE;
+  // o óleo cai mais para trás: quem vem atrás tem tempo de ver a mancha e desviar (item 17)
+  const back = (kind === 'oil' ? 6 : 3.2) * CAR_SCALE;
   const fx = forwardX(car.heading);
   const fz = forwardZ(car.heading);
   const put = (lat: number, extra: number) => {
@@ -489,10 +491,13 @@ function stepHazards(world: World, dt: number): void {
       else {
         for (const r of world.racers) {
           if (!r.alive || !r.car.grounded || r.spinTime > 0 || r.oilGrace > 0 || (r.id === h.owner && h.age < 1.5)) continue;
+          if (h.age < 0.25) continue; // a mancha ainda está se espalhando
           if (Math.hypot(r.car.x - h.x, r.car.z - h.z) < WEAPONS.oil.radius && forwardSpeed(r.car) > WEAPONS.oil.minSpeed) {
             // esteiras e aerodeslizador resistem ao óleo (giram metade), mas não são imunes: todos competitivos
             const resist = Math.max(r.spec.spinResist ?? 0, r.spec.traction === 'treads' || r.spec.traction === 'hover' ? 0.5 : 0);
-            r.spinTime = WEAPONS.oil.spinTime * (1 - resist);
+            // jogador humano no Fácil/Normal roda menos (0,5 s): arcade, perdoa o erro
+            const human = !r.ai && world.difficulty !== 'hard' ? 0.625 : 1;
+            r.spinTime = WEAPONS.oil.spinTime * (1 - resist) * human;
             r.spinTotal = r.spinTime;
             r.oilGrace = r.spinTime + 1.2;
             world.events.push({ type: 'spin', racer: r.id });

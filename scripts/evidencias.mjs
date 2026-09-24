@@ -1,5 +1,5 @@
 // Gera evidências para os avaliadores: capturas de tela, teste de jogo automático e gravações de som.
-// Uso: node scripts/evidencias.mjs <pastaSaida> [tudo|telas|ui|celular|jogo|som]  (telas inclui ui e celular) [url]
+// Uso: node scripts/evidencias.mjs <pastaSaida> [tudo|telas|ui|celular|jogo|som|desempenho]  (telas inclui ui e celular) [url]
 // Precisa do servidor de desenvolvimento rodando (npm run dev).
 import { chromium } from 'playwright-core';
 import fs from 'node:fs';
@@ -16,6 +16,8 @@ const browser = await chromium.launch({
   args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--autoplay-policy=no-user-gesture-required'],
 });
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+// máquina carregada (render por software): capturas podem levar mais que os 30 s padrão
+page.setDefaultTimeout(180000);
 // sem o websocket do Vite: edições no código durante a gravação não recarregam a página
 await page.routeWebSocket(/.*/, () => {});
 const errors = [];
@@ -71,6 +73,62 @@ async function telas() {
     await page.screenshot({ path: `${dir}/${n}c_${trackId}_${cam}_corrida.png` });
     i++;
   }
+  // efeitos: explosão de carro perto do jogador e faíscas na mureta (API de depuração do jogo)
+  /** Espera N quadros desenhados (cada um avança os efeitos em até 0,1 s de jogo). */
+  const frames = (n) =>
+    page.evaluate((n) => new Promise((res) => {
+      let k = 0;
+      const f = () => (++k >= n ? res() : requestAnimationFrame(f));
+      requestAnimationFrame(f);
+    }), n);
+  for (const [trackId, tag] of [['chem6-1', 'chem6'], ['drakonis-2', 'drakonis']]) {
+    await page.evaluate((trackId) => {
+      const a = window.game.menuActions();
+      a.setCamera('iso');
+      a.quickRace({ trackId, vehicleId: 'marauder', color: 0x2f7bff, difficulty: 'normal' });
+    }, trackId);
+    await wait(1500);
+    await advance(8);
+    // o rival mais próximo vai para 7 m à frente do jogador e explode (blindagem zerada)
+    await page.evaluate(() => {
+      const g = window.game;
+      const w = g.world;
+      const me = w.racers[g.playerId];
+      const d = (o) => Math.hypot(o.car.x - me.car.x, o.car.z - me.car.z);
+      const r = w.racers.filter((o) => o.id !== g.playerId && o.alive).sort((a, b) => d(a) - d(b))[0];
+      const q = w.track.query(me.car.x, me.car.z, me.car.pieceIndex);
+      const p = w.track.pointAtDist(q.dist + 7);
+      Object.assign(r.car, { x: p.x, z: p.z, y: p.h, vx: 0, vz: 0 });
+      r.armor = 0;
+      r.alive = false;
+      r.respawnTimer = 2.5;
+      g.onEvent({ type: 'explode', racer: r.id, by: -1, x: r.car.x, y: r.car.y, z: r.car.z, bounty: 0 });
+    });
+    await frames(2);
+    await page.screenshot({ path: `${dir}/50_explosao_${tag}_a.png` });
+    await frames(5);
+    await page.screenshot({ path: `${dir}/50_explosao_${tag}_b.png` });
+    await frames(14);
+    await page.screenshot({ path: `${dir}/50_explosao_${tag}_c.png` });
+  }
+  // faíscas: o jogador é jogado contra a mureta mais próxima por alguns passos de simulação
+  await page.evaluate(() => {
+    const g = window.game;
+    const w = g.world;
+    const c = w.racers[g.playerId].car;
+    for (let k = 0; k < 14; k++) {
+      const q = w.track.query(c.x, c.z, c.pieceIndex);
+      const side = Math.sign(q.lateral) || 1;
+      const lx = Math.cos(q.heading) * side;
+      const lz = -Math.sin(q.heading) * side;
+      c.vx = lx * 14 + Math.sin(q.heading) * 18;
+      c.vz = lz * 14 + Math.cos(q.heading) * 18;
+      g.step(1 / 60);
+    }
+  });
+  await frames(1);
+  await page.screenshot({ path: `${dir}/51_faiscas_mureta.png` });
+
   // close dos carros: vitrine com os 5 modelos lado a lado (se o jogo expuser a função)
   const hasShowroom = await page.evaluate(() => typeof window.game.showroom === 'function');
   if (hasShowroom) {
@@ -605,7 +663,129 @@ async function som() {
   fs.writeFileSync(path.join(dir, 'metricas.json'), JSON.stringify(metrics, null, 2));
 }
 
+/* ------------------------------------------------------------------ */
+/* Desempenho: fps médio e p95 por nível de qualidade, escala final da   */
+/* resolução dinâmica e quantos quadros a cena desenha atrás de menus    */
+/* ------------------------------------------------------------------ */
+async function desempenho() {
+  const cdp = await page.context().newCDPSession(page);
+  // AMOSTRAS=n (padrão 3): baixo/medio/alto medidos n vezes intercalados (a CPU da máquina oscila) e
+  // resumidos pela mediana; os casos de CPU lenta rodam uma vez só
+  const amostras = Math.max(1, +(process.env.AMOSTRAS ?? 3) || 1);
+  const casos = [
+    { nome: 'baixo_cpu4x', q: 'baixo', cpu: 4 },
+    { nome: 'baixo_cpu4x_semlimite30', q: 'baixo', cpu: 4, extra: '&semlimite' },
+  ];
+  for (let k = 0; k < amostras; k++) for (const q of ['baixo', 'medio', 'alto']) casos.push({ nome: q, q, cpu: 1 });
+  /** Conta as chamadas de desenho do jogo (game.render) por `ms` e mede o intervalo entre elas. */
+  const medir = (ms) =>
+    page.evaluate(
+      (ms) =>
+        new Promise((resolve) => {
+          const g = window.game;
+          const orig = g.render;
+          const t = [];
+          g.render = function (...a) {
+            t.push(performance.now());
+            return orig.apply(this, a);
+          };
+          setTimeout(() => {
+            g.render = orig;
+            const iv = t.slice(1).map((x, i) => x - t[i]).sort((a, b) => a - b);
+            const seg = t.length > 1 ? (t[t.length - 1] - t[0]) / 1000 : ms / 1000;
+            const p95 = iv.length ? iv[Math.min(iv.length - 1, Math.floor(iv.length * 0.95))] : 0;
+            resolve({
+              quadros: t.length,
+              fpsMedio: +(Math.max(0, t.length - 1) / seg).toFixed(1),
+              quadroP95ms: +p95.toFixed(1),
+              fpsP95: p95 ? +(1000 / p95).toFixed(1) : 0,
+            });
+          }, ms);
+        }),
+      ms,
+    );
+  const niveis = [];
+  // tela de celular deitado / notebook simples (a 1280x720 o render por software mal passa de 2 qps)
+  await page.setViewportSize({ width: 960, height: 540 });
+  for (const c of casos) {
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
+    await page.goto(`${base}?autopilot&laps=3&q=${c.q}${c.extra ?? ''}`, { waitUntil: 'domcontentloaded', timeout: 180000 });
+    await page.waitForFunction(() => !!window.game, null, { timeout: 180000 });
+    await wait(2500);
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: c.cpu });
+    const menu = await medir(4000);
+    await page.evaluate(() => {
+      const g = window.game;
+      // a URL ?q= desliga a resolução dinâmica; aqui ela fica ligada para ver até onde desce
+      g.dynRes.enabled = true;
+      g.menuActions().quickRace({ trackId: 'chem6-1', vehicleId: 'marauder', color: 0x2f7bff, difficulty: 'normal' });
+    });
+    await page.waitForFunction(() => window.game.phase === 'racing', null, { timeout: 180000, polling: 250 });
+    await wait(3000);
+    const corrida = await medir(15000);
+    const estado = await page.evaluate(() => {
+      const g = window.game;
+      return { escalaResolucao: +g.dynRes.scale.toFixed(2), pixelRatio: +g.renderer.getPixelRatio().toFixed(2), trava30: g.cap30 };
+    });
+    await page.evaluate(() => window.game.togglePause());
+    await wait(2500);
+    const pausa = await medir(4000);
+    await page.evaluate(() => window.game.togglePause());
+    const r = { nivel: c.nome, cpuLentidao: c.cpu, corrida, ...estado, menuQps: menu.fpsMedio, pausaQuadros: pausa.quadros };
+    console.log('desempenho', JSON.stringify(r));
+    niveis.push(r);
+  }
+  await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
+  // limite dos menus: numa tela minúscula o render por software passa de 30 qps; compara os
+  // quadros do navegador (rAF) com os que o jogo desenha atrás do menu principal
+  await page.setViewportSize({ width: 320, height: 180 });
+  await page.goto(`${base}?autopilot&q=baixo`, { waitUntil: 'domcontentloaded', timeout: 180000 });
+  await page.waitForFunction(() => !!window.game, null, { timeout: 180000 });
+  await wait(3000);
+  const rafMenu = page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        let n = 0;
+        const t0 = performance.now();
+        const f = () => {
+          n++;
+          if (performance.now() - t0 < 4000) requestAnimationFrame(f);
+          else resolve(+((n * 1000) / (performance.now() - t0)).toFixed(1));
+        };
+        requestAnimationFrame(f);
+      }),
+  );
+  const desenhoMenu = await medir(4000);
+  const limiteMenus = { tela: '320x180', navegadorQps: await rafMenu, desenhoQps: desenhoMenu.fpsMedio };
+  console.log('limite dos menus', JSON.stringify(limiteMenus));
+  await page.setViewportSize({ width: 1280, height: 720 });
+  const json = {
+    observacao:
+      'Render por software (SwiftShader, sem GPU): valores absolutos são muito menores que num aparelho real; servem para comparar níveis. ' +
+      'fpsP95 = qps do quadro no percentil 95 do tempo de quadro (os 5% mais lentos). menuQps = quadros desenhados por segundo atrás do menu principal (limite ~30). ' +
+      'pausaQuadros = quadros desenhados em 4 s de pausa (esperado 0: imagem congelada). trava30 = nível baixo travou a corrida em 30 qps.',
+    pista: 'chem6-1',
+    tela: '960x540',
+    amostras,
+    mediana: Object.fromEntries(
+      ['baixo', 'medio', 'alto'].map((q) => {
+        const rs = niveis.filter((n) => n.nivel === q);
+        const med = (f) => {
+          const v = rs.map(f).sort((a, b) => a - b);
+          return v.length ? v[Math.floor((v.length - 1) / 2)] : 0;
+        };
+        return [q, { fpsMedio: med((n) => n.corrida.fpsMedio), quadroP95ms: med((n) => n.corrida.quadroP95ms), menuQps: med((n) => n.menuQps), amostras: rs.map((n) => n.corrida.fpsMedio) }];
+      }),
+    ),
+    niveis,
+    limiteMenus,
+  };
+  fs.writeFileSync(path.join(out, 'desempenho.json'), JSON.stringify(json, null, 2));
+  await freshPage();
+}
+
 try {
+  if (what === 'tudo' || what === 'desempenho') await desempenho();
   if (what === 'tudo' || what === 'jogo') await jogo();
   if (what === 'tudo' || what === 'som') await som();
   // a etapa de som troca o AudioContext da página por um OfflineAudioContext: recarregar antes das telas

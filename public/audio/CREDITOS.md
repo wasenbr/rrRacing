@@ -23,12 +23,29 @@ mono, com silêncio aparado e volume normalizado.
 - Kenney: https://kenney.nl/assets/sci-fi-sounds e https://kenney.nl/assets/impact-sounds
 - CC0: https://creativecommons.org/publicdomain/zero/1.0/
 
+## Motor (`motor/`)
+
+| Arquivo | Origem | Autor | Licença |
+|---|---|---|---|
+| motor_lenta, motor_0, motor_1 | "Chevrolet Caprice (motor at different speeds & driving away)", https://freesound.org/people/romanholtwick/sounds/391671/ | romanholtwick | CC0 1.0 |
+
+Trechos estáveis da gravação (marcha lenta ~650 rpm e ~870 rpm) recortados em loops sem emenda
+audível; motor_1 é o loop de ~870 rpm 1,4x acima (ffmpeg rubberband, formantes preservados). Cada
+loop toca no máximo ±25% fora do próprio tom: a gravação cobre a lenta e o giro baixo e, acima disso,
+a síntese de ciclos de V8 do projeto assume (`src/audio/engine.ts`). Os rivais usam os mesmos loops.
+(Gravações livres de motor em rotação alta testadas — Red Library/archive.org, BMW 120d, Opel Astra —
+eram de motores e timbres diferentes ou só variações de tom do mesmo trecho.)
+
 ## Locutor (`locutor/`)
 
 Falas geradas por **Chatterbox TTS** (Resemble AI, licença MIT, https://github.com/resemble-ai/chatterbox)
-com exagero emocional alto (narrador de arena gritando), clonando uma voz de referência gerada pelo
-TTS **Kokoro-82M** (hexgrad, Apache-2.0, voz `am_michael`, `scripts/locutor/voz-referencia.wav`).
-Cada fala é conferida por transcrição (faster-whisper, MIT) e refeita se sair errada. Texto e
+com exagero emocional alto (1,5–1,8; narrador de arena gritando), clonando uma referência de voz humana
+de locutor de luta: `scripts/locutor/voz-referencia-arena.wav`, montada com falas do
+**"Voice Pack | Fighting Game Announcer"** de **Alba MacKenna** (OpenGameArt,
+https://opengameart.org/content/voice-pack%E2%94%82fighting-game-announcer), licença **CC-BY 4.0**
+(https://creativecommons.org/licenses/by/4.0/). As falas do jogo são novas (sintetizadas), não trechos do pacote.
+Vários takes por frase; cada um é conferido por transcrição (faster-whisper, MIT) e escolhido pela
+entonação (faixa de F0 ≥ 12 semitons e mediana ≥ 150 Hz). Texto e
 tratamento de arena (compressão, presença e eco curto) feitos pelo projeto (`scripts/locutor/gerar.py`).
 Pós-tratamento (`scripts/locutor/tratar.py`, ffmpeg + rubberband): takes sem emoção descartados,
 silêncio aparado, nomes graves afinados para cima, frases longas aceleradas e loudness igual (−18 LUFS).

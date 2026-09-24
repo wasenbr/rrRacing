@@ -9,18 +9,22 @@ export interface RacerProgress {
   lapTimes: number[];
   lastDist: number;
   halfwayReached: boolean;
+  /** largou atrás da linha e ainda não a cruzou (a primeira passagem não conta volta) */
+  beforeLine: boolean;
   wrongWayTime: number;
   finished: boolean;
   finishTime: number;
 }
 
 export function createProgress(track: Track, v: VehicleState): RacerProgress {
+  const dist = track.query(v.x, v.z, v.pieceIndex).dist;
   return {
     lap: 1,
     lapStart: 0,
     lapTimes: [],
-    lastDist: track.query(v.x, v.z, v.pieceIndex).dist,
+    lastDist: dist,
     halfwayReached: false,
+    beforeLine: dist > track.totalLength * 0.5,
     wrongWayTime: 0,
     finished: false,
     finishTime: 0,
@@ -44,6 +48,7 @@ export function updateProgress(p: RacerProgress, track: Track, v: VehicleState, 
 
   const window = 30;
   if (p.lastDist > T - window && d < window) {
+    p.beforeLine = false;
     if (p.halfwayReached) {
       p.lapTimes.push(raceTime - p.lapStart);
       p.lapStart = raceTime;
@@ -59,6 +64,7 @@ export function updateProgress(p: RacerProgress, track: Track, v: VehicleState, 
     }
   } else if (p.lastDist < window && d > T - window) {
     p.halfwayReached = false; // cruzou a linha de ré
+    if (p.lap === 1 && p.lapTimes.length === 0) p.beforeLine = true;
   }
   p.lastDist = d;
 

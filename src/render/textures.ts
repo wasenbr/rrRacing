@@ -43,11 +43,17 @@ export function fbm(size: number, basePeriod: number, octaves: number, seed: num
   return out;
 }
 
+/** Anisotropia máxima da placa (definida pelo jogo ao criar o renderer): piso nítido em ângulo rasante. */
+export let maxAnisotropy = 8;
+export function setMaxAnisotropy(n: number): void {
+  maxAnisotropy = Math.max(1, n);
+}
+
 function toTexture(canvas: HTMLCanvasElement, srgb: boolean): THREE.CanvasTexture {
   const tex = new THREE.CanvasTexture(canvas);
   if (srgb) tex.colorSpace = THREE.SRGBColorSpace;
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.anisotropy = 8;
+  tex.anisotropy = maxAnisotropy;
   return tex;
 }
 

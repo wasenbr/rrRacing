@@ -2,3 +2,4 @@ node_modules/
 dist/
 .wrangler/
 .tts/
+__pycache__/

@@ -26,8 +26,8 @@ function grime(): { map: THREE.CanvasTexture; rough: THREE.CanvasTexture } {
       const y = rnd() * S;
       const r = 6 + rnd() * 26;
       const grd = g.createRadialGradient(x, y, 0, x, y, r);
-      const v = Math.round(rough ? 170 + rnd() * 60 : 226 + rnd() * 24);
-      grd.addColorStop(0, `rgba(${v},${v},${v},0.25)`);
+      const v = Math.round(rough ? 165 + rnd() * 70 : 212 + rnd() * 36);
+      grd.addColorStop(0, `rgba(${v},${v},${v},0.32)`);
       grd.addColorStop(1, `rgba(${v},${v},${v},0)`);
       g.fillStyle = grd;
       g.fillRect(x - r, y - r, r * 2, r * 2);
@@ -39,7 +39,7 @@ function grime(): { map: THREE.CanvasTexture; rough: THREE.CanvasTexture } {
       const y = rnd() * S;
       const a = rnd() * Math.PI;
       const l = 4 + rnd() * 18;
-      g.strokeStyle = rough ? `rgba(200,200,200,${0.08 + rnd() * 0.12})` : `rgba(255,255,255,${0.08 + rnd() * 0.12})`;
+      g.strokeStyle = rough ? `rgba(215,215,215,${0.12 + rnd() * 0.18})` : `rgba(255,255,255,${0.12 + rnd() * 0.18})`;
       g.beginPath();
       g.moveTo(x, y);
       g.lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l);

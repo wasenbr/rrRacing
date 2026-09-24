@@ -83,3 +83,35 @@ Cada item precisa ser atendido e verificado pelos avaliadores.
 
 38. O jogo não é um simulador: é para ser divertido. Jogabilidade arcade acima de realismo físico
     (controle responsivo e perdoador, ação constante, combate e disputa acima de precisão de física).
+39. Celular: a direção por toque está sensível demais; difícil controlar o carro. Precisa ser
+    suave e precisa (zona morta, curva de resposta progressiva).
+40. A vista aérea balança demais e fica desagradável. Câmera estável: sem tremer, sem ir e voltar
+    com a velocidade/direção do carro.
+
+# Retorno do usuário (2026-09-24)
+
+41. No tablet o jogo parece lento e o carro "dá uma travada" nas curvas. O jogo precisa ser leve e
+    fluido no hardware de tablet/celular (GPU e CPU): sem engasgos, sem freada involuntária na curva
+    (no toque, a curva fechada só pelo botão DERRAPAR).
+42. No iPhone o jogo não pode ficar numa faixa com tela preta embaixo: ocupa toda a área visível,
+    em qualquer navegador (Safari e Chrome) e depois de girar o aparelho.
+43. Imagem nítida, sem aparência pixelada — no iPhone (tela de alta densidade) e também no PC
+    (bordas sem serrilhado).
+44. Botão "Voltar" em todos os menus no mesmo tamanho/estilo dos demais botões (nada de link pequeno).
+45. Na largada os carros ficam antes da linha de chegada (a passagem pela linha logo após a largada
+    não conta volta).
+46. Celular: o controle de direção na tela ainda falta precisão, fica difícil jogar. O volante de
+    toque deve ser relativo ao ponto onde o dedo pousa, com curso longo até o esterço cheio e
+    resposta imediata ao inverter o lado.
+47. Tablet: o som picota. Celular/tablet: o volante de toque ainda falha (às vezes vira de menos,
+    às vezes demais), o que não acontece com o teclado no PC. O toque deve responder como as setas
+    do teclado: previsível, esquerda/direita totais, dosado tocando e soltando.
+48. Versionamento: a tela inicial mostra a versão do jogo, calculada automaticamente no deploy.
+49. PC: o jogo ainda dá umas travadas durante a corrida. Tem que rodar liso, sem engasgos, também no PC.
+50. PC: o som picota durante a corrida (percebido no teste automático também).
+51. A roda do Marauder (carro azul com aerofólio) atravessa o próprio paralama. Rodas não podem
+    atravessar a carroceria/paralamas em nenhum carro, nem ao esterçar ou com a suspensão.
+52. O jogo consome muita bateria (PC/notebook). Precisa ficar mais leve: gastar menos GPU/CPU,
+    principalmente na bateria, sem perder a fluidez.
+53. Locutor: a fala da largada "Let the carnage begin!" está sem emoção. Tem que soar gritada,
+    empolgada, de apresentador de arena.

@@ -108,17 +108,11 @@ export function buildScenery(track: Track, theme: Theme, themeId: ThemeId, shado
   const flameMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0xff7a20).multiplyScalar(3), transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false });
   const flameCore = new THREE.MeshBasicMaterial({ color: new THREE.Color(0xffe6a0).multiplyScalar(4), transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false });
   const flameGeo = new THREE.ConeGeometry(0.5, 2.2, 10, 1, true).translate(0, 1.1, 0);
-  const flames: { outer: THREE.Mesh; inner: THREE.Mesh; phase: number }[] = [];
+  // (duas malhas instanciadas no fim: antes, cada chama eram 2 objetos e ~150 chamadas de desenho)
+  const flames: { x: number; y: number; z: number; scale: number; phase: number }[] = [];
   const smokeSources: THREE.Vector3[] = [];
   const addFlame = (x: number, y: number, z: number, scale: number, smoke = true) => {
-    const outer = new THREE.Mesh(flameGeo, flameMat);
-    const inner = new THREE.Mesh(flameGeo, flameCore);
-    outer.position.set(x, y, z);
-    inner.position.set(x, y, z);
-    outer.scale.setScalar(scale);
-    inner.scale.setScalar(scale * 0.55);
-    group.add(outer, inner);
-    flames.push({ outer, inner, phase: rng() * 10 });
+    flames.push({ x, y, z, scale, phase: rng() * 10 });
     if (smoke) smokeSources.push(new THREE.Vector3(x, y + 2 * scale, z));
   };
 
@@ -138,9 +132,12 @@ export function buildScenery(track: Track, theme: Theme, themeId: ThemeId, shado
   };
 
   const table = PROPS[themeId];
-  const maxProps = dense ? 380 : 180;
+  // Drakonis e Nho tinham o entorno vazio (chão chapado): o dobro de objetos. Tudo vai para poucas
+  // malhas agrupadas (Batch), e o celular (sem `dense`) ganha bem menos.
+  const busy = themeId === 'drakonis' || themeId === 'nho';
+  const maxProps = Math.round((dense ? 380 : 180) * (busy ? (dense ? 2 : 1.35) : 1));
   let placed = 0;
-  for (let tries = 0; tries < 4000 && placed < maxProps; tries++) {
+  for (let tries = 0; tries < 9000 && placed < maxProps; tries++) {
     const x = b.minX - margin + rng() * (b.maxX - b.minX + margin * 2);
     const z = b.minZ - margin + rng() * (b.maxZ - b.minZ + margin * 2);
     const kind = pickKind(table, rng());
@@ -325,9 +322,9 @@ export function buildScenery(track: Track, theme: Theme, themeId: ThemeId, shado
   }
   // detritos pequenos espalhados (pedras, cascalho): quebram o chão liso entre os objetos
   if (!theme.liquid) {
-    const debris = dense ? 420 : 160;
+    const debris = Math.round((dense ? 420 : 160) * (busy ? (dense ? 2 : 1.35) : 1));
     const debrisMat = themeId === 'nho' ? snowMat : rockMat2;
-    for (let i = 0, tries = 0; i < debris && tries < 3000; tries++) {
+    for (let i = 0, tries = 0; i < debris && tries < 6000; tries++) {
       const x = b.minX - margin + rng() * (b.maxX - b.minX + margin * 2);
       const z = b.minZ - margin + rng() * (b.maxZ - b.minZ + margin * 2);
       if (!clearOfTrack(x, z, 2)) continue;
@@ -374,13 +371,29 @@ export function buildScenery(track: Track, theme: Theme, themeId: ThemeId, shado
   const sp = new THREE.Vector3();
   const ss = new THREE.Vector3();
 
+  const flameOuter = new THREE.InstancedMesh(flameGeo, flameMat, Math.max(1, flames.length));
+  const flameInner = new THREE.InstancedMesh(flameGeo, flameCore, Math.max(1, flames.length));
+  for (const m of [flameOuter, flameInner]) {
+    m.count = flames.length;
+    m.frustumCulled = false;
+    m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    if (flames.length) group.add(m);
+  }
+  const fq = new THREE.Quaternion();
+  const up = new THREE.Vector3(0, 1, 0);
+
   const update = (t: number) => {
-    for (const f of flames) {
+    flames.forEach((f, i) => {
       const n = Math.sin(t * 13 + f.phase) * 0.14 + Math.sin(t * 29 + f.phase * 2) * 0.08;
-      f.outer.scale.y = f.outer.scale.x * (1 + n);
-      f.inner.scale.y = f.inner.scale.x * (1 + n * 1.5);
-      f.outer.rotation.y = t * 2 + f.phase;
-    }
+      sp.set(f.x, f.y, f.z);
+      fq.setFromAxisAngle(up, t * 2 + f.phase);
+      flameOuter.setMatrixAt(i, sm.compose(sp, fq, ss.set(f.scale, f.scale * (1 + n), f.scale)));
+      fq.identity();
+      const k = f.scale * 0.55;
+      flameInner.setMatrixAt(i, sm.compose(sp, fq, ss.set(k, k * (1 + n * 1.5), k)));
+    });
+    flameOuter.instanceMatrix.needsUpdate = true;
+    flameInner.instanceMatrix.needsUpdate = true;
     smokeSources.forEach((src, i) => {
       for (let k = 0; k < PER; k++) {
         const life = (t * 0.35 + k / PER + i * 0.37) % 1;

@@ -1,6 +1,6 @@
 import { QUALITY_LABELS, type QualityLevel, type QualityPref } from '../render/quality';
 import type { CameraMode } from '../render/cameras';
-import { carThumbnail, itemThumbnail, type CarThumbStyle, type ShopItem } from '../render/thumbnails';
+import { carThumbnail, itemThumbnail, SHOWROOM_COLOR, type CarThumbStyle, type ShopItem } from '../render/thumbnails';
 import { planetThumbnail } from '../render/planetThumbs';
 import type { ThemeId } from '../sim/track';
 import {
@@ -8,8 +8,8 @@ import {
   type RaceOutcome,
 } from '../sim/campaign';
 import {
-  armamentText, ATTRIBUTE_LABEL, CAR_PRICES, carAttributes, CHARACTERS, CHARGE_KINDS, chargePrice, chargeWeapon, MAX_UPGRADE, maxExtraCharges,
-  tradeInValue, UPGRADE_HELP, UPGRADE_KINDS, UPGRADE_LABEL, UPGRADE_NAMES, upgradeAvailable, upgradePrice, type CarAttributes, type Character,
+  armamentText, ATTRIBUTE_LABEL, attributeTags, buildSpec, CAR_PRICES, carAttributes, CHARACTERS, CHARGE_KINDS, chargePrice, chargeWeapon, MAX_UPGRADE, maxExtraCharges,
+  tradeInValue, UPGRADE_HELP, UPGRADE_KINDS, UPGRADE_LABEL, UPGRADE_NAMES, upgradeAvailable, upgradePrice, type CarAttributes, type CarSetup, type Character,
   type ChargeKind, type UpgradeKind,
 } from '../sim/garage';
 import type { Track, TrackDef } from '../sim/track';
@@ -21,6 +21,7 @@ import { setTiltSteering, tiltSteeringEnabled, tiltSupported } from '../input/co
 import { portraitSvg } from './portraits';
 import { trackThumbnail } from './trackThumb';
 import { icon, iconizeHtml } from './icons';
+import { APP_VERSION } from '../version';
 
 /** Nome curto das armas (HUD/menus), a partir dos nomes do original. */
 export const WEAPON_LABEL: Record<string, string> = Object.fromEntries(Object.entries(WEAPON_NAMES).map(([k, v]) => [k, v.short]));
@@ -41,6 +42,8 @@ const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 
 export interface QuickOptions {
   trackId: string;
+  /** piloto escolhido (bônus de habilidade e retrato) */
+  characterId?: string;
   vehicleId: string;
   color: number;
   difficulty: Difficulty;
@@ -179,19 +182,69 @@ const ATTRS = Object.keys(ATTRIBUTE_LABEL) as (keyof CarAttributes)[];
  * Barras segmentadas dos atributos (0..1, faixas fixas definidas na simulação em garage.ts),
  * com a maior força e a maior fraqueza de cada carro marcadas.
  */
-function statBars(v: VehicleSpec): string {
+function statBars(v: VehicleSpec, withPilot?: VehicleSpec): string {
   const a = carAttributes(v);
   const vals = ATTRS.map((k) => a[k]);
-  const best = Math.max(...vals);
-  const worst = Math.min(...vals);
-  return `<div class="stats">${ATTRS.map((k, i) => {
+  // forte/fraco só quando o carro se destaca de fato dos outros (ver attributeTags)
+  const tags = attributeTags(v);
+  // bônus do piloto: segmentos a mais (ou a menos) em azul, por cima da base igual à da loja
+  const p = withPilot ? carAttributes(withPilot) : a;
+  let anyBonus = false;
+  const bars = ATTRS.map((k, i) => {
     const n = Math.max(1, Math.round(vals[i] * 10));
-    // só marca o que é mesmo forte (7+) ou fraco (3-): evita "forte" em barra mediana
-    const tag = vals[i] === best && n >= 7 ? '<em class="st-good">forte</em>' : vals[i] === worst && n <= 3 ? '<em class="st-bad">fraco</em>' : '';
-    const cls = n >= 7 ? 'hi' : n <= 3 ? 'lo' : 'mid';
-    return `<div class="stat ${cls}"><span>${ATTRIBUTE_LABEL[k]}</span><i>${Array.from({ length: 10 }, (_, j) => `<b class="${j < n ? 'on' : ''}"></b>`).join('')}</i>${tag}</div>`;
-  }).join('')}</div>`;
+    const t = Math.max(1, Math.min(10, Math.round(p[k] * 10)));
+    if (t !== n) anyBonus = true;
+    const tag = tags[k] === 'good' ? '<em class="st-good">forte</em>' : tags[k] === 'bad' ? '<em class="st-bad">fraco</em>' : '';
+    const cls = tags[k] === 'good' || n >= 8 ? 'hi' : tags[k] === 'bad' || n <= 2 ? 'lo' : 'mid';
+    const seg = (j: number) =>
+      j < Math.min(n, t) ? '<b class="on"></b>' : j < t ? `<b class="on" style="${PILOT_UP}"></b>` : j < n ? `<b style="${PILOT_DOWN}"></b>` : '<b></b>';
+    return `<div class="stat ${cls}"><span>${ATTRIBUTE_LABEL[k]}</span><i>${Array.from({ length: 10 }, (_, j) => seg(j)).join('')}</i>${tag}</div>`;
+  }).join('');
+  const legend = anyBonus
+    ? `<small class="pilot-legend" style="display:flex;align-items:center;gap:5px;font-size:10px;opacity:.85;margin-top:2px"><b style="display:inline-block;width:12px;height:7px;transform:skewX(-14deg);${PILOT_UP}"></b>bônus do piloto</small>`
+    : '';
+  return `<div class="stats">${bars}${legend}</div>`;
 }
+
+/**
+ * Prévia da próxima melhoria (loja): para cada atributo que muda, a barra atual (0..1, mesma escala
+ * de `statBars`) com o ganho em segmento "fantasma" (ou a perda em vermelho) e a variação em %.
+ */
+function upgradePreview(base: VehicleSpec, car: CarSetup, k: UpgradeKind): string {
+  const lvl = car.upgrades[k];
+  if (lvl >= MAX_UPGRADE) return '';
+  const cur = buildSpec(base, car);
+  const nxt = buildSpec(base, { ...car, upgrades: { ...car.upgrades, [k]: lvl + 1 } });
+  const ca = carAttributes(cur);
+  const na = carAttributes(nxt);
+  const handling = (s: VehicleSpec) => s.steerRate * Math.pow(s.grip, 0.25);
+  const raw: Record<string, [number, number]> = {
+    accel: [cur.accel, nxt.accel], speed: [cur.maxSpeed, nxt.maxSpeed], handling: [handling(cur), handling(nxt)], armor: [cur.armor, nxt.armor],
+  };
+  const rows: [string, number, number, number][] = [];
+  for (const a of ATTRS) {
+    if (!raw[a] || Math.abs(na[a] - ca[a]) < 0.004) continue;
+    rows.push([ATTRIBUTE_LABEL[a], ca[a], na[a], (raw[a][1] / raw[a][0] - 1) * 100]);
+  }
+  // amortecedores: embalo guardado no pouso (a perda cai de 25% até 7%)
+  if (k === 'shocks') {
+    const loss = (s: VehicleSpec) => s.landingLoss ?? 0.25;
+    const keep = (s: VehicleSpec) => Math.min(1, Math.max(0.05, (0.26 - loss(s)) / 0.22));
+    rows.push(['Pouso', keep(cur), keep(nxt), ((1 - loss(nxt)) / (1 - loss(cur)) - 1) * 100]);
+  }
+  if (!rows.length) return '';
+  return `<div class="upg-prev">${rows
+    .map(([label, c, n, pct]) => {
+      const up = n >= c;
+      const lo = Math.min(c, n) * 100;
+      const w = Math.max(1.5, Math.abs(n - c) * 100);
+      return `<div class="up-row${up ? '' : ' down'}"><span>${label}</span><i><b style="width:${lo.toFixed(1)}%"></b><u style="left:${lo.toFixed(1)}%;width:${w.toFixed(1)}%"></u></i><em>${pct >= 0 ? '+' : '−'}${Math.max(1, Math.round(Math.abs(pct)))}%</em></div>`;
+    })
+    .join('')}</div>`;
+}
+
+const PILOT_UP = 'background:linear-gradient(#8ae6ff,#1f9bd6)';
+const PILOT_DOWN = 'background:rgba(255,90,70,.35)';
 
 function pips(n: number, max: number): string {
   return `<span class="pips">${Array.from({ length: max }, (_, i) => `<i class="${i < n ? 'on' : ''}"></i>`).join('')}</span>`;
@@ -279,7 +332,7 @@ export class Menus {
   private el: HTMLElement;
   private fsButton: HTMLButtonElement;
   private camera: CameraMode = 'iso';
-  private quick: QuickOptions = { trackId: 'chem6-1', vehicleId: 'marauder', color: COLORS[0], difficulty: 'normal' };
+  private quick: QuickOptions = { trackId: 'chem6-1', characterId: CHARACTERS[1].id, vehicleId: 'marauder', color: COLORS[0], difficulty: 'normal' };
   private newChar: NewCampaignOptions = { characterId: CHARACTERS[0].id, color: COLORS[0], difficulty: 'normal', slot: 0 };
   private shopTab: 'cars' | 'upgrades' | 'weapons' = 'upgrades';
   /** planeta aberto na corrida rápida (abas) */
@@ -397,9 +450,9 @@ export class Menus {
     return Object.values(this.vehicles);
   }
 
-  private carCard(v: VehicleSpec, color: number, extra = '', spec: VehicleSpec = v): string {
+  private carCard(v: VehicleSpec, color: number, extra = '', spec: VehicleSpec = v, withPilot?: VehicleSpec): string {
     return `${carImg(v.id, color)}<b>${v.name}</b>
-      ${statBars(spec)}
+      ${statBars(spec, withPilot)}
       <em>${armamentText(v)}</em>${extra}`;
   }
 
@@ -438,15 +491,16 @@ export class Menus {
           <button class="quit" data-act="quit-game">${icon('power')} Sair do jogo</button>
         </div>
         ${this.helpBlock()}
+        <p class="version">versão ${esc(APP_VERSION)}</p>
       </div>`);
   }
 
   private helpBlock(): string {
     return `<details class="help">
       <summary>Controles</summary>
-      <p><b>Teclado:</b> ↑/W acelera · ↓/S freia/ré · ←→/A D vira · Q/E/Alt curva fechada · Ctrl esq./Espaço atira · \ ou X arma traseira · Shift assistência (nitro/pulo) · C câmera · Esc pausa · M som</p>
-      <p><b>Controle:</b> RT acelera · LT freia · analógico vira · LB curva fechada · X/RB atira · B arma traseira · L3/R3 assistência · Y câmera · Start pausa</p>
-      <p><b>Celular:</b> polegar esquerdo arrasta o volante (até o fim da faixa = curva fechada; arrastando para cima, atira sem soltar a direção) e tem TIRO, MINA e NITRO logo acima; polegar direito acelera, freia e tem o botão CURVA. Em “Som e opções”: aceleração automática (o polegar direito ganha um TIRO) e direção por inclinação.</p>
+      <p><b>Teclado:</b> ↑/W acelera · ↓/S freia/ré · ←→/A D vira · Q/E/Alt derrapar (freio de mão) · Ctrl esq./Espaço atira · \ ou X arma traseira · Shift assistência (nitro/pulo) · C câmera · Esc pausa · M som</p>
+      <p><b>Controle:</b> RT acelera · LT freia · analógico vira · LB derrapar · X/RB atira · B arma traseira · L3/R3 assistência · Y câmera · Start pausa</p>
+      <p><b>Celular:</b> polegar esquerdo no volante: toque à esquerda ou à direita da faixa para virar, como as setas do teclado (arrastando para cima, atira sem soltar a direção) e tem TIRO, a arma traseira (mina/óleo) e a assistência (nitro/pulo) logo acima, cada botão com o ícone da arma atual; polegar direito acelera, freia e tem o botão DERRAPAR. Em “Som e opções”: aceleração automática (o polegar direito ganha um TIRO) e direção por inclinação.</p>
       <p>Armas e nitro recarregam a cada volta. Dinheiro e blindagem aparecem pela pista.</p>
     </details>`;
   }
@@ -454,7 +508,9 @@ export class Menus {
   /** Como instalar quando o navegador não oferece o convite automático (iPhone, convite recusado antes etc.). */
   showInstallHelp(): void {
     const steps = this.app.ios
-      ? '<p>No <b>Safari</b>, toque em <b>Compartilhar</b> (quadrado com seta para cima) e depois em <b>“Adicionar à Tela de Início”</b>.</p><p class="small-note">Aberto pelo ícone, o jogo roda em tela cheia, sem a barra do navegador.</p>'
+      ? `<p>O iPhone não deixa sites abrirem em tela cheia: é preciso <b>adicionar o jogo à Tela de Início</b>.</p>
+         <p>${/crios/i.test(navigator.userAgent) ? 'No <b>Chrome</b>, toque em <b>Compartilhar</b> (quadrado com seta para cima, na barra de endereço)' : 'No <b>Safari</b>, toque em <b>Compartilhar</b> (quadrado com seta para cima)'} e depois em <b>“Adicionar à Tela de Início”</b>.</p>
+         <p class="small-note">Depois abra o jogo pelo ícone na Tela de Início: ele roda em tela cheia, sem a barra do navegador.</p>`
       : this.app.touch
         ? '<p>No <b>Chrome</b>, toque no menu <b>⋮</b> e depois em <b>“Instalar app”</b> ou <b>“Adicionar à tela inicial”</b>.</p>'
         : '<p>No <b>Chrome</b> ou <b>Edge</b>, clique no ícone de instalar no fim da barra de endereço (ou no menu <b>⋮ → Instalar</b>).</p>';
@@ -462,7 +518,7 @@ export class Menus {
       <div class="card small center">
         <h2>INSTALAR O JOGO</h2>
         ${steps}
-        <button class="go" data-act="main">Voltar</button>
+        <button data-act="main">← Voltar</button>
       </div>`);
   }
 
@@ -490,6 +546,8 @@ export class Menus {
           .filter((t) => t.planet === this.quickPlanet)
           .map((t) => `<button class="trk" data-track="${t.id}">${trackImg(t)}<b>${esc(t.name)}</b></button>`)
           .join('')}</div>
+        <h3>Piloto</h3>
+        ${this.charPick('quick')}
         <h3>Carro</h3>
         <div class="cars">${this.allCars.map((v) => `<button class="car" data-vehicle="${v.id}">${this.carCard(v, this.quick.color)}</button>`).join('')}</div>
         <div class="quick-opts">
@@ -498,7 +556,7 @@ export class Menus {
         </div>
         <h3>Dificuldade</h3>${this.difficultyPicker('quick')}
         <button class="go" data-act="quick-start">CORRER!</button>
-        <button class="link" data-act="main">← Voltar</button>
+        <button data-act="main">← Voltar</button>
       </div>`);
   }
 
@@ -545,10 +603,21 @@ export class Menus {
   }
 
   /** Piloto escolhido em destaque: retrato grande com a placa do nome em moldura metálica. */
-  private charFeature(): string {
-    const c = CHARACTERS.find((k) => k.id === this.newChar.characterId) ?? CHARACTERS[0];
+  private charFeature(id = this.newChar.characterId): string {
+    const c = CHARACTERS.find((k) => k.id === id) ?? CHARACTERS[0];
     return `<div class="cf-portrait">${portraitSvg(c.id, 208)}<div class="nameplate"><span>${esc(c.name)}</span></div></div>
       <div class="cf-info"><small class="home">${esc(c.homeworld ?? '')}</small><p>${esc(c.description)}</p><div class="skills">${this.bonusText(c)}</div></div>`;
+  }
+
+  /** Grade de pilotos (Nova campanha e Corrida rápida): destaque grande + retratos com placa metálica do nome. */
+  private charPick(group: 'new' | 'quick'): string {
+    const cur = group === 'quick' ? (this.quick.characterId ?? CHARACTERS[1].id) : this.newChar.characterId;
+    return `<div class="char-pick" data-cgroup="${group}">
+          <div class="char-feature">${this.charFeature(cur)}</div>
+          <div class="chars">${CHARACTERS.filter((c) => !c.secret || this.olafUnlocked).map(
+            (c) => `<button class="char ${c.secret ? 'secret' : ''}" data-char="${c.id}" data-cgroup="${group}">${portraitSvg(c.id, 120)}<span class="nameplate mini"><span>${esc(c.name)}</span></span></button>`,
+          ).join('')}</div>
+        </div>`;
   }
 
   private showNewCampaign(): void {
@@ -561,12 +630,7 @@ export class Menus {
         <p class="sub center">Comece em ${esc(PLANETS[0].name)}, Divisão B, com ${money(START_MONEY)}. Some ${PLANETS[0].promote} pontos em ${PLANETS[0].races} corridas para subir
           (1º: ${POINTS[0]} pts e ${money(CAMPAIGN_PRIZES[0])} · 2º: ${POINTS[1]} · 3º: ${POINTS[2]}).</p>
         <h3>Escolha seu piloto</h3>
-        <div class="char-pick">
-          <div class="char-feature">${this.charFeature()}</div>
-          <div class="chars">${CHARACTERS.filter((c) => !c.secret || this.olafUnlocked).map(
-            (c) => `<button class="char ${c.secret ? 'secret' : ''}" data-char="${c.id}">${portraitSvg(c.id, 120)}<b>${esc(c.name)}</b></button>`,
-          ).join('')}</div>
-        </div>
+        ${this.charPick('new')}
         <p class="pw-msg secret-msg"></p>
         <h3>Cor do carro</h3>${this.colorPicker('new')}
         <h3>Dificuldade</h3>${this.difficultyPicker('new')}
@@ -575,7 +639,7 @@ export class Menus {
           .map((s) => `<button class="slotsel" data-slotsel="${s.slot}"><b>Slot ${s.slot + 1}</b><small>${s.empty ? 'vazio' : `substituir: ${esc(s.pilot)} · ${esc(s.planet)}`}</small></button>`)
           .join('')}</div>
         <button class="go" data-act="new-start">COMEÇAR</button>
-        <button class="link" data-act="main">← Voltar</button>
+        <button data-act="main">← Voltar</button>
       </div>`);
     this.watchPadSecret();
   }
@@ -606,7 +670,7 @@ export class Menus {
           .join('')}</div>
         <p class="small-note">O jogo também salva sozinho no slot em uso ao fim de cada corrida.</p>
         ${mode === 'load' ? `<button data-act="password">${icon('key')} Usar uma senha</button>` : `<button data-act="show-password">${icon('key')} Ver senha (levar para outro aparelho)</button>`}
-        <button class="link" data-act="slots-back">← Voltar</button>
+        <button data-act="slots-back">← Voltar</button>
       </div>`);
   }
 
@@ -642,14 +706,14 @@ export class Menus {
             <h3>Rivais</h3>
             <ul class="rivals">${d.opponents
               .map(
-                (o) => `<li>${portraitSvg(o.name, 44)}<div><b style="color:${hex(o.color)}">${esc(o.name)}</b><small>${esc(o.spec.name)}</small></div>${carImg(o.spec.id, o.color, 96, 'transparent')}</li>`,
+                (o) => `<li><div class="rv-portrait">${portraitSvg(o.name, 76)}<span class="nameplate mini"><span>${esc(o.name)}</span></span></div><div><b style="color:${hex(o.color)}">${esc(o.spec.name)}</b><small>carro rival</small></div>${carImg(o.spec.id, o.color, 96, 'transparent')}</li>`,
               )
               .join('')}</ul>
           </div>
           <div class="panel">
             <h3>Seu piloto e carro</h3>
             <div class="me-row">${portraitSvg(d.character.id, 72)}<div><b>${esc(d.character.name)}</b><div class="skills">${this.bonusText(d.character)}</div></div></div>
-            <div class="mycar">${this.carCard(base ?? d.spec, s.color, '', d.spec)}</div>
+            <div class="mycar">${base ? this.carCard(base, s.color, '', buildSpec(base, s.car), d.spec) : this.carCard(d.spec, s.color)}</div>
             <ul class="upg-list">
               ${UPGRADE_KINDS.filter((k) => upgradeAvailable(s.car.vehicleId, k)).map((k) => `<li><span>${UPGRADE_LABEL[k]} <small>${UPGRADE_NAMES[k][u[k]]}</small></span> ${pips(u[k], MAX_UPGRADE)}</li>`).join('')}
             </ul>
@@ -677,7 +741,8 @@ export class Menus {
     </div>`;
     let body = '';
     if (this.shopTab === 'upgrades') {
-      body = `<div class="shop-car"><div class="shop-car-img">${carImg(s.car.vehicleId, s.color, 320)}<b>${esc(d.spec.name)}</b></div><div>${statBars(d.spec)}</div></div>` +
+      const vbase = this.vehicles[s.car.vehicleId];
+      body = `<div class="shop-car"><div class="shop-car-img">${carImg(s.car.vehicleId, s.color, 320)}<b>${esc(d.spec.name)}</b></div><div class="shop-car-stats"><h4>Atributos atuais</h4>${vbase ? statBars(buildSpec(vbase, s.car), d.spec) : statBars(d.spec)}<p class="upg-legend"><i></i>prévia do ganho da próxima melhoria (em cada item abaixo)</p></div></div>` +
         UPGRADE_KINDS.map((k) => {
           const lvl = s.car.upgrades[k];
           if (!upgradeAvailable(s.car.vehicleId, k)) {
@@ -685,7 +750,7 @@ export class Menus {
           }
           const price = upgradePrice(s.car, k);
           const next = UPGRADE_NAMES[k][lvl + 1];
-          return `<div class="shop-row"><div class="upg-icon">${itemImg(k)}</div><div class="grow"><b>${UPGRADE_LABEL[k]}: ${UPGRADE_NAMES[k][lvl]}</b> ${pips(lvl, MAX_UPGRADE)}<small>${UPGRADE_HELP[k]}${next ? ` · próximo: <b>${next}</b>` : ''}</small></div>
+          return `<div class="shop-row"><div class="upg-icon">${itemImg(k)}</div><div class="grow"><b>${UPGRADE_LABEL[k]}: ${UPGRADE_NAMES[k][lvl]}</b> ${pips(lvl, MAX_UPGRADE)}<small>${UPGRADE_HELP[k]}${next ? ` · próximo: <b class="upg-next">${next}</b>` : ''}</small>${vbase ? upgradePreview(vbase, s.car, k) : ''}</div>
             ${price === null ? '<span class="maxed">MÁXIMO</span>' : `<button class="buy" data-upgrade="${k}" ${price > s.money ? 'disabled' : ''}>${money(price)}</button>`}</div>`;
         }).join('');
     } else if (this.shopTab === 'weapons') {
@@ -693,12 +758,12 @@ export class Menus {
       body = CHARGE_KINDS.map((k) => {
         const price = chargePrice(s.car, k, baseCar);
         const kind = chargeWeapon(baseCar, k);
-        const label = `${CHARGE_LABEL[k]} · ${weaponFull(kind)}`;
         const total = k === 'front' ? d.spec.frontCharges : k === 'rear' ? d.spec.rearCharges : d.spec.nitroCharges;
         const cap = total + Math.max(0, maxExtraCharges(baseCar, k) - s.car.charges[k]);
-        return `<div class="shop-row"><div class="upg-icon">${itemImg(kind)}</div><div class="grow"><b>${label}</b> ${pips(total, cap)}<small>${total} carga(s) por volta · +1 por compra (máx. 7)</small></div>
+        return `<div class="weapon-card"><div class="weapon-img">${itemImg(kind, 200)}<span class="weapon-slot">${CHARGE_LABEL[k]}</span></div><div class="grow"><b>${esc(weaponFull(kind))}</b>${pips(total, cap)}<small>${total} carga(s) por volta · +1 por compra (máx. 7)</small></div>
           ${price === null ? '<span class="maxed">MÁXIMO</span>' : `<button class="buy" data-charge="${k}" ${price > s.money ? 'disabled' : ''}>${money(price)}</button>`}</div>`;
       }).join('');
+      body = `<div class="weapon-cards">${body}</div>`;
     } else {
       const trade = tradeInValue(s.car, d.vehicles[s.car.vehicleId]);
       body =
@@ -713,7 +778,7 @@ export class Menus {
               : !forSale
                 ? `<span class="maxed">${icon('lock')} NÃO VENDIDO NESTE PLANETA</span>`
                 : `<button class="buy" data-buycar="${v.id}" ${net > s.money ? 'disabled' : ''}>${net === 0 ? 'TROCAR' : money(net)}</button>`;
-            return `<div class="shop-carcard ${mine ? 'mine' : ''} ${forSale || mine ? '' : 'locked'}"><div class="car">${this.carCard(v, s.color, `<small>Preço: ${money(CAR_PRICES[v.id].price)}</small>`)}</div>${action}</div>`;
+            return `<div class="shop-carcard ${mine ? 'mine' : ''} ${forSale || mine ? '' : 'locked'}"><div class="car">${this.carCard(v, mine ? s.color : SHOWROOM_COLOR[v.id] ?? s.color, `<small>Preço: ${money(CAR_PRICES[v.id].price)}</small>`)}</div>${action}</div>`;
           })
           .join('')}</div>`;
     }
@@ -723,7 +788,7 @@ export class Menus {
         ${notice ? `<div class="notice">${iconizeHtml(notice)}</div>` : ''}
         ${tabs}
         <div class="shop-body">${body}</div>
-        <button class="go" data-act="hub">← Voltar à garagem</button>
+        <button data-act="hub">← Voltar à garagem</button>
       </div>`);
   }
 
@@ -737,7 +802,7 @@ export class Menus {
         <p class="small-note">${saving ? 'Guarde esta senha para continuar em outro aparelho ou navegador.' : 'Cole aqui uma senha salva para continuar a campanha.'}</p>
         <textarea class="pw" rows="5" ${saving ? 'readonly' : ''} spellcheck="false">${saving ? esc(code) : ''}</textarea>
         <p class="pw-msg"></p>
-        ${saving ? '<button class="go" data-act="copy-password">Copiar</button><button data-act="hub">Voltar</button>' : '<button class="go" data-act="load-password">Carregar</button><button data-act="load">Voltar</button>'}
+        ${saving ? '<button class="go" data-act="copy-password">Copiar</button><button data-act="hub">← Voltar</button>' : '<button class="go" data-act="load-password">Carregar</button><button data-act="load">← Voltar</button>'}
       </div>`);
   }
 
@@ -772,7 +837,7 @@ export class Menus {
         ${a.user ? `<button data-act="clear-music">${icon('trash')} Remover músicas do aparelho</button>` : ''}
         ${total ? `<button data-act="skip-track">${icon('next')} Próxima música</button>` : ''}
         <p class="pw-msg"></p>
-        <button class="go" data-act="close-settings">Voltar</button>
+        <button data-act="close-settings">← Voltar</button>
       </div>`);
     const vol = this.el.querySelector<HTMLInputElement>('.vol')!;
     vol.addEventListener('input', () => this.actions.setMusicVolume(Number(vol.value) / 100));
@@ -820,13 +885,13 @@ export class Menus {
                <div class="join-row"><input class="room" maxlength="4" placeholder="ABCD" autocapitalize="characters" spellcheck="false"/><button class="buy" data-act="online-join">Entrar</button></div>`
         }
         <p class="pw-msg online-msg"></p>
-        <button class="link" data-act="main">← Voltar</button>
+        <button data-act="main">← Voltar</button>
       </div>`);
   }
 
   /** "Conectando…" enquanto a sala abre. */
   showOnlineWait(text: string): void {
-    this.show(`<div class="card small center"><h2>ONLINE</h2><p class="sub">${esc(text)}</p><button class="link" data-act="online-leave">Cancelar</button></div>`);
+    this.show(`<div class="card small center"><h2>ONLINE</h2><p class="sub">${esc(text)}</p><button data-act="online-leave">Cancelar</button></div>`);
   }
 
   showOnlineNotice(text: string): void {
@@ -864,7 +929,7 @@ export class Menus {
             : `<p class="sub center">${v.racing ? 'Corrida em andamento — você entra na próxima.' : 'Esperando o host largar…'}</p>`
         }
         <h3>Câmera</h3>${this.cameraPicker()}
-        <button class="link" data-act="online-leave">← Sair da sala</button>
+        <button data-act="online-leave">← Sair da sala</button>
       </div>`);
   }
 
@@ -929,7 +994,7 @@ export class Menus {
     sel('.cam', (b) => b.dataset.cam === this.camera);
     sel('.car[data-vehicle]', (b) => b.dataset.vehicle === this.quick.vehicleId);
     sel('.trk', (b) => b.dataset.track === this.quick.trackId);
-    sel('.char', (b) => b.dataset.char === this.newChar.characterId);
+    sel('.char', (b) => b.dataset.char === (b.dataset.cgroup === 'quick' ? this.quick.characterId : this.newChar.characterId));
     sel('.tab[data-tab]', (b) => b.dataset.tab === this.shopTab);
     sel('.tab[data-qplanet]', (b) => b.dataset.qplanet === this.quickPlanet);
     sel('.slotsel', (b) => Number(b.dataset.slotsel) === this.newChar.slot);
@@ -947,7 +1012,11 @@ export class Menus {
     }
     if (d.vehicle) this.quick.vehicleId = d.vehicle;
     if (d.track) this.quick.trackId = d.track;
-    if (d.char) {
+    if (d.char && d.cgroup === 'quick') {
+      this.quick.characterId = d.char;
+      const feat = this.el.querySelector('.char-pick[data-cgroup="quick"] .char-feature');
+      if (feat) feat.innerHTML = this.charFeature(d.char);
+    } else if (d.char) {
       // toque: 5 toques rápidos no Tarquinn liberam o Olaf
       if (d.char === 'tarquinn' && !this.olafUnlocked) {
         const now = performance.now();

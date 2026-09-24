@@ -10,6 +10,9 @@ export const SFX_FILES = [
 ] as const;
 export type SfxName = (typeof SFX_FILES)[number];
 
+/** Loops de motor gravado (public/audio/motor), do mais lento ao mais rápido. */
+export const ENGINE_LOOPS = ['motor_lenta', 'motor_0', 'motor_1'] as const;
+
 const buffers = new Map<string, AudioBuffer>();
 const pending = new Map<string, Promise<AudioBuffer | null>>();
 
@@ -34,7 +37,8 @@ function trimStart(ctx: BaseAudioContext, b: AudioBuffer): AudioBuffer {
   return out;
 }
 
-export function loadBuffer(ctx: BaseAudioContext, path: string): Promise<AudioBuffer | null> {
+/** `trim = false` para loops (aparar o começo quebraria a emenda do loop). */
+export function loadBuffer(ctx: BaseAudioContext, path: string, trim = true): Promise<AudioBuffer | null> {
   const key = path;
   const have = buffers.get(key);
   if (have) return Promise.resolve(have);
@@ -44,7 +48,7 @@ export function loadBuffer(ctx: BaseAudioContext, path: string): Promise<AudioBu
       .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(String(r.status)))))
       .then((ab) => ctx.decodeAudioData(ab))
       .then((b) => {
-        const t = trimStart(ctx, b);
+        const t = trim ? trimStart(ctx, b) : b;
         buffers.set(key, t);
         return t;
       })
@@ -65,7 +69,10 @@ export function sfxPath(name: SfxName): string {
 
 /** Começa a baixar todos os efeitos. Chamado ao destravar o áudio. */
 export function preloadSfx(ctx: BaseAudioContext): Promise<void> {
-  return Promise.all(SFX_FILES.map((n) => loadBuffer(ctx, sfxPath(n)))).then(() => undefined);
+  return Promise.all([
+    ...SFX_FILES.map((n) => loadBuffer(ctx, sfxPath(n))),
+    ...ENGINE_LOOPS.map((n) => loadBuffer(ctx, `audio/motor/${n}.mp3`, false)),
+  ]).then(() => undefined);
 }
 
 export function sfxBuffer(name: SfxName): AudioBuffer | null {

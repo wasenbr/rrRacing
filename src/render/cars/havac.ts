@@ -262,7 +262,7 @@ export function createHavac(color: number, shadows: boolean): CarVisual {
 
   const eye = new THREE.Vector3(0, 1.22, 0.5);
   // o cockpit fica preso à carroceria (não ao casco que balança), alinhado com a câmera
-  const { cockpit, steeringWheel } = cockpitRig(k, { eye, halfWidth: 0.85, weapon: 'sundog' }, body);
+  const { cockpit, steeringWheel } = cockpitRig(k, { eye, halfWidth: 0.85, hoodLength: 1.45, weapon: 'sundog', stripes: 3, skirt: true, intake: false }, body);
 
   k.merge([sun, glow], hull);
 

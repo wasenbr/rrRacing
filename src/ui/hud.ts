@@ -57,7 +57,7 @@ export interface HudData {
   front: HudSlot;
   rear: HudSlot;
   assist: HudSlot;
-  cars: { x: number; z: number; color: string; me: boolean }[];
+  cars: { x: number; z: number; heading?: number; color: string; me: boolean }[];
 }
 
 const ORD = ['', '1º', '2º', '3º', '4º', '5º', '6º'];
@@ -163,7 +163,11 @@ export class Hud {
       this.pos.className = `rh-pos p${data.place}`;
       this.pos.innerHTML = `<b>${ORD[data.place] ?? data.place}</b>`;
     }
-    setText(this.money, `$${data.money.toLocaleString('pt-BR')}`);
+    // toLocaleString é caro (Intl): só formata quando o valor muda
+    if (this.moneyNow !== data.money) {
+      this.moneyNow = data.money;
+      setText(this.money, `$${data.money.toLocaleString('pt-BR')}`);
+    }
 
     const ratio = Math.max(0, data.armor);
     const lit = Math.ceil(ratio * ARMOR_DOTS - 0.01);
@@ -175,6 +179,10 @@ export class Hud {
       this.armor.querySelectorAll('i').forEach((dot, k) => dot.classList.toggle('on', k < lit));
     }
 
+    const d = [data.front, data.rear, data.assist];
+    const wkey = d.map((x) => `${x.icon}${x.n}${x.active ? 1 : 0}${x.label}`).join('|');
+    if (this.weaponsKey === wkey) return this.minimapTick(dt, data);
+    this.weaponsKey = wkey;
     const slot = (s: HudSlot, cls: string) =>
       `<div class="w ${cls}${s.active ? ' active' : ''}${s.n === 0 ? ' empty' : ''}" title="${s.label}"><div class="ic">${ICONS[s.icon] ?? ICONS.laser}</div><b>${s.n}</b><small>${s.label}</small></div>`;
     const html = slot(data.front, 'front') + slot(data.rear, 'rear') + slot(data.assist, `assist ${data.assist.icon}`);
@@ -182,6 +190,13 @@ export class Hud {
       this.weapons.innerHTML = html;
       this.weapons.dataset.v = html;
     }
+    this.minimapTick(dt, data);
+  }
+
+  private moneyNow = NaN;
+  private weaponsKey = '';
+
+  private minimapTick(dt: number, data: HudData): void {
 
     // minimapa a ~30 quadros por segundo basta
     this.mapTimer -= dt;
@@ -190,15 +205,44 @@ export class Hud {
     const ctx = this.mapCtx;
     ctx.clearRect(0, 0, this.minimap.width, this.minimap.height);
     ctx.drawImage(this.mapBase, 0, 0);
+    // tamanhos em pixels de tela (o canvas é reduzido pelo CSS): rivais com ~8 px e contorno
+    // preto; o jogador é uma seta apontando para onde o carro vai
+    const k = this.minimap.width / Math.max(40, this.minimap.clientWidth || this.minimap.width);
     for (const c of [...data.cars].sort((a, b) => Number(a.me) - Number(b.me))) {
       const [x, y] = this.mapTransform(c.x, c.z);
-      ctx.beginPath();
-      ctx.arc(x, y, c.me ? 9 : 7, 0, Math.PI * 2);
-      ctx.fillStyle = c.color;
-      ctx.fill();
-      ctx.lineWidth = c.me ? 3.5 : 2;
-      ctx.strokeStyle = c.me ? '#fff' : '#000';
-      ctx.stroke();
+      ctx.lineJoin = 'round';
+      if (c.me) {
+        const h = c.heading ?? 0;
+        const [fx, fy] = this.mapTransform(c.x + Math.sin(h), c.z + Math.cos(h));
+        const a = Math.atan2(fy - y, fx - x);
+        const r = 7.5 * k;
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(a);
+        ctx.beginPath();
+        ctx.moveTo(r * 1.25, 0);
+        ctx.lineTo(-r * 0.85, r * 0.8);
+        ctx.lineTo(-r * 0.4, 0);
+        ctx.lineTo(-r * 0.85, -r * 0.8);
+        ctx.closePath();
+        ctx.lineWidth = 3.2 * k;
+        ctx.strokeStyle = '#000';
+        ctx.stroke();
+        ctx.fillStyle = c.color;
+        ctx.fill();
+        ctx.lineWidth = 1.2 * k;
+        ctx.strokeStyle = '#fff';
+        ctx.stroke();
+        ctx.restore();
+      } else {
+        ctx.beginPath();
+        ctx.arc(x, y, 3.8 * k, 0, Math.PI * 2);
+        ctx.fillStyle = c.color;
+        ctx.fill();
+        ctx.lineWidth = 1.5 * k;
+        ctx.strokeStyle = '#000';
+        ctx.stroke();
+      }
     }
     this.tickToast(dt);
   }

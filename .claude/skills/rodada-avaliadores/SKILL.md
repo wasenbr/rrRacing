@@ -1,12 +1,13 @@
 ---
 name: rodada-avaliadores
-description: Loop de melhoria do Rock 'n' Roll Racing 3D com avaliadores independentes e exigentes (visual, carros, jogabilidade, som, interface/celular). Use quando pedirem "rodada de melhorias", "submeta aos avaliadores", "/rodada-avaliadores" ou para continuar melhorando até todos aprovarem.
+description: Loop de melhoria do Rock 'n' Roll Racing 3D com avaliadores independentes e exigentes (fixos: visual, carros, jogabilidade, interface/celular, som, desempenho, QA; eventuais: campanha, pistas, online). Use quando pedirem "rodada de melhorias", "submeta aos avaliadores", "/rodada-avaliadores" ou para continuar melhorando até todos aprovarem.
 ---
 
 # Rodada de melhorias com avaliadores
 
 Objetivo: um remake **fiel ao original** (identidade, pistas, carros, armas, campanha) com a
-**qualidade 3D do Motor Rock**, e só parar quando **os cinco avaliadores aprovarem** na mesma rodada.
+**qualidade 3D do Motor Rock**, e só parar quando **todos os avaliadores aprovarem** (fixos na mesma rodada; eventuais na última vez
+em que rodaram).
 
 Referências (inspiração, nada entra no jogo):
 - `referencias/original.md` — fatos do original (planetas, pistas, carros, armas, pontos, pilotos).
@@ -30,12 +31,15 @@ rodada = 1
 repita:
   1. MELHORAR   aplicar as correções pendentes (na 1ª rodada: plano próprio a partir das referências)
   2. VERIFICAR  npm run typecheck && npm test   (tem que passar; senão corrigir antes de seguir)
-  3. EVIDÊNCIAS reiniciar o `npm run dev` e rodar:
-                node scripts/evidencias.mjs <scratchpad>/rN tudo
-  4. AVALIAR    lançar os 5 avaliadores EM PARALELO (Agent, general-purpose, sempre agentes NOVOS
-                a cada rodada, para não ficarem condescendentes). Prompt: seção "Avaliadores".
-  5. DECIDIR    fim SÓ se os 5 avaliadores tiverem "aprovado": true, "nota" ≥ 8 e todos os
-                critérios ≥ 8 (conferir os números; não aceitar nota < 8 mesmo com "aprovado": true).
+  3. EVIDÊNCIAS reiniciar o `npm run dev` (um só; conferir a porta), aquecer com uma requisição à
+                página (com o vite em Idle a 1ª carga fria pode passar de 3 min) e rodar:
+                node scripts/evidencias.mjs <scratchpad>/rN tudo http://localhost:<porta>/
+  4. AVALIAR    lançar EM PARALELO os avaliadores FIXOS + os EVENTUAIS que tocam nesta rodada
+                (Agent, general-purpose, sempre agentes NOVOS a cada rodada, para não ficarem
+                condescendentes). Prompt: seção "Avaliadores".
+  5. DECIDIR    fim SÓ se todos os fixos desta rodada E a última avaliação de cada eventual tiverem
+                "aprovado": true, "nota" ≥ 8 e todos os critérios ≥ 8 (conferir os números; não
+                aceitar nota < 8 mesmo com "aprovado": true).
                 senão -> juntar os problemas (bloqueantes primeiro), rodada += 1, voltar ao passo 1
                          AUTOMATICAMENTE: corrigir as pendências e reavaliar sem parar para perguntar.
                          Não encerrar a resposta com pendências abertas só para relatar notas.
@@ -43,7 +47,8 @@ repita:
   comandos longos (evidências completas levam vários minutos) sempre em segundo plano. Se atingir, parar e relatar ao usuário o que falta e por quê.
 ```
 
-Registrar cada rodada em `referencias/rodadas.md`: notas de cada avaliador, problemas, o que foi feito.
+Registrar cada rodada em `referencias/rodadas.md`: notas de cada avaliador (marcar quais eventuais
+rodaram), problemas, o que foi feito. Com o argumento "uma rodada": fazer só uma volta do loop e relatar.
 
 ### Evidências (scripts/evidencias.mjs)
 
@@ -61,7 +66,13 @@ O render é por software (SwiftShader); lentidão nas capturas não é defeito d
 
 ## Avaliadores
 
-Cinco agentes, um por área. Cada um recebe este prompt-base mais o foco da área:
+Um agente por área. **Fixos** rodam em toda rodada. **Eventuais** rodam quando:
+- é a 1ª rodada do loop, ou já se passaram 3 rodadas desde a última avaliação deles; ou
+- a rodada mexeu em arquivos da área (ver "Arquivos" de cada um); ou
+- o usuário pediu, ou há item novo do `feedback-usuario.md` na área; ou
+- a última avaliação deles reprovou (roda de novo até aprovar).
+
+Cada um recebe este prompt-base mais o foco da área:
 
 > Você é um avaliador independente e EXTREMAMENTE exigente de um jogo de corrida de combate 3D
 > para navegador (remake de Rock 'n' Roll Racing, em `C:\Projetos\rrRacing`). Sua área: **<ÁREA>**.
@@ -98,8 +109,31 @@ Focos:
 - **Som** — `som/metricas.json`, espectrogramas `som/*.png`, `src/audio/*`: motor (variação com
   rotação, corpo, nitro), impacto dos efeitos, mixagem (efeitos audíveis sobre a música, sem clipping),
   música (variedade, energia rock), locutor, espacialização.
-- **Desempenho** (dentro de Interface e celular) — o jogo deve rodar liso em hardware simples:
-  conferir níveis de qualidade, resolução dinâmica e que controles de toque só aparecem na corrida.
+- **Desempenho** — o jogo deve rodar liso e gastar pouca bateria em hardware simples (tablet,
+  celular, notebook na bateria): `desempenho.json` (fps médio e p95 por nível, CPU lenta), níveis de
+  qualidade, resolução dinâmica, limites de fps (menu, pausa, bateria, telas de 120 Hz), aba oculta,
+  custo por quadro no código (alocações no laço, sombras, partículas, HUD no DOM), áudio sem picote
+  (latência do AudioContext, trabalho na thread principal), controles de toque só na corrida.
+  Código em `src/core/game.ts`, `src/render/quality.ts`, `src/render/*`, `src/audio/*`.
+- **QA (estabilidade)** — caçar bugs: `erros.txt`, estados quebrados (sair no meio da corrida,
+  pausar/retomar, girar o celular na pausa, perda do contexto WebGL, aba oculta, salvar/carregar
+  slot e senha, trocar de carro/piloto, fim de campanha, reiniciar corrida), fluxo de menus sem beco
+  sem saída, regras da corrida (voltas, largada antes da linha, posições, pontos), cobertura dos
+  testes (`src/**/*.test.ts`) e casos que faltam. Cada problema com passo a passo para reproduzir.
+
+Eventuais:
+- **Campanha** — fidelidade ao original (`referencias/original.md`: 6 planetas, divisões, pontos
+  para subir, rivais, prêmios), curva de dificuldade entre planetas, economia (prêmios × preços de
+  carros/melhorias/armas), progressão de carros, rivais que evoluem, garagem/loja entre corridas,
+  salvar em slots e senha, fim da campanha. Arquivos: `src/sim/campaign*`, `src/sim/garage.ts`,
+  `src/data/*`, telas de garagem/loja/resultados em `src/ui/*`.
+- **Pistas** — cada pista contra seu mapa original em `referencias/snes/mapas/` (traçado, curvas,
+  saltos, vãos, rampas, minas/pickups), identidade de cada planeta, largura e legibilidade, pistas
+  em que a IA empaca (`jogo.json`: tempo parado, batidas), variedade dentro do planeta.
+  Arquivos: `src/data/tracks*`, `src/sim/track.ts`, `src/render/track*`, `src/render/scenery.ts`.
+- **Online** — sala, entrada por código/link, sincronia dos carros, atraso, queda e reconexão de
+  um jogador, fim de corrida e placar, o que acontece com aba oculta. Arquivos: `src/net/*` e telas
+  online em `src/ui/*`.
 
 ## Regras para quem implementa
 
@@ -107,5 +141,8 @@ Focos:
   créditos em `public/audio/CREDITOS.md`); nunca rips do jogo original. Música do usuário vem de `music/`.
 - Manter a simulação determinística e os testes passando; atualizar testes quando a regra mudar de propósito.
 - Cuidar do celular: nada que derrube o desempenho no touch (`isTouchDevice`).
+- Processos pesados (voz em Python, vite, `evidencias.mjs`, vitrine, Chrome das capturas) sempre com
+  prioridade baixa: `(Get-Process -Id <pid>).PriorityClass = 'Idle'` logo após iniciar, filhos incluídos;
+  no máximo 2 gerações de voz em paralelo. Repassar esta regra no prompt de cada subagente.
 - Corrigir primeiro bloqueantes e altos; um problema só sai da lista quando o avaliador da rodada
   seguinte não o repetir.

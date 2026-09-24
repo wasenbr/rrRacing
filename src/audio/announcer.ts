@@ -59,10 +59,9 @@ export function voiceSlug(name: string): string {
 interface Manifest {
   names: string[];
   lines: Record<string, string[]>;
+  /** bordões gravados inteiros com o nome ("Viper jams into first!"): frase -> apelido -> arquivos */
+  combos?: Record<string, Record<string, string[]>>;
 }
-
-/** Falas de euforia: tocadas um pouco mais rápidas e agudas (empolgação de narrador de arena). */
-const HYPE = new Set<string>(['ouch', 'wow', 'holyToledo', 'hotFury', 'jamsFirst', 'finishFirst', 'wipedOut', 'lightsUp', 'dominating', 'lastLap', 'start']);
 
 /** Prioridades: 3 = fura a fila e corta o que estiver falando. */
 type Priority = 1 | 2 | 3;
@@ -99,7 +98,8 @@ export class Announcer {
       .then((r) => (r.ok ? (r.json() as Promise<Manifest>) : Promise.reject(new Error('sem locutor'))))
       .then(async (m) => {
         this.manifest = m;
-        const files = Object.values(m.lines).flat();
+        const combos = Object.values(m.combos ?? {}).flatMap((bySlug) => Object.values(bySlug).flat());
+        const files = [...Object.values(m.lines).flat(), ...combos];
         await Promise.all(files.map((f) => loadBuffer(a.ctx, `audio/locutor/${f}`)));
       })
       .catch(() => {
@@ -107,12 +107,13 @@ export class Announcer {
       });
   }
 
-  private buffer(key: string): AudioBuffer | null {
-    const list = this.manifest?.lines[key];
+  private buffer(key: string, combo: string | null = null): AudioBuffer | null {
+    const list = combo ? this.manifest?.combos?.[key]?.[combo] : this.manifest?.lines[key];
     if (!list?.length) return null;
-    const opts = list.length > 1 ? list.filter((f) => f !== this.lastPick.get(key)) : list;
+    const pickKey = combo ? `${key}@${combo}` : key;
+    const opts = list.length > 1 ? list.filter((f) => f !== this.lastPick.get(pickKey)) : list;
     const file = opts[Math.floor(Math.random() * opts.length)];
-    this.lastPick.set(key, file);
+    this.lastPick.set(pickKey, file);
     return getBuffer(`audio/locutor/${file}`);
   }
 
@@ -133,22 +134,24 @@ export class Announcer {
     if (!speaking && priority < 3 && now - this.lastSpoke < (priority === 1 ? 4 : 1.8)) return;
 
     const slug = name ? voiceSlug(name) : null;
-    const nameBuf = slug ? this.buffer(`name:${slug}`) : null;
-    const lineBuf = this.buffer(key);
+    // bordão gravado inteiro ("Viper jams into first!") soa melhor que nome + frase emendados;
+    // de vez em quando usa a versão emendada, só para não repetir sempre o mesmo take
+    const comboBuf = slug && Math.random() < 0.9 ? this.buffer(key, slug) : null;
+    const nameBuf = slug && !comboBuf ? this.buffer(`name:${slug}`) : null;
+    const lineBuf = comboBuf ?? this.buffer(key);
     const a = audio();
-    if (a && lineBuf && (!slug || nameBuf)) {
+    if (a && lineBuf && (!slug || comboBuf || nameBuf)) {
       this.stop();
       const t = a.ctx.currentTime + 0.02;
       let at = t;
-      // cada fala sai um pouco diferente; as de euforia, mais rápidas e agudas
-      const hype = HYPE.has(key);
-      const rate = (hype ? 1.05 : 1) + (Math.random() * 2 - 1) * 0.025;
+      // velocidade natural: acelerar afinava a voz (soava esquilo); a energia vem da gravação
+      const rate = 1;
       if (nameBuf) {
         this.play(nameBuf, at, rate);
         // a fala entra logo depois do nome (encaixe como no original)
         at += Math.max(0.15, nameBuf.duration / rate - 0.22);
       }
-      this.play(lineBuf, at, hype ? rate + 0.02 : rate);
+      this.play(lineBuf, at, rate);
       const dur = at - t + lineBuf.duration / rate;
       duckFor(0.5, dur);
       this.busyUntil = now + dur;

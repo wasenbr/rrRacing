@@ -63,22 +63,76 @@ class Pic {
     }
     return `filter="url(#${k})"`;
   }
+  private texs = new Map<string, string>();
+  /**
+   * Textura de material por filtro (ruído + relevo iluminado): couro (grão e dobras com brilho),
+   * metal escovado (riscos horizontais), tecido (trama fina), pele (poros e manchas), pelo.
+   * Devolve o id do filtro; use com `texture()`.
+   */
+  tex(kind: TexKind): string {
+    let k = this.texs.get(kind);
+    if (k) return k;
+    k = `${this.id}t${this.n++}`;
+    const U = `x="0" y="0" width="200" height="200" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB"`;
+    const gray = '<feColorMatrix type="saturate" values="0"/>';
+    const body: Record<TexKind, string> = {
+      leather:
+        `<feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="2" seed="3" result="g"/>` +
+        `<feTurbulence type="fractalNoise" baseFrequency="0.018 0.045" numOctaves="3" seed="8" result="f"/>` +
+        `<feComposite in="g" in2="f" operator="arithmetic" k2="0.15" k3="1" result="h"/>` +
+        `<feDiffuseLighting in="h" surfaceScale="1.6" lighting-color="#fff" result="d"><feDistantLight azimuth="225" elevation="48"/></feDiffuseLighting>` +
+        `<feSpecularLighting in="h" surfaceScale="1.6" specularConstant="0.9" specularExponent="18" lighting-color="#fff" result="s"><feDistantLight azimuth="225" elevation="40"/></feSpecularLighting>` +
+        `<feComposite in="s" in2="d" operator="arithmetic" k2="0.7" k3="1"/>${gray}`,
+      metal:
+        `<feTurbulence type="fractalNoise" baseFrequency="0.004 0.9" numOctaves="2" seed="5"/>${gray}` +
+        `<feComponentTransfer><feFuncR type="linear" slope="1.8" intercept="-0.4"/><feFuncG type="linear" slope="1.8" intercept="-0.4"/><feFuncB type="linear" slope="1.8" intercept="-0.4"/></feComponentTransfer>`,
+      fabric:
+        `<feTurbulence type="fractalNoise" baseFrequency="1.1 0.12" numOctaves="1" seed="2" result="a"/><feTurbulence type="fractalNoise" baseFrequency="0.12 1.1" numOctaves="1" seed="4" result="b"/>` +
+        `<feComposite in="a" in2="b" operator="arithmetic" k2="0.5" k3="0.5" result="w"/><feTurbulence type="fractalNoise" baseFrequency="0.03" numOctaves="2" seed="9" result="c"/>` +
+        `<feComposite in="w" in2="c" operator="arithmetic" k2="0.6" k3="0.5" result="h"/><feDiffuseLighting in="h" surfaceScale="1.2" lighting-color="#fff"><feDistantLight azimuth="225" elevation="55"/></feDiffuseLighting>${gray}`,
+      skin:
+        `<feTurbulence type="fractalNoise" baseFrequency="1.6" numOctaves="2" seed="11" result="p"/><feTurbulence type="fractalNoise" baseFrequency="0.07" numOctaves="2" seed="12" result="m"/>` +
+        `<feComposite in="p" in2="m" operator="arithmetic" k2="0.45" k3="0.7"/>${gray}`,
+      fur:
+        `<feTurbulence type="fractalNoise" baseFrequency="0.25 1.6" numOctaves="3" seed="6" result="h"/><feDiffuseLighting in="h" surfaceScale="3" lighting-color="#fff"><feDistantLight azimuth="235" elevation="50"/></feDiffuseLighting>${gray}`,
+      stubble:
+        `<feTurbulence type="fractalNoise" baseFrequency="2.1" numOctaves="1" seed="21"/>` +
+        `<feColorMatrix type="matrix" values="0 0 0 0 0.14 0 0 0 0 0.09 0 0 0 0 0.06 -8 0 0 0 3.25"/>`,
+      stone:
+        `<feTurbulence type="fractalNoise" baseFrequency="0.06" numOctaves="4" seed="14" result="h"/><feDiffuseLighting in="h" surfaceScale="5" lighting-color="#fff"><feDistantLight azimuth="225" elevation="40"/></feDiffuseLighting>${gray}`,
+    };
+    // recentra o relevo em cinza médio (0,5): overlay neutro, sem clarear o material
+    const center: Partial<Record<TexKind, [number, number]>> = { leather: [1.2, -0.52], fabric: [1.3, -0.56], skin: [1.4, -0.2], fur: [1.3, -0.41], stone: [1.2, -0.22] };
+    const c = center[kind];
+    const ct = c ? `<feComponentTransfer>${['R', 'G', 'B'].map((ch) => `<feFunc${ch} type="linear" slope="${c[0]}" intercept="${c[1]}"/>`).join('')}</feComponentTransfer>` : '';
+    // luz e sombra do relevo viram camadas branca/preta com alfa (independe do tom do material)
+    const split = kind === 'stubble' ? '' : '<feComponentTransfer result="tx"/><feColorMatrix in="tx" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -3 0 0 0 1.5" result="dk"/><feColorMatrix in="tx" type="matrix" values="0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 3 0 0 0 -1.5" result="lt"/><feMerge><feMergeNode in="dk"/><feMergeNode in="lt"/></feMerge>';
+    this.defs.push(`<filter id="${k}" ${U}>${body[kind]}${ct}${split}</filter>`);
+    this.texs.set(kind, k);
+    return k;
+  }
+  /** Aplica a textura `kind` dentro do contorno `d` (mistura overlay/soft-light). */
+  texture(d: string, kind: TexKind, opacity = 0.45, blend = 'normal'): void {
+    const c = this.clip(`<path d="${d}"/>`);
+    this.out.push(`<g clip-path="${c}"><rect width="200" height="200" filter="url(#${this.tex(kind)})" opacity="${opacity}" style="mix-blend-mode:${blend}"/></g>`);
+  }
 }
+type TexKind = 'leather' | 'metal' | 'fabric' | 'skin' | 'fur' | 'stone' | 'stubble';
 
 /** Contorno de tinta: escuro, fino e translúcido — pintura, não ícone. */
-const ink = (w = 2) => `stroke="${INK}" stroke-opacity="0.5" stroke-width="${w * 0.6}" stroke-linejoin="round" stroke-linecap="round"`;
+const ink = (w = 2) => `stroke="${INK}" stroke-opacity="0.32" stroke-width="${w * 0.45}" stroke-linejoin="round" stroke-linecap="round"`;
 
 /**
  * Modelagem de rosto pintado: órbitas e sombra sob a sobrancelha, lateral do nariz, sob o lábio e o
  * queixo (oclusão), maçãs e testa iluminadas, ponte do nariz com brilho e calor subcutâneo.
  * Chamar dentro do clip do rosto. `cool` troca a sombra quente por fria (peles azuis/verdes).
  */
-function sculpt(P: Pic, skin: string, o: { eyeY?: number; dx?: number; noseY?: number; mouthY?: number; warm?: string; cool?: boolean; chin?: number } = {}): void {
+function sculpt(P: Pic, skin: string, o: { eyeY?: number; dx?: number; noseY?: number; mouthY?: number; warm?: string; cool?: boolean; chin?: number; shadow?: string } = {}): void {
   const ey = o.eyeY ?? 92;
   const dx = o.dx ?? 16;
   const ny = o.noseY ?? 112;
   const my = o.mouthY ?? 126;
-  const dk = o.cool ? shade(skin, 0.42) : shade(skin, 0.5);
+  const dk = o.shadow ?? (o.cool ? shade(skin, 0.42) : shade(skin, 0.5));
   const warm = o.warm ?? (o.cool ? '#6a8aff' : '#e0503a');
   const b3 = P.blur(3.2);
   const b2 = P.blur(1.8);
@@ -95,6 +149,12 @@ function sculpt(P: Pic, skin: string, o: { eyeY?: number; dx?: number; noseY?: n
   P.add(`<ellipse cx="90" cy="${ey - 26}" rx="15" ry="8" fill="#fff" opacity="0.32"/><ellipse cx="${100 - dx - 6}" cy="${ey + 11}" rx="9" ry="4.5" fill="#fff" opacity="0.28"/><ellipse cx="97" cy="${my + 12}" rx="6" ry="3" fill="#fff" opacity="0.2"/>`);
   P.add('</g>');
   P.add(`<g ${b2}><ellipse cx="98" cy="${ny - 9}" rx="2.2" ry="9" fill="#fff" opacity="0.4"/><ellipse cx="98.5" cy="${ny - 2}" rx="2.6" ry="1.8" fill="#fff" opacity="0.55"/></g>`);
+  // planos: têmpora e lateral do nariz em meia-luz, faixa do malar
+  P.add(`<g ${P.blur(2.6)}><path d="M${100 - dx - 14} ${ey + 8} C${100 - dx - 6} ${ey + 14} ${100 - dx + 6} ${ey + 13} ${100 - dx + 10} ${ey + 8}" fill="none" stroke="#fff" stroke-width="3" opacity="0.2"/>` +
+    `<path d="M${100 + dx + 14} ${ey + 8} C${100 + dx + 6} ${ey + 16} ${100 + dx - 4} ${ey + 16} ${100 + dx - 8} ${ey + 11}" fill="none" stroke="${dk}" stroke-width="4" opacity="0.3"/></g>`);
+  // brilhos especulares pontuais (pele oleosa sob luz forte)
+  P.add(`<g ${P.blur(0.7)} fill="#fff"><ellipse cx="97.5" cy="${ny - 2.5}" rx="1.6" ry="1.1" opacity="0.85"/><ellipse cx="92" cy="${ey - 22}" rx="4" ry="1.6" opacity="0.4" transform="rotate(-12 92 ${ey - 22})"/>` +
+    `<ellipse cx="${100 - dx - 7}" cy="${ey + 10}" rx="2.6" ry="1.2" opacity="0.45" transform="rotate(-25 ${100 - dx - 7} ${ey + 10})"/><ellipse cx="97" cy="${ny - 12}" rx="0.9" ry="3" opacity="0.5"/></g>`);
 }
 
 /** Mechas: muitos fios afilados em dois tons ao longo de curvas geradas por `f` (dentro de um clip). */
@@ -111,6 +171,70 @@ function strands(P: Pic, n: number, seed: number, f: (r: () => number, i: number
     else hl += d;
   }
   P.add(path(dk, dark, 'opacity="0.55"'), path(lt, light, 'opacity="0.45"'), path(hl, '#ffffff', 'opacity="0.35"'));
+}
+type Curve = (t: number) => Pt;
+/** Curva cúbica com ondulação perpendicular (mecha ondulada coerente). */
+function waveCurve(p: Pt[], amp: number, freq: number, ph: number): Curve {
+  return (t) => {
+    const b = bez(p, t);
+    const len = Math.hypot(b.dx, b.dy) || 1;
+    const a = amp * Math.sin(t * freq * Math.PI * 2 + ph) * Math.min(1, t * 3);
+    return [b.x + (-b.dy / len) * a, b.y + (b.dx / len) * a];
+  };
+}
+/** Fita afilada ao longo de uma curva paramétrica; `shift` desloca a linha central (fração da largura). */
+function ribbon(c: Curve, w0: number, w1: number, steps = 22, shift = 0, sw = w0): string {
+  const L: string[] = [];
+  const R: string[] = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const [x1, y1] = c(Math.max(0, t - 0.01));
+    const [x2, y2] = c(Math.min(1, t + 0.01));
+    const [x, y] = c(t);
+    const len = Math.hypot(x2 - x1, y2 - y1) || 1;
+    const nx = -(y2 - y1) / len;
+    const ny = (x2 - x1) / len;
+    const w = (w0 + (w1 - w0) * t) / 2;
+    const s = shift * (sw + (w1 - sw) * t) * 0.5;
+    L.push(`${(x + nx * (s + w)).toFixed(1)} ${(y + ny * (s + w)).toFixed(1)}`);
+    R.push(`${(x + nx * (s - w)).toFixed(1)} ${(y + ny * (s - w)).toFixed(1)}`);
+  }
+  return `M${L.join(' L')} L${R.reverse().join(' L')}Z`;
+}
+/**
+ * Cabelo em mechas: cada mecha é uma fita ondulada com lado de sombra, corpo e dezenas de fios finos
+ * claros/escuros seguindo a mesma onda — lê como cabelo pintado, não como traços retos.
+ */
+function hairLocks(
+  P: Pic,
+  n: number,
+  seed: number,
+  gen: (r: () => number, i: number) => { p: Pt[]; w: number },
+  col: { dark: string; mid: string; light: string },
+  amp = 3,
+  freq = 1.5,
+): void {
+  const r = rng(seed);
+  let dk = '';
+  let md = '';
+  let sh = '';
+  let lt = '';
+  let hl = '';
+  for (let i = 0; i < n; i++) {
+    const { p, w } = gen(r, i);
+    const c = waveCurve(p, amp * (0.6 + r() * 0.8), freq * (0.8 + r() * 0.4), r() * 6.28);
+    md += ribbon(c, w, w * 0.2);
+    sh += ribbon(c, w * 0.45, w * 0.1, 22, 0.55, w);
+    for (let k = 0; k < 7; k++) {
+      const s = (r() - 0.5) * 1.6;
+      const fine = ribbon(c, 0.5 + r() * 0.5, 0.12, 18, s, w);
+      const q = r();
+      if (q < 0.35) dk += fine;
+      else if (q < 0.8) lt += fine;
+      else hl += fine;
+    }
+  }
+  P.add(path(md, col.mid, 'opacity="0.92"'), path(sh, col.dark, `opacity="0.55" ${P.blur(0.8)}`), path(dk, col.dark, 'opacity="0.6"'), path(lt, col.light, 'opacity="0.55"'), path(hl, '#ffffff', 'opacity="0.25"'));
 }
 const path = (d: string, fill: string, extra = '') => `<path d="${d}" fill="${fill}" ${extra}/>`;
 const line = (d: string, color: string, w: number, op = 1) =>
@@ -176,15 +300,26 @@ function facePath(T = 42, W = 35, J = 24, C = 140): string {
 }
 
 /** Preenche um contorno com pele sombreada (luz de cima-esquerda, sombra à direita e embaixo). Devolve o clip. */
-function skinFill(P: Pic, d: string, skin: string, o: { stroke?: number; light?: string; rim?: string; rim2?: string } = {}): string {
+function skinFill(P: Pic, d: string, skin: string, o: { stroke?: number; light?: string; rim?: string; rim2?: string; shadow?: string; sss?: string; tex?: TexKind } = {}): string {
   const c = P.clip(`<path d="${d}"/>`);
-  P.add(path(d, P.rad([[0, o.light ?? shade(skin, 1.35)], [0.55, skin], [1, shade(skin, 0.64)]], 0.4, 0.3, 0.85)));
+  const sh = o.shadow ?? '#2a0c04';
+  P.add(path(d, P.rad([[0, o.light ?? shade(skin, 1.35)], [0.55, skin], [1, o.shadow ? shade(skin, 0.8) : shade(skin, 0.64)]], 0.4, 0.3, 0.85)));
   P.add(`<g clip-path="${c}">`);
-  P.add(`<rect width="200" height="200" fill="${P.lin([[0, '#000', 0], [0.45, '#000', 0], [1, '#000', 0.34]], 96, 0, 140, 20, true)}"/>`);
-  P.add(`<rect width="200" height="200" fill="${P.lin([[0, '#000', 0], [0.75, '#000', 0], [1, '#000', 0.3]], 0, 40, 0, 145, true)}"/>`);
+  P.add(`<rect width="200" height="200" fill="${P.lin([[0, sh, 0], [0.45, sh, 0], [1, sh, 0.38]], 96, 0, 140, 20, true)}"/>`);
+  P.add(`<rect width="200" height="200" fill="${P.lin([[0, sh, 0], [0.75, sh, 0], [1, sh, 0.32]], 0, 40, 0, 145, true)}"/>`);
   P.add(`<ellipse cx="84" cy="70" rx="22" ry="16" fill="${P.rad([[0, '#fff', 0.22], [1, '#fff', 0]])}"/><ellipse cx="80" cy="104" rx="12" ry="9" fill="${P.rad([[0, '#fff', 0.16], [1, '#fff', 0]])}"/>`);
-  if (o.rim) P.add(`<path d="${d}" fill="none" stroke="${o.rim}" stroke-width="6" opacity="0.5" clip-path="${P.clip('<rect width="88" height="200"/>')}"/>`);
-  if (o.rim2) P.add(`<path d="${d}" fill="none" stroke="${o.rim2}" stroke-width="6" opacity="0.5" clip-path="${P.clip('<rect x="112" y="0" width="88" height="200"/>')}"/>`);
+  // plano de sombra (lado direito) com a borda da sombra quente (subsuperfície) e luz refletida na orla
+  const tone = o.shadow ? shade(skin, 0.55) : shade(skin, 0.5);
+  const sss = o.sss ?? (o.shadow ? '#6a5aff' : '#d8402a');
+  P.add(`<path d="M126 20 C120 50 124 80 118 104 C114 124 104 140 96 160 L200 160 L200 20Z" fill="${tone}" opacity="0.6" ${P.blur(7)}/>`);
+  P.add(`<path d="M124 30 C118 56 122 82 116 104 C112 122 104 136 96 150" fill="none" stroke="${sss}" stroke-width="7" opacity="0.26" ${P.blur(4)}/>`);
+  P.add(`<path d="M140 60 C142 90 138 116 124 136" fill="none" stroke="${o.rim2 ?? shade(skin, 1.3)}" stroke-width="3" opacity="0.35" ${P.blur(2)}/>`);
+  // oclusão: faixa na linha do cabelo e sob a mandíbula
+  P.add(`<ellipse cx="100" cy="40" rx="46" ry="10" fill="${shade(skin, 0.4)}" opacity="0.35" ${P.blur(5)}/>`);
+  P.add(`<rect width="200" height="200" fill="${P.lin([[0, '#000', 0], [0.82, '#000', 0], [1, sh, 0.35]], 0, 20, 0, 150, true)}"/>`);
+  P.texture(d, o.tex ?? 'skin', o.tex === 'metal' ? 0.45 : o.tex ? 0.22 : 0.16);
+  if (o.rim) P.add(`<path d="${d}" fill="none" stroke="${o.rim}" stroke-width="6" opacity="0.4" ${P.blur(1.5)} clip-path="${P.clip('<rect width="88" height="200"/>')}"/>`);
+  if (o.rim2) P.add(`<path d="${d}" fill="none" stroke="${o.rim2}" stroke-width="6" opacity="0.4" ${P.blur(1.5)} clip-path="${P.clip('<rect x="112" y="0" width="88" height="200"/>')}"/>`);
   P.add('</g>');
   P.add(path(d, 'none', ink(o.stroke ?? 2.2)));
   return c;
@@ -210,7 +345,7 @@ function eye(
     ? `<ellipse cx="${ix}" cy="0" rx="${r * 0.22}" ry="${r * 0.95}" fill="${o.pupil ?? '#060404'}"/>`
     : `<circle cx="${ix}" cy="${h * 0.08}" r="${r * 0.45}" fill="${o.pupil ?? '#060404'}"/>`;
   return `<g transform="translate(${cx} ${cy}) rotate(${tilt})"><g clip-path="${c}">
-    <rect x="${-w}" y="${-h * 1.5}" width="${w * 2}" height="${h * 3}" fill="${o.sclera ?? P.lin([[0, '#c8bcb4'], [0.6, '#f8f4ee'], [1, '#e0d8d0']])}"/>
+    <rect x="${-w}" y="${-h * 1.5}" width="${w * 2}" height="${h * 3}" fill="${o.sclera ?? P.lin([[0, '#9a8a84'], [0.55, '#e4dcd4'], [1, '#c8bcb4']])}"/>
     <circle cx="${ix}" cy="${h * 0.08}" r="${r}" fill="${ig}"/>${pupil}
     <path d="M${-w} ${-h * 1.4} L${w} ${-h * 1.4} L${w} ${-h * (o.lid ?? 0.35)} C${w * 0.3} ${-h * 0.9} ${-w * 0.3} ${-h * 0.9} ${-w} ${-h * (o.lid ?? 0.35)}Z" fill="#000" opacity="0.28"/>
     <circle cx="${ix}" cy="${h * 0.08}" r="${r * 0.72}" fill="none" stroke="${shade(iris, 1.8)}" stroke-width="${r * 0.18}" stroke-dasharray="${(r * 0.12).toFixed(2)} ${(r * 0.2).toFixed(2)}" opacity="0.5"/>
@@ -219,7 +354,12 @@ function eye(
     <circle cx="${ix - r * 0.38}" cy="${-r * 0.3}" r="${Math.max(0.9, r * 0.3)}" fill="#fff"/>
     <circle cx="${ix + r * 0.42}" cy="${r * 0.38}" r="${Math.max(0.5, r * 0.13)}" fill="#fff" opacity="0.8"/>
     <path d="M${-w * 0.6} ${h * 0.75} C${-w * 0.2} ${h * 0.95} ${w * 0.3} ${h * 0.95} ${w * 0.65} ${h * 0.7}" fill="none" stroke="#fff" stroke-width="0.7" opacity="0.5"/>
-  </g><path d="${d}" fill="none" ${ink(1.2)}/><path d="M${-w - 1} ${0.5} C${-w * 0.5} ${-h * 1.35} ${w * 0.5} ${-h * 1.35} ${w + 0.5} ${-0.3}" fill="none" ${ink(2.4)}/></g>`;
+    <ellipse cx="${-w * 0.86}" cy="${h * 0.1}" rx="${w * 0.14}" ry="${h * 0.3}" fill="#d87a78" opacity="0.6"/>
+  </g><path d="${d}" fill="none" stroke="${INK}" stroke-opacity="0.25" stroke-width="0.5"/>
+  <path d="M${-w - 1} ${0.5} C${-w * 0.5} ${-h * 1.35} ${w * 0.5} ${-h * 1.35} ${w + 0.8} ${-0.3}" fill="none" stroke="#1a0c08" stroke-width="${Math.max(1, h * 0.36)}" stroke-linecap="round" opacity="0.85"/>
+  <path d="M${-w * 0.9} ${-h * 1.3} C${-w * 0.4} ${-h * 2.1} ${w * 0.5} ${-h * 2.1} ${w * 1.05} ${-h * 1.0}" fill="none" stroke="#2a0c04" stroke-width="${Math.max(0.6, h * 0.22)}" opacity="0.32" stroke-linecap="round"/>
+  <path d="M${-w * 0.7} ${h * 0.85} C${-w * 0.2} ${h * 1.25} ${w * 0.4} ${h * 1.2} ${w * 0.85} ${h * 0.55}" fill="none" stroke="#2a0c04" stroke-width="${Math.max(0.5, h * 0.16)}" opacity="0.28" stroke-linecap="round"/>
+  <path d="M${-w * 0.6} ${h * 1.05} C${-w * 0.1} ${h * 1.35} ${w * 0.4} ${h * 1.3} ${w * 0.8} ${h * 0.8}" fill="none" stroke="#fff" stroke-width="${Math.max(0.4, h * 0.12)}" opacity="0.3" stroke-linecap="round"/></g>`;
 }
 
 /** Par de olhos simétricos. */
@@ -233,13 +373,53 @@ function glowEye(P: Pic, cx: number, cy: number, r: number, color: string): stri
     <circle cx="${cx}" cy="${cy}" r="${r}" fill="${P.rad([[0, '#ffffff'], [0.35, shade(color, 1.4)], [0.8, color], [1, shade(color, 0.4)]])}"/>`;
 }
 
-/** Nariz sombreado. */
-function nose(y0: number, y1: number, w: number, skin: string): string {
-  const dk = shade(skin, 0.55);
-  return `${path(`M103 ${y0} C106 ${y0 + (y1 - y0) * 0.5} ${106 + w * 0.2} ${y1 - 6} ${100 + w} ${y1 - 1} C${100 + w} ${y1 + 3} 104 ${y1 + 3} 101 ${y1 + 1}Z`, dk, 'opacity="0.45"')}
-    <ellipse cx="99" cy="${y1 - 3}" rx="${w * 0.45}" ry="2.2" fill="#fff" opacity="0.28"/>
-    ${line(`M${100 - w} ${y1 - 2} C${100 - w - 2} ${y1 + 3} ${97} ${y1 + 4} 100 ${y1 + 2} C103 ${y1 + 4} ${100 + w + 2} ${y1 + 3} ${100 + w} ${y1 - 2}`, INK, 1.5)}
-    ${path(`M${96 - w * 0.2} ${y1 + 1} C95 ${y1 - 1} 97 ${y1 - 1} 98 ${y1 + 1.5}Z M${104 + w * 0.2} ${y1 + 1} C105 ${y1 - 1} 103 ${y1 - 1} 102 ${y1 + 1.5}Z`, INK, 'opacity="0.7"')}`;
+/** Nariz modelado por luz e sombra (sem traço): ponte iluminada, lateral em sombra, asas, narinas e oclusão. */
+function realNose(P: Pic, top: number, tip: number, w: number, skin: string, o: { dark?: string } = {}): void {
+  const dk = o.dark ?? shade(skin, 0.45);
+  const L = (tip - top) * 0.5;
+  P.add(`<path d="M103.5 ${top} C105 ${top + L} ${104 + w * 0.3} ${tip - 6} ${100 + w * 1.05} ${tip - 1} L${100 + w * 0.2} ${tip - 2} C101 ${tip - 8} 101.5 ${top + L} 101 ${top}Z" fill="${dk}" opacity="0.45" ${P.blur(1.6)}/>`);
+  P.add(`<path d="M98.6 ${top + 2} C98 ${top + L} 97.8 ${tip - 8} 98.4 ${tip - 4}" fill="none" stroke="#fff" stroke-width="2.4" opacity="0.32" stroke-linecap="round" ${P.blur(1)}/>`);
+  P.add(`<ellipse cx="100" cy="${tip - 1.5}" rx="${w * 0.6}" ry="3.8" fill="${P.rad([[0, shade(skin, 1.25)], [0.7, skin], [1, shade(skin, 0.8)]], 0.4, 0.3, 0.7)}" ${P.blur(0.7)}/>`);
+  P.add(`<g ${P.blur(0.9)}><ellipse cx="${100 - w * 0.82}" cy="${tip}" rx="2.6" ry="2.9" fill="${shade(skin, 0.85)}"/><ellipse cx="${100 + w * 0.82}" cy="${tip}" rx="2.6" ry="2.9" fill="${shade(skin, 0.65)}"/></g>`);
+  P.add(`<g ${P.blur(0.45)} fill="none" stroke="${dk}" stroke-linecap="round"><path d="M${100 - w * 0.5} ${tip - 3.5} C${100 - w * 1.2} ${tip - 3} ${100 - w * 1.25} ${tip + 1.8} ${100 - w * 0.6} ${tip + 2.3}" stroke-width="1" opacity="0.6"/><path d="M${100 + w * 0.5} ${tip - 3.5} C${100 + w * 1.2} ${tip - 3} ${100 + w * 1.25} ${tip + 1.8} ${100 + w * 0.6} ${tip + 2.3}" stroke-width="1.1" opacity="0.75"/></g>`);
+  P.add(`<g ${P.blur(0.4)} fill="#2a0c06"><ellipse cx="${100 - w * 0.42}" cy="${tip + 1.9}" rx="1.9" ry="0.95" opacity="0.8" transform="rotate(12 ${100 - w * 0.42} ${tip + 1.9})"/><ellipse cx="${100 + w * 0.42}" cy="${tip + 1.9}" rx="1.9" ry="0.95" opacity="0.85" transform="rotate(-12 ${100 + w * 0.42} ${tip + 1.9})"/></g>`);
+  P.add(`<ellipse cx="101" cy="${tip + 4.2}" rx="${w * 0.95}" ry="1.8" fill="${dk}" opacity="0.35" ${P.blur(1.4)}/>`);
+  P.add(`<g ${P.blur(0.5)} fill="#fff"><ellipse cx="98.6" cy="${tip - 2.6}" rx="1.5" ry="1" opacity="0.8"/><ellipse cx="98.4" cy="${top + L}" rx="0.7" ry="2.4" opacity="0.4"/></g>`);
+}
+
+/** Boca modelada: linha de fenda macia, lábio superior em sombra, inferior iluminado com brilho, oclusão embaixo. */
+function realMouth(P: Pic, y: number, w: number, lip: string, o: { smirk?: number; philtrum?: number; dark?: string } = {}): void {
+  const s = o.smirk ?? 0;
+  const dk = o.dark ?? '#3a1208';
+  const cut = `M${100 - w} ${y} C${100 - w * 0.5} ${y - 1.2} 98 ${y - 0.3} 100 ${y + 0.3} C102 ${y - 0.3} ${100 + w * 0.5} ${y - 1.2 - s * 0.5} ${100 + w} ${y - s}`;
+  if (o.philtrum) P.add(`<g ${P.blur(0.8)} fill="none" stroke="${shade(lip, 0.6)}" stroke-width="1" opacity="0.35"><path d="M98 ${y - o.philtrum} L97.4 ${y - 4.5}"/><path d="M102 ${y - o.philtrum} L102.6 ${y - 4.5}"/></g>`);
+  P.add(`<path d="M${100 - w} ${y} C${100 - w * 0.6} ${y - 3} ${100 - 5} ${y - 5} 100 ${y - 3.6} C${100 + 5} ${y - 5} ${100 + w * 0.6} ${y - 3 - s * 0.7} ${100 + w} ${y - s}" fill="${shade(lip, 0.72)}" opacity="0.85" ${P.blur(0.5)}/>`);
+  P.add(`<path d="M${100 - w * 0.92} ${y + 0.3} C${100 - w * 0.5} ${y + 5.6} ${100 + w * 0.5} ${y + 5.6 - s * 0.3} ${100 + w * 0.92} ${y - s + 0.3}Z" fill="${P.rad([[0, shade(lip, 1.25)], [0.6, lip], [1, shade(lip, 0.75)]], 0.45, 0.35, 0.7)}" opacity="0.9" ${P.blur(0.55)}/>`);
+  P.add(`<path d="${cut}" fill="none" stroke="${dk}" stroke-width="1.5" stroke-linecap="round" ${P.blur(0.35)}/>`);
+  P.add(`<g ${P.blur(0.6)}><circle cx="${100 - w}" cy="${y}" r="1.3" fill="${dk}" opacity="0.6"/><circle cx="${100 + w}" cy="${y - s}" r="1.4" fill="${dk}" opacity="0.6"/></g>`);
+  P.add(`<ellipse cx="97" cy="${y + 2.8}" rx="3.4" ry="0.95" fill="#fff" opacity="0.45" ${P.blur(0.5)}/>`);
+  P.add(`<ellipse cx="100" cy="${y + 8}" rx="${w * 0.55}" ry="2.2" fill="${shade(lip, 0.45)}" opacity="0.35" ${P.blur(1.5)}/>`);
+}
+
+/** Sobrancelha feita de dezenas de pelos curtos sobre uma mancha macia. */
+function browHairs(P: Pic, pts: Pt[], color: string, width: number, seed: number, n = 34): void {
+  const r = rng(seed);
+  P.add(path(taper(pts, width, width * 0.4), color, `opacity="0.55" ${P.blur(0.9)}`));
+  let d = '';
+  for (let i = 0; i < n; i++) {
+    const t = r();
+    const b = bez(pts, t);
+    const len = Math.hypot(b.dx, b.dy) || 1;
+    const ux = b.dx / len;
+    const uy = b.dy / len;
+    const off = (r() - 0.5) * width * (1 - t * 0.5);
+    const x = b.x - uy * off;
+    const y = b.y + ux * off;
+    const l = 2.4 + r() * 2.2;
+    const lift = (1 - t) * 1.6;
+    d += taper([[x, y], [x + ux * l * 0.3, y + uy * l * 0.3 - lift * 0.3], [x + ux * l * 0.7, y + uy * l * 0.7 - lift * 0.7], [x + ux * l, y + uy * l - lift]], 0.7, 0.1, 4);
+  }
+  P.add(path(d, shade(color, 0.7), 'opacity="0.8"'), path(d, shade(color, 1.4), 'opacity="0.25" transform="translate(-0.3 -0.3)"'));
 }
 
 /** Fundo com gradiente cheio. */
@@ -250,155 +430,164 @@ function neon(d: string, c: string, w = 2.2): string {
   return `<path d="${d}" fill="none" stroke="${c}" stroke-width="${w * 4}" opacity="0.18" stroke-linecap="round"/><path d="${d}" fill="none" stroke="${c}" stroke-width="${w * 2}" opacity="0.35" stroke-linecap="round"/><path d="${d}" fill="none" stroke="${c}" stroke-width="${w}" stroke-linecap="round"/><path d="${d}" fill="none" stroke="#fff" stroke-width="${w * 0.35}" opacity="0.8" stroke-linecap="round"/>`;
 }
 
-/** Jaqueta de couro (Snake, Jake, rivais). */
+/** Jaqueta de couro (Snake, Jake, rivais): grão e dobras por textura, brilhos macios. */
 function leatherJacket(P: Pic, base: string, shirt: string, o: { collar?: boolean; rimL?: string; rimR?: string } = {}): void {
-  P.add(path('M68 146 L132 146 L140 200 L60 200Z', P.lin([[0, shade(shirt, 1.2)], [1, shade(shirt, 0.6)]])));
-  const leather = P.lin([[0, shade(base, 2.1)], [0.25, shade(base, 1.35)], [0.6, base], [1, shade(base, 0.4)]], 0.2, 0, 0.5, 1);
+  const tee = 'M68 146 L132 146 L140 200 L60 200Z';
+  P.add(path(tee, P.lin([[0, shade(shirt, 1.2)], [1, shade(shirt, 0.6)]])));
+  P.texture(tee, 'fabric', 0.4);
+  const leather = P.lin([[0, shade(base, 1.3)], [0.22, shade(base, 1.12)], [0.6, base], [1, shade(base, 0.35)]], 0.2, 0, 0.5, 1);
   const panel = 'M8 200 C10 174 30 158 62 150 L82 146 C84 164 88 182 94 200Z';
-  P.add(sym(panel, leather, ink(2)));
-  // brilho do couro
-  P.add(symLine('M20 186 C26 170 40 160 60 155', '#fff', 2.2, 0.22));
-  P.add(symLine('M72 160 C74 172 78 184 82 196', '#fff', 1.4, 0.18));
+  P.add(sym(panel, leather, ink(1.4)));
+  P.texture(panel, 'leather', 0.6);
+  P.texture(mx(panel), 'leather', 0.6);
+  // dobras do couro (sombra + aresta de luz) e brilhos especulares macios
+  P.add(`<g ${P.blur(1.4)} fill="none" stroke-linecap="round">` +
+    symLine('M30 196 C34 184 44 176 58 170', '#000', 3, 0.45) + symLine('M29 194 C33 182 43 174 57 168', '#fff', 1.2, 0.22) +
+    symLine('M66 158 C70 172 72 186 76 198', '#000', 2.6, 0.4) + '</g>');
+  P.add(`<g ${P.blur(2.2)}>` + symLine('M20 186 C26 170 40 160 60 155', '#fff', 3.2, 0.3) + '</g>');
+  P.add(`<g ${P.blur(0.8)}>` + symLine('M24 178 C30 168 38 162 48 159', '#fff', 1.2, 0.55) + '</g>');
   if (o.collar !== false) {
-    P.add(sym('M82 144 L62 154 L72 178 L88 162Z', P.lin([[0, shade(base, 1.9)], [1, shade(base, 0.6)]]), ink(1.6)));
+    const col = 'M82 144 L62 154 L72 178 L88 162Z';
+    P.add(sym(col, P.lin([[0, shade(base, 1.3)], [1, shade(base, 0.6)]]), ink(1.2)));
+    P.texture(col, 'leather', 0.5);
+    P.texture(mx(col), 'leather', 0.5);
   }
-  if (o.rimL) P.add(line('M10 196 C12 174 32 158 62 150', o.rimL, 2.5, 0.8));
-  if (o.rimR) P.add(line(mx('M10 196 C12 174 32 158 62 150'), o.rimR, 2.5, 0.8));
+  if (o.rimL) P.add(`<g ${P.blur(1.2)}>${line('M10 196 C12 174 32 158 62 150', o.rimL, 2.5, 0.75)}</g>`);
+  if (o.rimR) P.add(`<g ${P.blur(1.2)}>${line(mx('M10 196 C12 174 32 158 62 150'), o.rimR, 2.5, 0.75)}</g>`);
 }
 
 // ---------------------------------------------------------------- pilotos jogáveis
 
 function snake(P: Pic): void {
-  // noite neon na cidade, luzes do teto da cabine em perspectiva
+  // noite neon na cidade vista da cabine: céu, prédios em dois planos, feixes neon e letreiro
   P.add(bgRect(P.lin([[0, '#14062e'], [0.55, '#46125e'], [1, '#0a0616']])));
   P.add(`<ellipse cx="100" cy="132" rx="120" ry="44" fill="${P.rad([[0, '#ff4fc0', 0.6], [1, '#ff4fc0', 0]])}"/>`);
   const r = rng(11);
-  let city = '';
-  let win = '';
-  for (let x = -4; x < 204; ) {
-    const w = 8 + r() * 13;
-    const h = 22 + r() * 50;
-    city += `M${x.toFixed(1)} 160 L${x.toFixed(1)} ${(160 - h).toFixed(1)} L${(x + w).toFixed(1)} ${(160 - h).toFixed(1)} L${(x + w).toFixed(1)} 160Z`;
-    for (let wy = 160 - h + 4; wy < 156; wy += 5) for (let wx = x + 2; wx < x + w - 2; wx += 4) if (r() < 0.35) win += `M${wx.toFixed(1)} ${wy.toFixed(1)} h1.8 v2.2 h-1.8Z`;
-    x += w + 1.5;
+  for (const [base, col, wc, op] of [[150, '#3a1a5e', '#ff9ad8', 0.5], [162, '#1a0b33', '#ffd48a', 0.75]] as [number, string, string, number][]) {
+    let city = '';
+    let win = '';
+    for (let x = -4; x < 204; ) {
+      const w = 8 + r() * 13;
+      const h = (base === 150 ? 30 : 18) + r() * 46;
+      city += `M${x.toFixed(1)} ${base} L${x.toFixed(1)} ${(base - h).toFixed(1)} L${(x + w).toFixed(1)} ${(base - h).toFixed(1)} L${(x + w).toFixed(1)} ${base}Z`;
+      for (let wy = base - h + 4; wy < base - 4; wy += 5) for (let wx = x + 2; wx < x + w - 2; wx += 4) if (r() < 0.35) win += `M${wx.toFixed(1)} ${wy.toFixed(1)} h1.8 v2.2 h-1.8Z`;
+      x += w + 1.5;
+    }
+    P.add(path(city, col), path(win, wc, `opacity="${op}"`));
   }
-  P.add(path(city, '#1a0b33'), path(win, '#ffd48a', 'opacity="0.75"'));
+  P.add(`<rect y="120" width="200" height="50" fill="${P.lin([[0, '#ff4fc0', 0], [0.5, '#ff4fc0', 0.25], [1, '#1a0b33', 0]])}"/>`);
   P.add(neon('M-6 10 L70 76', '#ff3ad0'), neon('M16 -6 L82 64', '#3ae8ff', 1.6), neon('M206 10 L130 76', '#3ae8ff'), neon('M184 -6 L118 64', '#ff3ad0', 1.6));
   P.add(neon('M147 52 C147 40 173 40 173 52 C173 64 147 64 147 52Z', '#ff4fd8', 2), neon('M153 55 C154 47 158 47 158 52 C158 57 162 57 163 49 C164 45 167 47 167 53', '#7af4ff', 1.3));
 
   P.figure('#ff4fd0', '#4ae8ff', '#7a2a9a');
-  const hair = P.lin([[0, '#fff6c8'], [0.3, '#f0c860'], [0.7, '#b8862a'], [1, '#5a3a10']]);
-  // cabelo de trás: liso, comprido, caindo por trás dos ombros
-  P.add(path('M100 24 C62 24 46 52 46 88 C46 122 40 152 26 190 C44 198 66 194 80 180 C74 156 70 132 70 108 L130 108 C130 132 126 156 120 180 C134 194 156 198 174 190 C160 152 154 122 154 88 C154 52 138 24 100 24Z', hair, ink(2)));
-  const rs = rng(17);
-  let dk = '';
-  let lt = '';
-  for (let i = 0; i < 16; i++) {
-    const x0 = 50 + rs() * 18;
-    const y0 = 70 + rs() * 30;
-    const x1 = 28 + rs() * 46;
-    const y1 = 168 + rs() * 24;
-    const pts: Pt[] = [[x0, y0], [x0 - 4 - rs() * 6, y0 + 40], [x1 + 4, y1 - 36], [x1, y1]];
-    const d = taper(pts, 2.6 + rs() * 1.6, 0.4, 12) + taper(mirPts(pts), 2.6 + rs() * 1.6, 0.4, 12);
-    if (i % 2) dk += d;
-    else lt += d;
-  }
-  P.add(path(dk, '#6a4612', 'opacity="0.55"'), path(lt, '#fff4c0', 'opacity="0.5"'));
-  P.add(`<g clip-path="${P.clip('<path d="M100 24 C62 24 46 52 46 88 C46 122 40 152 26 190 C44 198 66 194 80 180 C74 156 70 132 70 108 L130 108 C130 132 126 156 120 180 C134 194 156 198 174 190 C160 152 154 122 154 88 C154 52 138 24 100 24Z"/>')}">`);
-  strands(P, 70, 31, (r, i) => {
-    const sgn = i % 2 ? 1 : -1;
-    const x0 = 100 + sgn * (40 + r() * 16);
-    const x1 = 100 + sgn * (30 + r() * 66);
-    return [[x0, 50 + r() * 30], [x0 + sgn * 6, 100], [x1 - sgn * 4, 150], [x1, 196]];
-  }, '#fff0b0', '#5a3a0e', 1.8);
-  P.add(`<rect width="200" height="200" fill="${P.lin([[0, '#000', 0], [0.5, '#000', 0.1], [1, '#2a0a3a', 0.55]])}"/></g>`);
-  // pescoço largo com pomo de adão e sombra do queixo
-  const skin = '#e0a47a';
-  P.add(path('M79 118 L77 162 Q100 172 123 162 L121 118Z', P.lin([[0, '#b06a48'], [0.5, '#d89670'], [1, '#a05c3c']], 0, 0, 1, 0), ink(1.4)));
-  P.add(path('M79 124 C88 148 112 148 121 124 L121 144 C110 154 90 154 79 144Z', '#3a1808', 'opacity="0.35"'));
-  P.add(`<ellipse cx="100" cy="153" rx="4" ry="5.5" fill="#e8b08a" opacity="0.8"/>`, line('M97 158 C99 160 101 160 103 158', '#7a3a22', 1, 0.5));
-  P.add(symLine('M86 140 C90 150 94 158 97 166', '#7a3a22', 1.3, 0.35));
-  // jaqueta de couro com gola levantada, zíper e pespontos; camiseta branca e corrente
-  leatherJacket(P, '#1c1a22', '#e8e4dc', { collar: false, rimL: '#ff4fd0', rimR: '#4ae8ff' });
-  const collar = P.lin([[0, '#6a6674'], [0.35, '#2a2830'], [1, '#08080a']], 0, 0, 1, 1);
-  P.add(sym('M80 144 L58 148 L48 176 L62 190 L86 160Z', collar, ink(1.6)));
-  P.add(symLine('M76 150 L60 153 L52 175', '#fff', 1.4, 0.3));
+  const skin = '#d89a72';
+  // volume de cabelo atrás da cabeça e dos ombros: base escura macia + centenas de fios ondulados
+  const back = 'M100 30 C62 30 44 58 43 92 C42 126 32 160 16 200 L184 200 C168 160 158 126 157 92 C156 58 138 30 100 30Z';
+  P.add(path(back, P.lin([[0, '#c89a48'], [0.45, '#7a5418'], [1, '#2a1804']]), P.blur(1.4)));
+  P.add(`<g clip-path="${P.clip(`<path d="${back}"/>`)}">`);
+  const wavy = (r: () => number, i: number): Pt[] => {
+    const sg = i % 2 ? 1 : -1;
+    const x0 = 100 + sg * (30 + r() * 24);
+    const x1 = 100 + sg * (36 + r() * 66);
+    const wv = (r() - 0.5) * 44;
+    return [[x0, 44 + r() * 30], [x0 + sg * 6 + wv, 102], [x1 - wv, 152], [x1, 204]];
+  };
+  hairLocks(P, 30, 31, (r, i) => {
+    const sg = i % 2 ? 1 : -1;
+    const x0 = 100 + sg * (26 + r() * 26);
+    const x1 = 100 + sg * (34 + r() * 66);
+    return { p: [[x0, 40 + r() * 30], [x0 + sg * 8, 100], [x1 - sg * 6, 150], [x1, 206]], w: 9 + r() * 6 };
+  }, { dark: '#3a2406', mid: '#a87a2c', light: '#f4d488' }, 5, 1.6);
+  strands(P, 60, 32, wavy, '#fff0b8', '#6a4812', 0.6);
+  P.add(`<rect width="200" height="200" fill="${P.lin([[0, '#000', 0], [0.55, '#000', 0.1], [1, '#1a0626', 0.6]])}"/></g>`);
+  // pescoço com sombra do queixo e pomo de adão
+  P.add(path('M81 120 L79 164 Q100 174 121 164 L119 120Z', P.lin([[0, '#a8643e'], [0.45, '#d08e66'], [1, '#7a3e24']], 0, 0, 1, 0)));
+  P.add(`<path d="M80 122 C88 148 112 148 120 122 L120 152 C110 160 90 160 80 152Z" fill="#3a1406" opacity="0.55" ${P.blur(2.5)}/>`);
+  P.add(`<ellipse cx="100" cy="156" rx="3.5" ry="5" fill="#f0b890" opacity="0.45" ${P.blur(1.2)}/>`);
+  P.add(`<g ${P.blur(1)}>${symLine('M87 142 C90 152 94 160 97 168', '#6a2a14', 1.6, 0.35)}</g>`);
+  // jaqueta de couro sobre camiseta cinza, gola larga, pespontos, zíper e tachas
+  leatherJacket(P, '#1c1a20', '#9a9aa2', { collar: false, rimL: '#ff4fd0', rimR: '#4ae8ff' });
+  const lap = 'M80 144 L58 148 L46 176 L60 192 L86 160Z';
+  P.add(sym(lap, P.lin([[0, '#64606e'], [0.3, '#2a2830'], [1, '#060608']], 0, 0, 1, 1), ink(1)));
+  P.texture(lap, 'leather', 0.55);
+  P.texture(mx(lap), 'leather', 0.55);
+  P.add(`<g ${P.blur(1)}>${symLine('M76 150 L60 153 L52 175', '#fff', 1.6, 0.35)}</g>`);
   const stitch = 'M79 148 L62 151 L54 174 L64 184';
-  P.add(`<path d="${stitch}" fill="none" stroke="#8a8694" stroke-width="0.8" stroke-dasharray="2 2" opacity="0.8"/><path d="${mx(stitch)}" fill="none" stroke="#8a8694" stroke-width="0.8" stroke-dasharray="2 2" opacity="0.8"/>`);
-  P.add(`<path d="M84 162 C86 176 89 188 92 200" fill="none" stroke="#c8ccd4" stroke-width="2.2" stroke-dasharray="1.2 1.4"/>`);
-  P.add(symLine('M14 196 C20 184 30 176 44 172', '#fff', 3, 0.18));
-  P.add(`<g fill="${P.rad([[0, '#ffffff'], [1, '#6a7080']])}" ${ink(0.6)}><circle cx="34" cy="186" r="2.2"/><circle cx="166" cy="186" r="2.2"/></g>`);
-  P.add(line('M86 150 C90 168 110 168 114 150', '#8a8e98', 2.4), `<path d="M86 150 C90 168 110 168 114 150" fill="none" stroke="#f0f2f6" stroke-width="1.4" stroke-dasharray="1.6 1.2"/>`);
-  P.add(path('M96 165 L104 165 L100 177Z', P.lin([[0, '#ffffff'], [1, '#8a92a0']]), ink(0.8)));
-  // mechas laterais atrás das orelhas
-  P.add(sym('M62 66 C54 84 54 104 50 126 C46 146 40 162 32 178 C48 172 56 158 59 140 C61 120 61 100 65 84Z', hair, ink(1.6)));
-  P.add(symLine('M58 90 C56 112 52 136 42 164', '#fff4c0', 1.1, 0.6), symLine('M61 96 C60 120 57 142 50 160', '#7a5214', 1, 0.6));
-  // orelhas
-  P.add(sym('M65 86 C57 82 54 94 56 102 C58 110 62 112 67 108Z', P.lin([[0, '#a45e3e'], [1, skin]]), ink(1.4)));
-  P.add(symLine('M62 92 C59 96 60 102 63 104', '#7a3a22', 1, 0.6));
-  // rosto masculino: têmporas largas, maçãs marcadas, mandíbula quadrada e queixo largo
-  const face = 'M100 40 C122 40 136 54 137 78 C138 94 137 106 134 116 C131 126 127 132 120 138 C114 143 107 145 100 145 C93 145 86 143 80 138 C73 132 69 126 66 116 C63 106 62 94 63 78 C64 54 78 40 100 40Z';
-  const sc = skinFill(P, face, skin);
-  P.add(`<g clip-path="${sc}">`);
-  sculpt(P, skin, { eyeY: 92, dx: 16, noseY: 114, mouthY: 127, chin: 141 });
-  P.add(`<ellipse cx="84" cy="91" rx="14" ry="7" fill="#6a3420" opacity="0.3"/><ellipse cx="116" cy="91" rx="14" ry="7" fill="#6a3420" opacity="0.34"/>`);
-  P.add(`<ellipse cx="78" cy="103" rx="9" ry="4" fill="#fff" opacity="0.16" transform="rotate(-22 78 103)"/><ellipse cx="122" cy="103" rx="8" ry="3.5" fill="#fff" opacity="0.1" transform="rotate(22 122 103)"/>`);
-  P.add(symLine('M68 107 C74 117 80 123 87 127', '#6a3420', 5, 0.2));
-  P.add(line('M64 80 C63 96 64 108 68 118', '#ff7ae0', 3, 0.35), line('M136 80 C137 96 136 108 132 118', '#6af0ff', 3, 0.3));
-  // barba por fazer: sombra na mandíbula e no buço e fios curtos
-  P.add(path('M65 110 C70 128 84 145 100 145 C116 145 130 128 135 110 C128 119 120 122 113 120 C108 117 92 117 87 120 C80 122 72 119 65 110Z', '#4a3424', 'opacity="0.3"'));
-  P.add(path('M84 121 C90 115 110 115 116 121 L114 124 C108 120 92 120 86 124Z', '#4a3424', 'opacity="0.35"'));
-  const rb = rng(23);
-  let stub = '';
-  for (let i = 0; i < 700; i++) {
-    const x = 64 + rb() * 72;
-    const y = 112 + rb() * 34;
-    const hw = 35 - (y - 112) * 0.78;
-    if (Math.abs(x - 100) > hw) continue;
-    if (y < 121 && Math.abs(x - 100) < 20 - (121 - y) * 1.5) continue;
-    if (y > 123.5 && y < 131 && Math.abs(x - 100) < 14) continue;
-    stub += `M${x.toFixed(1)} ${y.toFixed(1)} h0.8 v0.8 h-0.8Z`;
+  P.add(`<path d="${stitch}" fill="none" stroke="#8a8694" stroke-width="0.6" stroke-dasharray="1.6 1.6" opacity="0.7"/><path d="${mx(stitch)}" fill="none" stroke="#8a8694" stroke-width="0.6" stroke-dasharray="1.6 1.6" opacity="0.7"/>`);
+  P.add(`<path d="M84 162 C86 176 89 188 92 200" fill="none" stroke="#c8ccd4" stroke-width="1.8" stroke-dasharray="1 1.2" opacity="0.8"/>`);
+  P.add(`<g fill="${P.rad([[0, '#ffffff'], [0.5, '#9aa0ae'], [1, '#3a3e48']], 0.35, 0.3, 0.7)}"><circle cx="34" cy="186" r="2"/><circle cx="166" cy="186" r="2"/><circle cx="42" cy="180" r="1.6"/><circle cx="158" cy="180" r="1.6"/></g>`);
+  // corrente e pingente
+  let chain = '';
+  for (let t = 0; t <= 1.001; t += 0.06) {
+    const b = bez([[86, 150], [88, 168], [112, 168], [114, 150]], t);
+    chain += `<ellipse cx="${b.x.toFixed(1)}" cy="${b.y.toFixed(1)}" rx="1.3" ry="0.9" fill="none" stroke="#dfe3ea" stroke-width="0.7"/>`;
   }
-  P.add(path(stub, '#3a2414', 'opacity="0.6"'));
-  P.add(line('M100 138 L100 142.5', '#5a2c18', 1.3, 0.55));
+  P.add(`<g opacity="0.95">${chain}</g>`, path('M96.5 165 L103.5 165 L100 176Z', P.lin([[0, '#ffffff'], [0.5, '#a8aebb'], [1, '#4a505e']], 0, 0, 1, 1)));
+  // sombra do cabelo sobre as laterais do rosto (desenhada antes do rosto por dentro do clip)
+  const face = 'M100 44 C121 44 134 56 135 78 C136 92 135 104 132 114 C129 126 124 134 117 140 C111 145 106 147 100 147 C94 147 89 145 83 140 C76 134 71 126 68 114 C65 104 64 92 65 78 C66 56 79 44 100 44Z';
+  const sc = skinFill(P, face, skin, { rim: '#ff7ae0', rim2: '#6af0ff' });
+  P.add(`<g clip-path="${sc}">`);
+  sculpt(P, skin, { eyeY: 94, dx: 16, noseY: 116, mouthY: 129, chin: 143 });
+  const beard = 'M66 110 C70 132 86 148 100 148 C114 148 130 132 134 110 C126 122 118 124 113 121 C108 118 92 118 87 121 C82 124 74 122 66 110Z M86 125 C91 119 109 119 114 124 C108 121 92 121 86 125Z';
+  P.add(path(beard, '#4a3020', `opacity="0.3" ${P.blur(2.2)}`));
+  P.texture(beard, 'stubble', 0.85, 'normal');
+  P.add(`<g ${P.blur(3)}><path d="M64 60 C72 80 72 110 80 140" fill="none" stroke="#2a1006" stroke-width="10" opacity="0.45"/><path d="M136 60 C128 80 128 110 120 140" fill="none" stroke="#2a1006" stroke-width="10" opacity="0.5"/></g>`);
   P.add('</g>');
-  // sobrancelhas grossas e retas, olhar semicerrado e confiante
-  const brow: Pt[] = [[96, 84.5], [88, 81.5], [78, 80.5], [67, 83.5]];
-  P.add(path(taper(brow, 5.6, 2.4), '#8a5e1e', ink(0.6)), path(taper(mirPts(brow), 5.6, 2.4), '#8a5e1e', ink(0.6)));
-  P.add(eyes(P, 92, 16, 8.6, 3.6, '#3a86d8', { tilt: -2, lid: 0.55 }));
-  P.add(symLine('M77 96.5 C81 98 87 98 91 96', '#6a3a22', 1, 0.55), symLine('M65 89 L61 87.5 M65.5 92.5 L61.5 92.5', '#7a4028', 0.8, 0.5));
-  // nariz reto e forte
-  P.add(path('M103 88 C105 99 108 108 110 114 C107 116 104 116 101 115Z', '#7a3a22', 'opacity="0.35"'));
-  P.add(line('M98 90 C97 98 97 104 98 110', '#fff', 1.6, 0.25), `<ellipse cx="99" cy="112" rx="3.4" ry="2.4" fill="#fff" opacity="0.28"/>`);
-  P.add(line('M92 113 C88.5 116 89.5 119.5 94 119.5 M108 113 C111.5 116 110.5 119.5 106 119.5', INK, 1.3));
-  P.add(path('M94 118.5 C97 121 103 121 106 118.5 C104 123 96 123 94 118.5Z', '#5a2818', 'opacity="0.4"'));
-  // boca fechada com meio sorriso de canto e sulcos nasolabiais
-  P.add(line('M88 114 C84 119 83 124 84.5 128', '#7a3a22', 1.2, 0.45), line('M112 114 C117 118 118.5 122 118 126', '#7a3a22', 1.2, 0.45));
-  P.add(path('M86 127 C92 124.5 97 125 100 126 C103 125 108 124 115 123.5 C109 127.5 104 128.5 100 128.5 C95 128.5 90 128 86 127Z', '#a45a44', ink(0.7)));
-  P.add(line('M85 127 C92 128.8 106 128.8 116.5 123', INK, 1.9), line('M117 122.5 C119 121.5 120 119.5 119.5 117.5', INK, 1, 0.6));
-  P.add(line('M92 131.5 C97 133.5 104 133.5 109 131', '#f4b896', 1.6, 0.6), line('M93 134.5 C98 136 103 136 107 134.5', '#5a2818', 1.3, 0.35));
-  // topo do cabelo e mechas sobre a testa
-  P.add(path('M60 70 C56 42 76 22 100 22 C124 22 144 42 140 70 C128 58 114 54 100 54 C86 54 72 58 60 70Z', hair, ink(2)));
-  P.add(`<g clip-path="${P.clip('<path d="M60 70 C56 42 76 22 100 22 C124 22 144 42 140 70 C128 58 114 54 100 54 C86 54 72 58 60 70Z"/>')}">`);
-  strands(P, 40, 37, (r) => {
-    const x = 60 + r() * 80;
-    return [[100 + (x - 100) * 0.2, 22], [x - 4, 30], [x, 44], [x + (x - 100) * 0.3, 70]];
-  }, '#fff8d0', '#7a5214', 1.6);
+  // sobrancelhas de pelos, olhos semicerrados, nariz e boca modelados
+  const brow: Pt[] = [[97, 85.5], [89, 82.5], [78, 81.8], [67, 84.8]];
+  browHairs(P, brow, '#a8782e', 4.2, 51);
+  browHairs(P, mirPts(brow), '#a8782e', 4.2, 52);
+  P.add(eyes(P, 94, 16, 8.2, 3.3, '#4a8ad0', { tilt: -2, lid: 0.5 }));
+  realNose(P, 90, 116, 6.8, skin);
+  realMouth(P, 130, 13, '#b8705a', { smirk: 2.2, philtrum: 11 });
+  P.add(`<g ${P.blur(1.1)} fill="none" stroke="#6a3420" stroke-width="1.6" opacity="0.4"><path d="M88 117 C84.5 122 84 127 86 132"/><path d="M112 117 C116.5 121 118 125 117 130"/></g>`);
+  P.add(`<path d="M99 141 C100 143 101 143 101.5 141" fill="none" stroke="#6a3420" stroke-width="1" opacity="0.35" ${P.blur(0.6)}/>`);
+  // mechas da frente emoldurando o rosto e cobrindo as orelhas
+  const lockL = 'M72 50 C60 62 58 84 61 108 C63 132 56 162 40 200 L86 200 C80 172 75 150 73 128 C71 104 71 80 80 58Z';
+  const lockR = 'M128 50 C140 62 142 86 140 110 C138 136 145 166 160 200 L114 200 C120 172 125 150 127 128 C129 104 129 80 120 58Z';
+  for (const [k, lk] of [lockL, lockR].entries()) {
+    P.add(path(lk, P.lin([[0, '#f0cc70'], [0.5, '#b8862a'], [1, '#4a300a']], k ? 1 : 0, 0, k ? 0 : 1, 0.4), P.blur(0.8)));
+    P.add(`<g clip-path="${P.clip(`<path d="${lk}"/>`)}">`);
+    const sg = k ? 1 : -1;
+    const lockF = (r: () => number): Pt[] => {
+      const x0 = 100 + sg * (22 + r() * 10);
+      const x1 = 100 + sg * (26 + r() * 50);
+      const wv = (r() - 0.5) * 30;
+      return [[x0, 50 + r() * 8], [x0 + sg * 12 + wv, 96], [x1 - wv * 0.6 - sg * 8, 150], [x1, 202]];
+    };
+    hairLocks(P, 11, 60 + k, (r) => ({ p: lockF(r), w: 7 + r() * 5 }), { dark: '#5a3a0c', mid: '#d0a044', light: '#fff0b0' }, 4, 1.4);
+    P.add(`<ellipse cx="${100 + sg * 36}" cy="100" rx="8" ry="26" fill="#fff4c8" opacity="0.28" ${P.blur(3)}/></g>`);
+  }
+  // topo com risca ao meio, sob a bandana
+  const crown = 'M60 74 C55 44 76 24 100 24 C124 24 145 44 140 74 C132 60 118 52 100 52 C82 52 68 60 60 74Z';
+  P.add(path(crown, P.lin([[0, '#fff0b0'], [0.4, '#d8a848'], [1, '#6a4410']]), P.blur(0.6)));
+  P.add(`<g clip-path="${P.clip(`<path d="${crown}"/>`)}">`);
+  strands(P, 70, 37, (r, i) => {
+    const sg = i % 2 ? 1 : -1;
+    const x = 100 + sg * (4 + r() * 42);
+    return [[100 + sg * 1.5, 24], [100 + sg * 10, 28 + r() * 4], [x - sg * 6, 44], [x + sg * 8, 76]];
+  }, '#fff8d0', '#7a5214', 1.2);
   P.add('</g>');
-  // bandana preta estampada com nó
+  // bandana preta estampada, com dobra e nó do lado direito
   const band = 'M58 64 C70 46 130 46 142 64 L142 76 C130 60 70 60 58 76Z';
-  P.add(path(band, P.lin([[0, '#4a4a56'], [0.45, '#1a1a22'], [1, '#050508']]), ink(2)));
+  P.add(path(band, P.lin([[0, '#4a4a56'], [0.45, '#1a1a22'], [1, '#050508']]), ink(1)));
+  P.texture(band, 'fabric', 0.6);
   let dots = '';
   for (let i = 0; i < 9; i++) {
     const x = 68 + i * 8;
-    const y = 60 - Math.sin((i / 8) * Math.PI) * 6;
-    dots += i % 2 ? `M${x} ${y - 3} L${x + 2} ${y} L${x} ${y + 3} L${x - 2} ${y}Z` : `M${x - 1.6} ${y} a1.6 1.6 0 1 0 3.2 0 a1.6 1.6 0 1 0 -3.2 0Z`;
-    dots += `M${x + 4} ${y + 4.5} h1.2 v1.2 h-1.2Z M${x + 4} ${y - 5} h1.2 v1.2 h-1.2Z`;
+    const y = 60.5 - Math.sin((i / 8) * Math.PI) * 6;
+    dots += i % 2 ? `M${x} ${y - 2.6} L${x + 1.8} ${y} L${x} ${y + 2.6} L${x - 1.8} ${y}Z` : `M${x - 1.8} ${y} C${x - 1.8} ${y - 2.4} ${x + 1.8} ${y - 2.4} ${x + 1.8} ${y} C${x + 1} ${y + 1} ${x} ${y + 2} ${x - 1.8} ${y}Z`;
+    dots += `M${x + 4} ${y + 4.2} h1 v1 h-1Z M${x + 4} ${y - 4.6} h1 v1 h-1Z`;
   }
-  P.add(path(dots, '#f4f0e8', 'opacity="0.85"'));
-  P.add(line('M64 62 C76 52 124 52 136 62', '#fff', 1.2, 0.25), line('M70 70 C84 62 116 62 130 70', '#000', 1.4, 0.4));
-  P.add(path('M140 66 C154 72 158 88 152 104 L145 100 C149 88 146 78 138 74Z', '#15151c', ink(1.5)), path('M140 68 C156 64 166 76 168 90 L161 90 C158 80 150 74 140 76Z', '#26262e', ink(1.5)));
-  P.add(`<circle cx="142" cy="70" r="5" fill="#1a1a22" ${ink(1.5)}/>`);
+  P.add(path(dots, '#e8e4dc', `opacity="0.75" ${P.blur(0.25)}`));
+  P.add(`<g ${P.blur(0.8)}>${line('M64 62 C76 52 124 52 136 62', '#fff', 1.4, 0.3)}${line('M70 71 C84 63 116 63 130 71', '#000', 2, 0.5)}</g>`);
+  P.add(`<path d="M60 74 C72 66 128 66 140 74" fill="none" stroke="#2a1006" stroke-width="4" opacity="0.4" ${P.blur(2)}/>`);
+  const tail1 = 'M140 66 C154 72 158 88 152 106 L145 102 C149 88 146 78 138 74Z';
+  const tail2 = 'M140 68 C156 64 166 76 168 92 L161 92 C158 80 150 74 140 76Z';
+  P.add(path(tail1, P.lin([[0, '#2a2a34'], [1, '#08080c']]), ink(1)), path(tail2, P.lin([[0, '#3a3a46'], [1, '#101016']]), ink(1)));
+  P.texture(tail1, 'fabric', 0.5);
+  P.texture(tail2, 'fabric', 0.5);
+  P.add(`<circle cx="142" cy="70" r="5" fill="${P.rad([[0, '#3a3a44'], [1, '#0a0a0e']], 0.4, 0.35, 0.7)}"/>`);
 }
 
 function cyberhawk(P: Pic): void {
@@ -429,7 +618,9 @@ function cyberhawk(P: Pic): void {
   P.add(path('M74 164 L126 164 L134 200 L66 200Z', chromeDk, ink(2)));
   P.add(line('M88 180 L112 180', '#ff2a1a', 2.4), line('M88 180 L112 180', '#ff2a1a', 7, 0.25), line('M100 168 L100 200', '#1a1e26', 1.5));
   const shoulder = 'M4 200 C4 170 24 150 58 148 C72 148 82 156 82 170 L82 200Z';
-  P.add(sym(shoulder, chrome, ink(2.2)));
+  P.add(sym(shoulder, chrome, ink(1.4)));
+  P.texture(shoulder, 'metal', 0.45);
+  P.texture(mx(shoulder), 'metal', 0.45);
   P.add(symLine('M12 184 C20 168 38 160 66 160', '#2a303c', 1.6), symLine('M8 196 C14 182 30 174 56 172', '#2a303c', 1.4));
   P.add(symLine('M18 170 C28 158 44 154 60 153', '#fff', 2, 0.6));
   P.add(`<g fill="#e8ecf2" ${ink(0.8)}><circle cx="22" cy="176" r="2"/><circle cx="178" cy="176" r="2"/><circle cx="70" cy="178" r="2"/><circle cx="130" cy="178" r="2"/></g>`);
@@ -444,7 +635,8 @@ function cyberhawk(P: Pic): void {
   P.add(symLine('M52 104 L76 134', '#262b35', 6), symLine('M52 104 L76 134', '#b8c0cc', 2.2));
   // crânio cromado
   const cran = 'M100 28 C131 28 148 50 148 80 C148 96 142 104 139 114 L61 114 C58 104 52 96 52 80 C52 50 69 28 100 28Z';
-  P.add(path(cran, chrome, ink(2.4)));
+  P.add(path(cran, chrome, ink(1.4)));
+  P.texture(cran, 'metal', 0.4);
   const cc = P.clip(`<path d="${cran}"/>`);
   P.add(`<g clip-path="${cc}"><rect width="200" height="200" fill="${P.lin([[0, '#000', 0.5], [0.25, '#000', 0], [0.7, '#000', 0], [1, '#000', 0.55]], 52, 0, 148, 0, true)}"/></g>`);
   P.add(line('M100 29 L100 58', '#3a4250', 1.5), symLine('M64 48 C74 58 84 62 94 62', '#3a4250', 1.3), symLine('M56 72 C62 70 66 72 70 76', '#3a4250', 1.2));
@@ -490,6 +682,8 @@ function ivanzypher(P: Pic): void {
   const dc = skinFill(P, dome, skin, { light: '#c4ec7a', stroke: 2.4 });
   P.add(`<g clip-path="${dc}">`);
   P.add(line('M70 30 C76 44 72 56 80 66 M84 22 C88 34 86 44 92 52 M130 28 C124 42 130 54 122 64 M146 50 C140 58 142 68 136 74 M56 54 C62 62 60 72 66 78', '#2e6a1a', 1.6, 0.6));
+  P.add(`<ellipse cx="100" cy="112" rx="50" ry="14" fill="#0e2a06" opacity="0.55" ${P.blur(5)}/><ellipse cx="146" cy="70" rx="10" ry="30" fill="#e8ff8a" opacity="0.3" ${P.blur(3)}/>`);
+  P.add(`<g fill="#fff" ${P.blur(0.6)}><ellipse cx="74" cy="34" rx="7" ry="3" opacity="0.8" transform="rotate(-25 74 34)"/><circle cx="90" cy="27" r="1.6" opacity="0.8"/><circle cx="64" cy="48" r="1.2" opacity="0.7"/><circle cx="120" cy="30" r="1.1" opacity="0.6"/></g>`);
   P.add(`<ellipse cx="78" cy="38" rx="20" ry="9" fill="#fff" opacity="0.25" transform="rotate(-22 78 38)"/><circle cx="118" cy="40" r="4" fill="#2e5a18" opacity="0.35"/><circle cx="132" cy="56" r="3" fill="#2e5a18" opacity="0.35"/><circle cx="66" cy="60" r="3.5" fill="#2e5a18" opacity="0.3"/>`);
   P.add('</g>');
   // arcada furiosa + olhos amarelos
@@ -556,7 +750,8 @@ function katarina(P: Pic): void {
   P.figure('#ffe0a0', '#8ad0ff', '#e8c890');
   // traje espacial branco
   const suit = P.lin([[0, '#ffffff'], [0.45, '#dfe3ea'], [1, '#8a909e']], 0.2, 0, 0.6, 1);
-  P.add(path('M12 200 C14 172 38 156 70 150 L130 150 C162 156 186 172 188 200Z', suit, ink(2)));
+  P.add(path('M12 200 C14 172 38 156 70 150 L130 150 C162 156 186 172 188 200Z', suit, ink(1.2)));
+  P.texture('M12 200 C14 172 38 156 70 150 L130 150 C162 156 186 172 188 200Z', 'fabric', 0.55);
   P.add(`<rect width="200" height="200" fill="${P.lin([[0, '#000', 0], [0.6, '#000', 0], [1, '#000', 0.25]], 100, 0, 190, 0, true)}" clip-path="${P.clip('<path d="M12 200 C14 172 38 156 70 150 L130 150 C162 156 186 172 188 200Z"/>')}"/>`);
   P.add(symLine('M40 168 C44 180 46 190 46 200', '#9aa0ae', 1.4), symLine('M26 180 C34 176 44 174 52 174', '#9aa0ae', 1.2));
   P.add(`<rect x="32" y="176" width="15" height="10" rx="1" fill="#fff" ${ink(0.8)}/><path d="M32 178 h15 M32 181 h15 M32 184 h15" stroke="#d0202a" stroke-width="1.2"/><rect x="32" y="176" width="7" height="5" fill="#1a3a8a"/>`);
@@ -575,7 +770,7 @@ function katarina(P: Pic): void {
   P.add(symLine('M64 60 C66 52 70 46 74 42 M66 66 C70 58 74 54 80 50', '#fff4e8', 1, 0.8));
   // cabeça com tufos nas bochechas
   const head = 'M100 44 C124 44 140 58 144 80 C150 88 154 96 150 102 L157 108 L147 112 L151 120 L138 122 C128 134 114 141 100 141 C86 141 72 134 62 122 L49 120 L53 112 L43 108 L50 102 C46 96 50 88 56 80 C60 58 76 44 100 44Z';
-  const hc = skinFill(P, head, skin, { light: '#ffcf8a' });
+  const hc = skinFill(P, head, skin, { light: '#ffcf8a', tex: 'fur' });
   P.add(`<g clip-path="${hc}">`);
   const st = '#7a3208';
   P.add(path(taper([[100, 46], [99, 56], [101, 62], [100, 72]], 5, 1), st));
@@ -643,7 +838,9 @@ function jake(P: Pic): void {
     const y = 112 + r() * 30;
     stub += `M${x.toFixed(1)} ${y.toFixed(1)} h0.9 v0.9 h-0.9Z`;
   }
-  P.add(path(stub, '#2a1a14', 'opacity="0.45"'), '</g>');
+  void stub;
+  P.texture('M66 110 C70 132 86 148 100 148 C114 148 130 132 134 110 C126 122 118 124 113 121 C108 118 92 118 87 121 C82 124 74 122 66 110Z', 'stubble', 0.75);
+  P.add('</g>');
   // moicano azul espetado
   const mo = P.lin([[0, '#d8f6ff'], [0.35, '#3aa8ff'], [1, '#0a2a8a']], 0, 0, 0, 60, true);
   const spikes: [number, number, number][] = [[-9, -30, 34], [9, 30, 34], [-7, -22, 18], [7, 22, 18], [-4, -12, 6], [4, 12, 6], [0, 0, -2]];
@@ -654,60 +851,96 @@ function jake(P: Pic): void {
   P.add(path('M84 58 C86 46 94 42 100 42 C106 42 114 46 116 58Z', mo, ink(1.4)));
   P.add(line('M98 6 C98 20 99 34 100 48', '#fff', 1.2, 0.6));
   // sobrancelhas, óculos escuros com reflexo do pôr do sol
-  P.add(sym(taper([[94, 80], [86, 76], [76, 76], [68, 79]], 5, 2.5), '#2a1a14'));
+  browHairs(P, [[95, 80], [87, 76.5], [77, 76], [67, 79]], '#3a2418', 4.4, 81);
+  browHairs(P, mirPts([[95, 80], [87, 76.5], [77, 76], [67, 79]]), '#3a2418', 4.4, 82);
   const glass = 'M60 82 L140 82 L138 91 C136 102 118 104 110 97 L104 91 L96 91 L90 97 C82 104 64 102 62 91Z';
   P.add(path(glass, P.lin([[0, '#2a2a3e'], [0.5, '#08080e'], [1, '#1a0a1a']]), ink(2)));
   P.add(`<g clip-path="${P.clip(`<path d="${glass}"/>`)}">${path('M60 96 L140 84 L140 89 L60 101Z', P.lin([[0, '#c04aff'], [0.5, '#ff5a8a'], [1, '#ffb050']], 0, 0, 1, 0), 'opacity="0.75"')}${line('M68 86 L80 85 M112 85 L124 84', '#fff', 1.4, 0.8)}</g>`);
   P.add(line('M60 83 L54 88 M140 83 L146 88', INK, 2.2));
   // nariz, sorriso de canto, queixo
-  P.add(nose(92, 112, 6.5, skin));
-  P.add(line('M86 124 C94 127 106 126 116 119', INK, 2.2), line('M116 119 C118 118 119 116 119 114', INK, 1.2, 0.7), line('M92 131 C98 133 104 133 110 130', '#f0b890', 1.4, 0.6), line('M100 136 L100 139', INK, 1.1, 0.6));
+  realNose(P, 92, 112, 6.8, skin);
+  realMouth(P, 124, 13, '#a8604a', { smirk: 3.5, philtrum: 9 });
+  P.add(`<g ${P.blur(1)} fill="none" stroke="#6a3420" stroke-width="1.5" opacity="0.4"><path d="M88 113 C84.5 118 84 123 86 127"/><path d="M112 113 C116.5 117 118 121 117 126"/></g>`);
 }
 
 function tarquinn(P: Pic): void {
-  // gelo e aurora
-  P.add(bgRect(P.lin([[0, '#061634'], [0.5, '#0e4a7a'], [1, '#8ad0f0']])));
+  // noite polar: céu profundo, estrelas, cortinas de aurora, cordilheira de gelo em planos e lago congelado
+  P.add(bgRect(P.lin([[0, '#030a22'], [0.35, '#0a2c5a'], [0.62, '#1a6a9a'], [1, '#bfe8fa']])));
   const r = rng(9);
   let stars = '';
-  for (let i = 0; i < 40; i++) stars += `<circle cx="${(r() * 200).toFixed(1)}" cy="${(r() * 80).toFixed(1)}" r="${(0.4 + r() * 0.7).toFixed(1)}" fill="#fff" opacity="${(0.4 + r() * 0.5).toFixed(2)}"/>`;
+  for (let i = 0; i < 60; i++) stars += `<circle cx="${(r() * 200).toFixed(1)}" cy="${(r() * 90).toFixed(1)}" r="${(0.3 + r() * 0.8).toFixed(1)}" fill="#fff" opacity="${(0.3 + r() * 0.6).toFixed(2)}"/>`;
   P.add(stars);
-  P.add(path('M-10 64 C30 20 70 74 110 32 C150 -6 180 40 210 12 L210 44 C180 76 150 36 110 66 C70 104 30 56 -10 96Z', P.lin([[0, '#3affb0', 0], [0.5, '#3affb0', 0.55], [1, '#3affb0', 0]])));
-  P.add(path('M-10 40 C40 10 80 50 120 16 C150 -6 180 20 210 0 L210 16 C180 36 150 16 120 34 C80 66 40 28 -10 56Z', P.lin([[0, '#8a6aff', 0], [0.5, '#6adcff', 0.4], [1, '#8a6aff', 0]])));
-  P.add(path('M0 160 L22 124 L40 138 L68 108 L96 140 L130 112 L160 132 L182 110 L200 126 L200 170 L0 170Z', P.lin([[0, '#dff4ff'], [1, '#5a9ac8']])));
-  const ice = P.lin([[0, '#f4fcff'], [0.5, '#9ad4f4'], [1, '#2a6aa0']], 0, 0, 1, 1);
-  P.add(sym('M0 200 L0 110 L12 94 L20 128 L32 86 L44 140 L58 200Z', ice, ink(1.2)));
-  P.add(symLine('M12 94 L16 150 M32 86 L34 160 M20 128 L10 170', '#fff', 1, 0.7));
-  P.figure('#9af4ff', '#7affc8', '#6ab0e0');
-  // ombros de cristal
+  // aurora: faixas verticais que sobem de uma curva (cortina), desfocadas, em verde e violeta
+  const aur = (y0: number, amp: number, ph: number, c1: string, c2: string, h: number, op: number) => {
+    let d = '';
+    for (let x = -10; x <= 210; x += 3) {
+      const y = y0 + Math.sin(x * 0.03 + ph) * amp + Math.sin(x * 0.011 + ph * 2) * amp * 0.6;
+      d += `M${x} ${y.toFixed(1)} L${x} ${(y - h * (0.6 + 0.4 * Math.abs(Math.sin(x * 0.09 + ph)))).toFixed(1)}`;
+    }
+    const g = P.lin([[0, c2, 0], [0.5, c2, op * 0.35], [0.88, c1, op], [1, c1, 0]], 0, y0 - h - amp * 1.6, 0, y0 + amp * 1.6, true);
+    return `<path d="${d}" fill="none" stroke="${g}" stroke-width="1.5" ${P.blur(1.2)}/>`;
+  };
+  P.add(`<ellipse cx="100" cy="50" rx="140" ry="50" fill="${P.rad([[0, '#3affb0', 0.42], [1, '#3affb0', 0]])}"/>`);
+  P.add(aur(66, 12, 0.4, '#5affc0', '#8a5aff', 56, 0.9), aur(52, 9, 2.1, '#9affe0', '#4ab8ff', 40, 0.7), aur(84, 6, 4.2, '#3aff9a', '#c06aff', 30, 0.55));
+  // cordilheira distante (plano 3, azulado e enevoado) e próxima (plano 2, faces de luz e sombra)
+  P.add(path('M0 132 L18 108 L30 116 L52 92 L70 112 L88 100 L108 118 L128 94 L150 110 L170 90 L190 106 L200 100 L200 150 L0 150Z', P.lin([[0, '#8ab8dc'], [1, '#4a7aa8']]), 'opacity="0.85"'));
+  const peaks: [number, number, number][] = [[-6, 150, 34], [30, 124, 26], [62, 140, 30], [138, 138, 30], [172, 122, 28], [206, 150, 30]];
+  for (const [x, top, w] of peaks) {
+    P.add(path(`M${x - w} 160 L${x} ${top - 20} L${x + w} 160Z`, P.lin([[0, '#f4fcff'], [1, '#6aa8d4']])));
+    P.add(path(`M${x} ${top - 20} L${x + w} 160 L${x + 4} 160Z`, '#1a4a82', 'opacity="0.55"'));
+    P.add(line(`M${x} ${top - 20} L${x - w * 0.3} ${top + 10} M${x} ${top - 20} L${x + 2} 150`, '#ffffff', 0.9, 0.7));
+  }
+  // lago congelado com reflexo da aurora
+  P.add(path('M0 156 L200 156 L200 200 L0 200Z', P.lin([[0, '#9ad8f4'], [0.4, '#4a9ac8'], [1, '#0e3a6a']])));
+  P.add(path('M20 164 L180 164 L150 200 L50 200Z', P.lin([[0, '#6affc8', 0.35], [1, '#6affc8', 0]]), P.blur(2)));
+  P.add(line('M10 170 L60 168 M120 176 L190 172 M40 186 L100 184', '#ffffff', 0.9, 0.55));
+  // moldura de estalactites de gelo (laterais)
+  const ice = P.lin([[0, '#ffffff'], [0.45, '#a8e0fa'], [1, '#1e5a92']], 0, 0, 1, 1);
+  P.add(sym('M0 200 L0 118 L8 104 L14 132 L22 96 L30 150 L36 200Z', ice, ink(1)));
+  P.add(sym('M8 104 L10 160 L3 190Z M22 96 L25 170 L32 196Z', '#ffffff', 'opacity="0.35"'), sym('M22 96 L30 150 L25 170Z', '#0a3a7a', 'opacity="0.35"'));
+  P.add(sym('M0 0 L34 0 L28 6 L24 18 L18 8 L12 24 L6 10 L0 20Z', ice, ink(1)));
+  P.figure('#b8f8ff', '#7affc8', '#1a5a9a');
+  // traje de cristal: ombros facetados com reflexos de aurora
   const body = 'M8 200 C12 176 34 160 66 154 L134 154 C166 160 188 176 192 200Z';
-  P.add(path(body, P.lin([[0, '#e8f8ff'], [0.4, '#8ac8ec'], [1, '#1a4a7a']], 0.3, 0, 0.6, 1), ink(2)));
-  const facets = ['M20 176 L40 162 L52 180 L30 196Z', 'M40 162 L66 156 L62 178 L52 180Z', 'M52 180 L62 178 L70 200 L44 200Z', 'M10 196 L30 196 L34 200 L8 200Z'];
-  for (const [i, f] of facets.entries()) P.add(sym(f, i % 2 ? '#ffffff' : '#0a3a6a', `opacity="${i % 2 ? 0.35 : 0.25}"`));
-  // pescoço e gola alta de cristal
-  P.add(path('M86 124 L86 158 L100 176 L114 158 L114 124Z', P.lin([[0, '#6a88b0'], [1, '#aac4e0']])));
-  P.add(sym('M86 142 L64 120 L58 160 L92 184Z', P.lin([[0, '#ffffff'], [0.5, '#a8def8'], [1, '#3a7ab0']], 0, 0, 1, 1), ink(1.6)));
-  P.add(sym('M64 120 L72 150 L58 160Z', '#fff', 'opacity="0.45"'), sym('M72 150 L92 184 L86 142Z', '#0a3a6a', 'opacity="0.25"'));
-  P.add(line('M92 184 L100 196 L108 184', INK, 1.4));
-  // orelhas pontudas longas
-  const skin = '#bcd8f0';
-  P.add(sym('M66 84 C50 74 30 56 10 36 C22 60 40 84 56 102 C60 106 64 106 67 100Z', P.lin([[0, '#6a88b0'], [1, '#d8e8f8']], 0, 0, 1, 0), ink(1.8)));
-  P.add(sym('M62 88 C48 78 34 64 22 50 C32 66 44 82 58 96Z', '#5a78a0', 'opacity="0.6"'));
-  // cabeça alongada careca
-  const head = 'M100 20 C132 20 142 46 140 74 C138 96 132 112 122 126 C114 136 106 142 100 142 C94 142 86 136 78 126 C68 112 62 96 60 74 C58 46 68 20 100 20Z';
-  const hc = skinFill(P, head, skin, { light: '#f6fbff', rim: '#9af4ff' });
-  P.add(`<g clip-path="${hc}">`);
-  sculpt(P, skin, { eyeY: 92, dx: 16, noseY: 114, mouthY: 127, chin: 140, cool: true, warm: '#8a7aff' });
-  P.add(`<ellipse cx="86" cy="36" rx="18" ry="10" fill="#fff" opacity="0.4" transform="rotate(-20 86 36)"/>`);
-  P.add(symLine('M72 108 C78 118 84 124 90 128', '#3a5a88', 4, 0.2), symLine('M84 30 C82 44 84 56 88 64', '#5a7aa8', 1.2, 0.35));
+  P.add(path(body, P.lin([[0, '#f4fcff'], [0.35, '#9ad4f4'], [0.75, '#3a7ab8'], [1, '#0e2e5a']], 0.3, 0, 0.6, 1), ink(1.6)));
+  const bc = P.clip(`<path d="${body}"/>`);
+  P.add(`<g clip-path="${bc}">`);
+  const facets = ['M20 176 L40 162 L52 180 L30 196Z', 'M40 162 L66 156 L62 178 L52 180Z', 'M52 180 L62 178 L70 200 L44 200Z', 'M10 196 L30 196 L34 200 L8 200Z', 'M66 156 L84 158 L74 186 L62 178Z'];
+  for (const [i, f] of facets.entries()) P.add(sym(f, i % 2 ? '#ffffff' : '#0a3a6a', `opacity="${i % 2 ? 0.4 : 0.3}"`));
+  P.add(symLine('M20 176 L40 162 L66 156 M40 162 L52 180 L62 178', '#e8fcff', 0.9, 0.8));
+  P.add(`<ellipse cx="44" cy="170" rx="24" ry="8" fill="#7affc8" opacity="0.35" ${P.blur(3)}/><ellipse cx="160" cy="176" rx="22" ry="8" fill="#9a7aff" opacity="0.3" ${P.blur(3)}/>`);
   P.add('</g>');
-  // sobrancelhas finas, olhos claros
-  P.add(symLine('M92 84 C86 79 78 79 70 83', '#5a78a0', 1.8, 0.9));
-  P.add(`<ellipse cx="84" cy="92" rx="14" ry="8" fill="#7ae8ff" opacity="0.15"/><ellipse cx="116" cy="92" rx="14" ry="8" fill="#7ae8ff" opacity="0.15"/>`);
-  P.add(eyes(P, 92, 16, 10, 4.6, '#9aeaff', { tilt: 10, irisR: 4, pupil: '#12304a', lid: 0.2 }));
-  P.add(symLine('M76 98 C80 100 86 100 90 98', '#4a6a98', 0.9, 0.6));
-  // nariz fino e sorriso sutil
-  P.add(line('M101 92 C104 102 104 110 106 114', '#5a7aa8', 1.4, 0.7), line('M95 116 C98 118 102 118 106 115', INK, 1.3, 0.8));
-  P.add(line('M88 127 C96 131 106 130 114 124', '#2a3a5a', 1.8), line('M92 133 C98 135 104 134 108 132', '#fff', 1.2, 0.5));
+  // pescoço (sombra fria sob o queixo) e gola alta de cristal
+  const skin = '#bcd8f0';
+  P.add(path('M86 124 L86 158 L100 176 L114 158 L114 124Z', P.lin([[0, '#5a7ab4'], [0.5, '#9ab8e0'], [1, '#6a8ac0']], 0, 0, 1, 0)));
+  P.add(path('M86 128 C92 142 108 142 114 128 L114 146 C106 152 94 152 86 146Z', '#1a3a8a', `opacity="0.45" ${P.blur(2)}`));
+  P.add(sym('M86 142 L64 120 L58 160 L92 184Z', P.lin([[0, '#ffffff'], [0.5, '#a8def8'], [1, '#2a6aa8']], 0, 0, 1, 1), ink(1.2)));
+  P.add(sym('M64 120 L72 150 L58 160Z', '#fff', 'opacity="0.55"'), sym('M72 150 L92 184 L86 142Z', '#0a3a6a', 'opacity="0.3"'));
+  P.add(symLine('M64 120 L58 160', '#ffffff', 1.1, 0.9));
+  P.add(line('M92 184 L100 196 L108 184', INK, 1.2, 0.6));
+  // orelhas pontudas longas, concha interna sombreada e borda translúcida
+  const earG = P.lin([[0, '#7a9ad0'], [0.55, '#bcd8f0'], [1, '#e8f4ff']], 0, 0, 1, 0);
+  P.add(sym('M66 84 C50 74 30 56 8 34 C20 60 38 84 54 102 C60 108 64 106 67 100Z', earG, ink(1.4)));
+  P.add(sym('M62 88 C48 78 34 64 20 48 C32 66 44 82 58 96Z', '#3a5aa0', `opacity="0.45" ${P.blur(1)}`));
+  P.add(symLine('M10 36 C28 56 44 72 64 84', '#ffffff', 1, 0.7), symLine('M22 56 C34 72 44 84 56 98', '#c8a8ff', 1.4, 0.35));
+  // cabeça alongada careca, sombra azul-violeta (sem cinza sujo)
+  const head = 'M100 20 C132 20 142 46 140 74 C138 96 132 112 122 126 C114 136 106 142 100 142 C94 142 86 136 78 126 C68 112 62 96 60 74 C58 46 68 20 100 20Z';
+  const hc = skinFill(P, head, skin, { light: '#f8fcff', rim: '#9af4ff', rim2: '#7affc8', shadow: '#1a2a8a' });
+  P.add(`<g clip-path="${hc}">`);
+  sculpt(P, skin, { eyeY: 92, dx: 16, noseY: 114, mouthY: 127, chin: 138, cool: true, warm: '#6a9aff', shadow: '#3a5aa8' });
+  P.add(`<ellipse cx="86" cy="38" rx="20" ry="11" fill="#fff" opacity="0.55" transform="rotate(-20 86 38)" ${P.blur(2.5)}/><ellipse cx="82" cy="34" rx="7" ry="3.5" fill="#fff" opacity="0.8" transform="rotate(-20 82 34)" ${P.blur(0.8)}/>`);
+  P.add(`<ellipse cx="136" cy="80" rx="8" ry="30" fill="#7affc8" opacity="0.3" ${P.blur(3)}/>`);
+  P.add(symLine('M72 108 C78 118 84 124 90 128', '#3a5aa8', 4, 0.22));
+  P.add('</g>');
+  // sobrancelhas finas e arqueadas, olhos gelo luminosos
+  const brow: Pt[] = [[94, 84], [86, 79], [76, 78.5], [68, 82]];
+  P.add(path(taper(brow, 2.6, 0.8), '#5a7ab0'), path(taper(mirPts(brow), 2.6, 0.8), '#5a7ab0'));
+  P.add(`<g ${P.blur(2.5)}><ellipse cx="84" cy="92" rx="11" ry="5" fill="#7ae8ff" opacity="0.45"/><ellipse cx="116" cy="92" rx="11" ry="5" fill="#7ae8ff" opacity="0.45"/></g>`);
+  P.add(eyes(P, 92, 16, 10, 4.6, '#6ae4ff', { tilt: 10, irisR: 4.2, pupil: '#0a2a4a', lid: 0.45, sclera: '#eaf6ff' }));
+  P.add(symLine('M76 98 C80 100 86 100 90 98', '#4a6aa8', 0.9, 0.5));
+  // nariz fino, sorriso de canto confiante, lábios azul-violeta
+  realNose(P, 94, 115, 5.6, skin, { dark: '#3a5aa8' });
+  realMouth(P, 126, 12, '#7a88c8', { smirk: 2.5, philtrum: 9, dark: '#1a2450' });
 }
 
 function olaf(P: Pic): void {
@@ -733,7 +966,8 @@ function olaf(P: Pic): void {
     furTop.push(`${x.toFixed(1)} ${y.toFixed(1)}`);
   }
   const fur = `M0 200 L0 150 L${furTop.join(' L')} L200 150 L200 200Z`;
-  P.add(path(fur, P.lin([[0, '#a07048'], [0.4, '#6a4424'], [1, '#2a180a']]), ink(1.8)));
+  P.add(path(fur, P.lin([[0, '#a07048'], [0.4, '#6a4424'], [1, '#2a180a']]), ink(1.2)));
+  P.texture(fur, 'fur', 0.4);
   const r = rng(21);
   let fs = '';
   for (let i = 0; i < 70; i++) {
@@ -769,7 +1003,8 @@ function olaf(P: Pic): void {
   // capacete
   const steel = P.lin([[0, '#f4f7fa'], [0.3, '#aab2be'], [0.6, '#5a6270'], [1, '#2a3038']]);
   const dome = 'M58 72 C58 36 78 18 100 18 C122 18 142 36 142 72Z';
-  P.add(path(dome, steel, ink(2.2)));
+  P.add(path(dome, steel, ink(1.4)));
+  P.texture(dome, 'metal', 0.45);
   P.add(`<g clip-path="${P.clip(`<path d="${dome}"/>`)}"><rect width="200" height="200" fill="${P.lin([[0, '#000', 0.35], [0.3, '#000', 0], [0.7, '#000', 0], [1, '#000', 0.5]], 58, 0, 142, 0, true)}"/></g>`);
   P.add(path('M94 19 L106 19 L108 70 L92 70Z', P.lin([[0, '#c8a050'], [1, '#6a4a18']], 0, 0, 1, 0), ink(1.3)));
   P.add(`<ellipse cx="80" cy="34" rx="10" ry="5" fill="#fff" opacity="0.6" transform="rotate(-30 80 34)"/>`);
@@ -784,7 +1019,8 @@ function olaf(P: Pic): void {
   P.add(path('M95 76 L105 76 L104 98 C102 100 98 100 96 98Z', steel, ink(1.4)));
   // sobrancelhas grossas ruivas, olhos azuis
   const redH = '#c8501a';
-  P.add(sym('M64 86 C72 76 88 76 96 84 C88 84 76 86 66 92Z', redH, ink(1.2)));
+  browHairs(P, [[96, 85], [88, 79], [76, 79], [64, 86]], redH, 6, 91, 46);
+  browHairs(P, mirPts([[96, 85], [88, 79], [76, 79], [64, 86]]), redH, 6, 92, 46);
   P.add(eyes(P, 93, 17, 7, 3.8, '#4a7ab8', { tilt: -6, lid: 0.05 }));
   // nariz grande
   P.add(path('M94 98 C90 108 88 114 94 116 C98 118 102 118 106 116 C112 114 110 108 106 98Z', P.rad([[0, '#ffc0a0'], [0.6, '#e88a6a'], [1, '#b85a40']], 0.4, 0.35, 0.7), ink(1.3)));
@@ -803,7 +1039,22 @@ function olaf(P: Pic): void {
     if (i % 2) dk += s;
     else lt += s;
   }
-  P.add(line(dk, '#6a2008', 1.4, 0.6), line(lt, '#ffb070', 1.2, 0.5));
+  P.add(line(dk, '#6a2008', 1.4, 0.4), line(lt, '#ffb070', 1.2, 0.3));
+  P.add(`<g clip-path="${P.clip(`<path d="${bd}"/>`)}">`);
+  hairLocks(P, 22, 45, (r) => {
+    const x = 58 + r() * 84;
+    const y = 100 + r() * 24;
+    const x2 = 100 + (x - 100) * (0.4 + r() * 0.3);
+    return { p: [[x, y], [x + (x - 100) * 0.15, y + 30], [x2, y + 60], [x2, y + 84 + r() * 20]], w: 8 + r() * 5 };
+  }, { dark: '#4a1404', mid: '#c0501a', light: '#ffb060' }, 2.5, 2);
+  strands(P, 110, 44, (r) => {
+    const x = 56 + r() * 88;
+    const y = 100 + r() * 30;
+    const x2 = 100 + (x - 100) * (0.45 + r() * 0.3);
+    return [[x, y], [x + (x - 100) * 0.12, y + 30], [x2 + (r() - 0.5) * 8, y + 60], [x2, y + 80 + r() * 20]];
+  }, '#ffb060', '#5a1804', 2);
+  P.add(`<ellipse cx="100" cy="126" rx="34" ry="9" fill="#3a0a02" opacity="0.5" ${P.blur(3)}/><ellipse cx="86" cy="150" rx="10" ry="24" fill="#ffd090" opacity="0.25" ${P.blur(4)}/>`);
+  P.add('</g>');
   // tranças com anéis
   for (const bx of [82, 118]) {
     let seg = '';
@@ -815,13 +1066,14 @@ function olaf(P: Pic): void {
   P.add(path('M100 114 C88 108 70 112 60 128 C72 120 88 122 100 120 C112 122 128 120 140 128 C130 112 112 108 100 114Z', P.lin([[0, '#ffb060'], [1, '#b8440e']]), ink(1.6)));
 }
 
-// ---------------------------------------------------------------- rivais (montador de peças)
+// ---------------------------------------------------------------- rivais (montador com o mesmo acabamento dos jogáveis)
 
 type Head = 'human' | 'brute' | 'long' | 'skull' | 'robot' | 'cat';
 type Eyes = 'shades' | 'visor' | 'angry' | 'glow' | 'cat' | 'goggles';
 type Mouth = 'grin' | 'smirk' | 'fangs' | 'snarl' | 'grill' | 'skull';
 type Hair = 'none' | 'mullet' | 'mohawk' | 'spikes' | 'long' | 'crest';
 type Extra = 'horns' | 'viking' | 'beard' | 'scar' | 'earring' | 'antenna' | 'bolts' | 'tusks';
+type Theme = 'storm' | 'desert' | 'jungle' | 'factory' | 'lava' | 'junk' | 'ice' | 'hell';
 
 interface Face {
   head: Head;
@@ -834,17 +1086,18 @@ interface Face {
   extras?: Extra[];
   jacket: string;
   bg: string;
+  theme?: Theme;
 }
 
 const FACES: Record<string, Face> = {
-  rip: { head: 'human', skin: '#b8b8c0', eyes: 'angry', eyeColor: '#c02020', mouth: 'fangs', hair: 'spikes', hairColor: '#f0f0f0', extras: ['scar'], jacket: '#3a3a40', bg: '#505060' },
-  shred: { head: 'human', skin: '#a0704a', eyes: 'angry', eyeColor: '#5a3a1a', mouth: 'snarl', hair: 'spikes', hairColor: '#4a2a14', extras: ['earring'], jacket: '#3a2210', bg: '#8a5020' },
-  viper: { head: 'long', skin: '#3ac040', eyes: 'cat', eyeColor: '#ff3020', mouth: 'fangs', hair: 'long', hairColor: '#101010', jacket: '#0a2a10', bg: '#0a5a1a' },
-  grinder: { head: 'robot', skin: '#6a6f7c', eyes: 'visor', eyeColor: '#40ff80', mouth: 'grill', hair: 'none', extras: ['bolts'], jacket: '#202228', bg: '#304050' },
-  ragewortt: { head: 'brute', skin: '#6a7a2a', eyes: 'glow', eyeColor: '#ff3a1a', mouth: 'snarl', hair: 'spikes', hairColor: '#2e3a12', extras: ['tusks'], jacket: '#2a2a10', bg: '#4a3a10' },
-  roadkill: { head: 'human', skin: '#a8b080', eyes: 'goggles', eyeColor: '#80e0ff', mouth: 'grin', hair: 'mohawk', hairColor: '#5cff3a', extras: ['scar'], jacket: '#4a3a14', bg: '#7a5a20' },
-  butcher: { head: 'skull', skin: '#d8e8f0', eyes: 'glow', eyeColor: '#40e0ff', mouth: 'skull', hair: 'none', extras: ['horns'], jacket: '#10202a', bg: '#104a7a' },
-  slash: { head: 'brute', skin: '#b02010', eyes: 'glow', eyeColor: '#ffe020', mouth: 'fangs', hair: 'long', hairColor: '#0a0a0a', extras: ['horns'], jacket: '#1a0606', bg: '#6a0a06' },
+  rip: { head: 'human', skin: '#c4bcc8', eyes: 'angry', eyeColor: '#c02020', mouth: 'fangs', hair: 'spikes', hairColor: '#e8e8f0', extras: ['scar'], jacket: '#2a1a3a', bg: '#5a2a8a', theme: 'storm' },
+  shred: { head: 'human', skin: '#a8704a', eyes: 'angry', eyeColor: '#6a4a24', mouth: 'snarl', hair: 'spikes', hairColor: '#3a2412', extras: ['earring', 'beard'], jacket: '#4a2a12', bg: '#8a5020', theme: 'desert' },
+  viper: { head: 'long', skin: '#4aa844', eyes: 'cat', eyeColor: '#ff3020', mouth: 'fangs', hair: 'long', hairColor: '#14141a', jacket: '#0a3a1a', bg: '#0a5a1a', theme: 'jungle' },
+  grinder: { head: 'robot', skin: '#7a808c', eyes: 'visor', eyeColor: '#40ff80', mouth: 'grill', hair: 'none', extras: ['bolts', 'antenna'], jacket: '#1a2a3a', bg: '#1a5a8a', theme: 'factory' },
+  ragewortt: { head: 'brute', skin: '#6a7a34', eyes: 'glow', eyeColor: '#ff3a1a', mouth: 'snarl', hair: 'spikes', hairColor: '#2a3010', extras: ['tusks'], jacket: '#3a2a0a', bg: '#4a3a10', theme: 'lava' },
+  roadkill: { head: 'human', skin: '#b8b088', eyes: 'goggles', eyeColor: '#80e0ff', mouth: 'grin', hair: 'mohawk', hairColor: '#5cff3a', extras: ['scar'], jacket: '#4a3414', bg: '#7a5a20', theme: 'junk' },
+  butcher: { head: 'skull', skin: '#dfe6ea', eyes: 'glow', eyeColor: '#40e0ff', mouth: 'skull', hair: 'none', extras: ['horns'], jacket: '#0a2a44', bg: '#104a7a', theme: 'ice' },
+  slash: { head: 'brute', skin: '#a82414', eyes: 'glow', eyeColor: '#ffd020', mouth: 'fangs', hair: 'long', hairColor: '#0e0a0a', extras: ['horns'], jacket: '#2a0806', bg: '#6a0a06', theme: 'hell' },
 };
 
 /** Liga nomes/ids (com variações de grafia) ao rosto. */
@@ -871,23 +1124,24 @@ function genericFace(name: string): Face {
   const pick = <T,>(arr: T[], k: number) => arr[(h >>> k) % arr.length];
   return {
     head: pick<Head>(['human', 'brute', 'long', 'robot'], 0),
-    skin: pick(['#e8b48a', '#7aa04a', '#9aa6b8', '#c08060', '#a070c0'], 3),
+    skin: pick(['#d8a47a', '#7aa04a', '#9aa6b8', '#b07858', '#9a70b0'], 3),
     eyes: pick<Eyes>(['angry', 'shades', 'glow', 'goggles'], 6),
     eyeColor: pick(['#ff3020', '#40e0ff', '#ffe020'], 9),
     mouth: pick<Mouth>(['grin', 'snarl', 'fangs', 'smirk'], 11),
     hair: pick<Hair>(['mohawk', 'spikes', 'none', 'long'], 14),
-    hairColor: pick(['#e0301a', '#f2d060', '#101010', '#5cff3a'], 17),
-    jacket: '#202020',
+    hairColor: pick(['#c0301a', '#e2c060', '#101010', '#5cff3a'], 17),
+    jacket: '',
     bg: pick(['#6a1010', '#1f4fa0', '#3a5a1a', '#6a2a8a'], 20),
+    theme: pick<Theme>(['storm', 'desert', 'factory', 'lava', 'junk'], 23),
   };
 }
 
 function headShape(h: Head): string {
   switch (h) {
     case 'brute':
-      return facePath(40, 41, 32, 146);
+      return 'M100 40 C126 40 141 54 142 80 C143 96 141 110 137 120 C132 134 120 146 100 147 C80 146 68 134 63 120 C59 110 57 96 58 80 C59 54 74 40 100 40Z';
     case 'long':
-      return 'M100 34 C126 34 138 52 138 76 C138 92 136 104 134 112 C134 128 118 142 100 142 C82 142 66 128 66 112 C64 104 62 92 62 76 C62 52 74 34 100 34Z';
+      return 'M100 32 C124 32 137 50 137 74 C137 92 135 104 132 114 C128 130 116 144 100 146 C84 144 72 130 68 114 C65 104 63 92 63 74 C63 50 76 32 100 32Z';
     case 'skull':
       return 'M100 26 C130 26 146 48 146 78 C146 94 140 104 132 110 L128 132 C120 140 110 144 100 144 C90 144 80 140 72 132 L68 110 C60 104 54 94 54 78 C54 48 70 26 100 26Z';
     case 'robot':
@@ -895,8 +1149,146 @@ function headShape(h: Head): string {
     case 'cat':
       return facePath(46, 40, 26, 140);
     default:
-      return facePath(42, 35, 25, 140);
+      return 'M100 42 C121 42 134 55 135 78 C136 92 135 104 132 114 C129 126 124 134 117 140 C111 145 106 147 100 147 C94 147 89 145 83 140 C76 134 71 126 68 114 C65 104 64 92 65 78 C66 55 79 42 100 42Z';
   }
+}
+
+/** Cenário temático pintado em planos (céu, fundo distante, meio, luz ambiente e partículas). */
+function scene(P: Pic, t: Theme, seed: number): void {
+  const r = rng(seed);
+  const ridge = (y: number, amp: number, step: number, col: string, extra = '') => {
+    let d = `M-4 200 L-4 ${y}`;
+    for (let x = -4; x <= 208; x += step) d += ` L${x} ${(y - r() * amp).toFixed(1)}`;
+    P.add(path(`${d} L208 200Z`, col, extra));
+  };
+  const specks = (n: number, y0: number, y1: number, cols: string[], rmax = 1.4) => {
+    let s = '';
+    for (let i = 0; i < n; i++) s += `<circle cx="${(r() * 200).toFixed(1)}" cy="${(y0 + r() * (y1 - y0)).toFixed(1)}" r="${(0.4 + r() * rmax).toFixed(1)}" fill="${cols[i % cols.length]}" opacity="${(0.35 + r() * 0.6).toFixed(2)}"/>`;
+    P.add(s);
+  };
+  switch (t) {
+    case 'storm': {
+      P.add(bgRect(P.lin([[0, '#0e0620'], [0.5, '#3a1a6a'], [1, '#140828']])));
+      for (let i = 0; i < 9; i++) P.add(`<ellipse cx="${(r() * 200).toFixed(0)}" cy="${(10 + r() * 60).toFixed(0)}" rx="${(40 + r() * 40).toFixed(0)}" ry="${(10 + r() * 12).toFixed(0)}" fill="${i % 2 ? '#6a4aa8' : '#2a1648'}" opacity="0.6" ${P.blur(5)}/>`);
+      P.add(neon('M150 0 L140 30 L152 34 L136 70 L146 72 L128 104', '#d8c0ff', 1.2), neon('M30 0 L38 20 L30 24 L42 50', '#b89aff', 0.9));
+      ridge(150, 30, 14, '#1a0c30');
+      ridge(172, 16, 10, '#0a0418');
+      specks(30, 80, 200, ['#c8a8ff', '#ffffff'], 0.8);
+      break;
+    }
+    case 'desert': {
+      P.add(bgRect(P.lin([[0, '#3a1a3a'], [0.35, '#c0503a'], [0.62, '#ffb060'], [1, '#6a3018']])));
+      P.add(`<circle cx="148" cy="96" r="22" fill="${P.rad([[0, '#fff4c0'], [0.5, '#ffd070'], [1, '#ff8a3a', 0]])}"/>`);
+      P.add(path('M-4 200 L-4 110 L14 104 L20 84 L44 84 L50 110 L70 112 L76 100 L96 100 L100 116 L200 118 L208 200Z', '#8a3a2a', `opacity="0.8" ${P.blur(1)}`));
+      P.add(path('M-4 200 L-4 132 L30 128 L36 114 L62 114 L68 134 L140 136 L146 118 L176 118 L182 132 L208 132 L208 200Z', P.lin([[0, '#5a1e1a'], [1, '#1a0806']])));
+      P.add(`<g ${P.blur(0.8)}>${line('M36 116 L62 116 M146 120 L176 120', '#ffb070', 1.4, 0.8)}</g>`);
+      specks(24, 90, 200, ['#ffd08a', '#ff9a4a'], 0.8);
+      break;
+    }
+    case 'jungle': {
+      P.add(bgRect(P.lin([[0, '#0a2a14'], [0.45, '#2a6a2a'], [1, '#061a08']])));
+      P.add(`<ellipse cx="100" cy="60" rx="110" ry="60" fill="${P.rad([[0, '#c8ff8a', 0.55], [1, '#c8ff8a', 0]])}"/>`);
+      for (let i = 0; i < 7; i++) {
+        const x = r() * 200;
+        P.add(path(taper([[x, -4], [x + 10 - r() * 20, 50], [x + 20 - r() * 40, 110], [x + r() * 10, 200]], 8 + r() * 10, 3), i % 2 ? '#0e3a14' : '#1a4a1a', `opacity="0.85" ${P.blur(i % 2 ? 2 : 1)}`));
+      }
+      let leaves = '';
+      for (let i = 0; i < 26; i++) {
+        const x = r() * 200;
+        const y = r() * 200;
+        const a = r() * 360;
+        leaves += `<ellipse cx="${x.toFixed(0)}" cy="${y.toFixed(0)}" rx="${(6 + r() * 8).toFixed(0)}" ry="${(2 + r() * 2).toFixed(1)}" transform="rotate(${a.toFixed(0)} ${x.toFixed(0)} ${y.toFixed(0)})" fill="${i % 3 ? '#2a6a22' : '#4a9a34'}" opacity="0.7"/>`;
+      }
+      P.add(`<g ${P.blur(1.4)}>${leaves}</g>`);
+      P.add(`<rect y="120" width="200" height="80" fill="${P.lin([[0, '#9aff8a', 0], [1, '#9aff8a', 0.25]])}" ${P.blur(4)}/>`);
+      specks(18, 20, 160, ['#eaff9a'], 0.9);
+      break;
+    }
+    case 'factory': {
+      P.add(bgRect(P.lin([[0, '#0a141e'], [0.6, '#1e3a4e'], [1, '#0a0e14']])));
+      P.add(`<ellipse cx="60" cy="150" rx="90" ry="40" fill="${P.rad([[0, '#ff8a2a', 0.55], [1, '#ff8a2a', 0]])}"/>`);
+      let g = '';
+      for (let x = -10; x < 210; x += 34) g += `M${x} 0 L${x + 8} 0 L${x + 8} 200 L${x} 200Z`;
+      P.add(path(g, '#0e1a24', `opacity="0.85" ${P.blur(1.2)}`));
+      let tr = '';
+      for (let x = -10; x < 210; x += 17) tr += `M${x} 40 L${x + 17} 58 M${x + 17} 40 L${x} 58`;
+      P.add(`<path d="M-4 38 H204 M-4 60 H204" stroke="#1a2c3a" stroke-width="3"/>`, line(tr, '#1a2c3a', 1.6));
+      for (const [x, y] of [[30, 20], [170, 24], [110, 12]]) P.add(glowEye(P, x, y, 2.5, '#ffd08a'));
+      let sp = '';
+      for (let i = 0; i < 26; i++) {
+        const x = 20 + r() * 80;
+        const y = 120 + r() * 70;
+        const a = -0.6 - r() * 1.6;
+        const l = 3 + r() * 9;
+        sp += `M${x.toFixed(1)} ${y.toFixed(1)} l${(Math.cos(a) * l).toFixed(1)} ${(Math.sin(a) * l).toFixed(1)}`;
+      }
+      P.add(line(sp, '#ffd05a', 0.8, 0.85));
+      break;
+    }
+    case 'lava': {
+      P.add(bgRect(P.lin([[0, '#1a0604'], [0.5, '#4a140a'], [1, '#ff5a1a']])));
+      P.add(path('M-4 200 L-4 150 L40 100 L64 94 L76 104 L100 150 L130 120 L150 70 L166 66 L176 76 L208 130 L208 200Z', '#200a06', P.blur(0.8)));
+      P.add(`<g ${P.blur(1.5)}>${line('M150 70 C156 90 150 110 160 140 M166 68 C170 96 180 118 196 150', '#ff7a1a', 2.2, 0.85)}</g>`);
+      P.add(`<ellipse cx="158" cy="66" rx="30" ry="14" fill="${P.rad([[0, '#ffb04a', 0.8], [1, '#ff4a0a', 0]])}"/>`);
+      for (let i = 0; i < 5; i++) P.add(`<ellipse cx="${(140 + r() * 40).toFixed(0)}" cy="${(10 + r() * 40).toFixed(0)}" rx="${(14 + r() * 14).toFixed(0)}" ry="${(8 + r() * 8).toFixed(0)}" fill="#3a2020" opacity="0.7" ${P.blur(4)}/>`);
+      P.add(`<ellipse cx="100" cy="206" rx="130" ry="50" fill="${P.rad([[0, '#ffb040', 0.8], [1, '#ff3a0a', 0]])}"/>`);
+      specks(40, 60, 200, ['#ffb040', '#ff6a1a', '#ffe08a'], 1.2);
+      break;
+    }
+    case 'junk': {
+      P.add(bgRect(P.lin([[0, '#6a5a3a'], [0.5, '#c8a060'], [1, '#4a3418']])));
+      P.add(`<circle cx="52" cy="70" r="18" fill="${P.rad([[0, '#fff8d8'], [0.6, '#ffe0a0', 0.8], [1, '#ffe0a0', 0]])}"/>`);
+      ridge(128, 14, 12, '#8a6a3a', `opacity="0.7" ${P.blur(1.5)}`);
+      // pilha de sucata: carcaças, pneus e placas tortas
+      P.add(path('M-4 200 L-4 140 L20 126 L44 132 L52 118 L84 116 L96 128 L130 124 L140 110 L170 112 L184 128 L208 124 L208 200Z', P.lin([[0, '#4a3420'], [1, '#1a1008']])));
+      let tires = '';
+      for (const [x, y, rr] of [[26, 140, 9], [160, 132, 10], [120, 142, 7]]) tires += `<circle cx="${x}" cy="${y}" r="${rr}" fill="none" stroke="#120c08" stroke-width="5"/><circle cx="${x}" cy="${y}" r="${rr}" fill="none" stroke="#5a4a3a" stroke-width="1" opacity="0.6"/>`;
+      P.add(`<g ${P.blur(0.6)}>${tires}</g>`, `<g ${P.blur(0.8)}>${line('M52 120 L84 118 M140 112 L170 114', '#e0b070', 1.2, 0.6)}</g>`);
+      P.add(`<rect width="200" height="200" fill="${P.lin([[0, '#e8c080', 0.3], [0.5, '#e8c080', 0], [1, '#e8c080', 0.15]])}"/>`);
+      specks(30, 0, 200, ['#f0d8a0'], 0.8);
+      break;
+    }
+    case 'ice': {
+      P.add(bgRect(P.lin([[0, '#04142a'], [0.5, '#1a4a7a'], [1, '#8ad0f0']])));
+      P.add(`<ellipse cx="100" cy="80" rx="120" ry="60" fill="${P.rad([[0, '#7ae8ff', 0.4], [1, '#7ae8ff', 0]])}"/>`);
+      for (const [x, w, h] of [[10, 22, 90], [44, 16, 60], [160, 20, 80], [190, 18, 100], [120, 12, 50]] as [number, number, number][]) {
+        P.add(path(`M${x - w} 200 L${x} ${200 - h - 60} L${x + w} 200Z`, P.lin([[0, '#e8fcff'], [0.5, '#6ab8e0'], [1, '#1a4a7a']], 0, 0, 1, 0), `opacity="0.8" ${P.blur(1)}`));
+        P.add(line(`M${x} ${200 - h - 60} L${x + 2} 200`, '#fff', 0.8, 0.6));
+      }
+      P.add(path('M0 0 L200 0 L200 10 L190 26 L184 10 L170 30 L160 8 L140 22 L128 6 L100 18 L80 4 L60 24 L44 6 L30 28 L16 8 L0 20Z', '#dff6ff', `opacity="0.7" ${P.blur(0.8)}`));
+      specks(40, 0, 200, ['#ffffff', '#bff0ff'], 1);
+      break;
+    }
+    case 'hell': {
+      P.add(bgRect(P.lin([[0, '#0a0202'], [0.55, '#5a0a04'], [1, '#ff4a0a']])));
+      for (const x of [14, 186]) P.add(path(`M${x - 12} 200 L${x - 10} 30 L${x + 10} 30 L${x + 12} 200Z`, P.lin([[0, '#1a0604'], [0.5, '#3a1008'], [1, '#0a0202']], 0, 0, 1, 0), P.blur(1)));
+      let fl = '';
+      for (let i = 0; i < 16; i++) {
+        const x = r() * 200;
+        const h = 40 + r() * 80;
+        fl += taper([[x, 204], [x - 8 + r() * 16, 200 - h * 0.4], [x - 10 + r() * 20, 200 - h * 0.8], [x + r() * 6, 200 - h]], 14 + r() * 10, 0.5);
+      }
+      P.add(path(fl, '#ff6a1a', `opacity="0.55" ${P.blur(2.5)}`), path(fl, '#ffd04a', `opacity="0.35" transform="translate(0 10) scale(1 0.95)" ${P.blur(1.5)}`));
+      specks(40, 40, 200, ['#ffb040', '#ff5a1a'], 1.2);
+      break;
+    }
+  }
+}
+
+/** Dentes individuais com volume (brilho no topo, sombra na raiz e vãos escuros). */
+function teethRow(P: Pic, x0: number, x1: number, yBase: number, dir: 1 | -1, n: number, h: number, fangAt: number[] = [], fangH = 0): string {
+  const tg = P.lin(dir > 0 ? [[0, '#8a7a5a'], [0.25, '#e8e0cc'], [0.7, '#fffcf0'], [1, '#d8ccb0']] : [[0, '#d8ccb0'], [0.3, '#fffcf0'], [0.75, '#e8e0cc'], [1, '#8a7a5a']]);
+  const w = (x1 - x0) / n;
+  let d = '';
+  for (let i = 0; i < n; i++) {
+    const x = x0 + i * w;
+    const hh = fangAt.includes(i) ? fangH : h * (0.85 + ((i * 37) % 7) * 0.03);
+    const tip = yBase + dir * hh;
+    d += fangAt.includes(i)
+      ? `M${x.toFixed(1)} ${yBase} L${(x + w).toFixed(1)} ${yBase} L${(x + w * 0.55).toFixed(1)} ${tip.toFixed(1)}Z`
+      : `M${(x + 0.3).toFixed(1)} ${yBase} L${(x + w - 0.3).toFixed(1)} ${yBase} L${(x + w - 0.5).toFixed(1)} ${(tip - dir * 1.2).toFixed(1)} Q${(x + w / 2).toFixed(1)} ${(tip + dir * 0.8).toFixed(1)} ${(x + 0.5).toFixed(1)} ${(tip - dir * 1.2).toFixed(1)}Z`;
+  }
+  return `<path d="${d}" fill="${tg}" stroke="#3a2a1a" stroke-width="0.5" stroke-opacity="0.6" ${P.blur(0.25)}/>`;
 }
 
 function rival(P: Pic, f: Face, seed: number): void {
@@ -904,145 +1296,268 @@ function rival(P: Pic, f: Face, seed: number): void {
   const eyeC = f.eyeColor ?? '#ff3020';
   const ex = new Set(f.extras ?? []);
   const metal = f.head === 'robot' || f.head === 'skull';
-  // fundo: brilho da cor do piloto, riscos de velocidade e brasas
-  P.add(bgRect(P.rad([[0, shade(f.bg, 1.55)], [0.5, f.bg], [1, shade(f.bg, 0.22)]], 0.5, 0.38, 0.75)));
-  const r = rng(seed);
-  let streak = '';
-  for (let i = 0; i < 14; i++) {
-    const y = r() * 200;
-    streak += `M${(-10 + r() * 60).toFixed(1)} ${y.toFixed(1)} L${(140 + r() * 80).toFixed(1)} ${(y - 50 - r() * 30).toFixed(1)}`;
-  }
-  P.add(line(streak, '#fff', 1, 0.12));
-  let emb = '';
-  for (let i = 0; i < 26; i++) emb += `<circle cx="${(r() * 200).toFixed(1)}" cy="${(90 + r() * 110).toFixed(1)}" r="${(0.6 + r() * 1.4).toFixed(1)}" fill="${r() < 0.5 ? '#ffb040' : '#ff5a1a'}" opacity="${(0.4 + r() * 0.6).toFixed(2)}"/>`;
-  P.add(`<ellipse cx="100" cy="210" rx="130" ry="60" fill="${P.rad([[0, '#ff7a1a', 0.55], [1, '#ff3a0a', 0]])}"/>`, emb);
+  scene(P, f.theme ?? 'storm', seed);
   P.figure(shade(f.bg, 1.9), '#ffb040', shade(f.bg, 1.2));
-  // cabelo de trás
-  const hairG = P.lin([[0, shade(hairC, 1.6)], [0.4, hairC], [1, shade(hairC, 0.4)]]);
+  const hairG = P.lin([[0, shade(hairC, 1.5)], [0.4, hairC], [1, shade(hairC, 0.4)]]);
+  const hairCols = { dark: shade(hairC, 0.35), mid: hairC, light: shade(hairC, 1.28) };
+  // cabelo comprido atrás, em mechas
   if (f.hair === 'long' || f.hair === 'mullet') {
-    P.add(path(f.hair === 'long' ? 'M100 22 C60 22 46 50 46 86 C46 120 38 150 28 186 L76 184 C70 160 68 130 70 104 L130 104 C132 130 130 160 124 184 L172 186 C162 150 154 120 154 86 C154 50 140 22 100 22Z' : 'M100 26 C66 26 54 50 56 84 C56 110 58 140 64 160 L136 160 C142 140 144 110 144 84 C146 50 134 26 100 26Z', hairG, ink(2)));
-    P.add(symLine('M56 80 C54 110 48 144 38 180', shade(hairC, 2.2), 1.2, 0.4));
+    const back = 'M100 22 C60 22 44 52 44 88 C44 122 36 156 22 200 L178 200 C164 156 156 122 156 88 C156 52 140 22 100 22Z';
+    P.add(path(back, P.lin([[0, shade(hairC, 1.3)], [1, shade(hairC, 0.4)]]), P.blur(1.2)));
+    P.add(`<g clip-path="${P.clip(`<path d="${back}"/>`)}">`);
+    hairLocks(P, 26, seed + 1, (r, i) => {
+      const sg = i % 2 ? 1 : -1;
+      const x0 = 100 + sg * (24 + r() * 28);
+      const x1 = 100 + sg * (34 + r() * 64);
+      return { p: [[x0, 34 + r() * 30], [x0 + sg * 8, 96], [x1 - sg * 6, 150], [x1, 206]], w: 9 + r() * 6 };
+    }, hairCols, 3, 1.2);
+    P.add('</g>');
   }
-  // chifres atrás
+  // chifres atrás, com anéis e textura óssea
   if (ex.has('horns')) {
-    const hp: Pt[] = [[70, 50], [48, 44], [34, 24], [44, 2]];
-    const hg = P.lin([[0, '#fff4e0'], [0.5, '#c8b890'], [1, '#5a4a30']], 0, 0, 1, 0);
-    P.add(path(taper(hp, 16, 2, 18), hg, ink(2)), path(taper(mirPts(hp), 16, 2, 18), hg, ink(2)));
+    const hp: Pt[] = [[70, 50], [46, 44], [30, 24], [42, 0]];
+    const hg = P.lin([[0, '#fff4e0'], [0.5, '#c8b890'], [1, '#4a3a20']], 0, 0, 1, 0);
+    for (const pts of [hp, mirPts(hp)]) {
+      const d = taper(pts, 17, 2, 20);
+      P.add(path(d, hg, ink(1.2)));
+      P.texture(d, 'stone', 0.5);
+      let rings = '';
+      for (const t of [0.15, 0.3, 0.45, 0.6, 0.75]) {
+        const b = bez(pts, t);
+        const len = Math.hypot(b.dx, b.dy) || 1;
+        const w = (17 + (2 - 17) * t) / 2;
+        rings += `M${(b.x - (b.dy / len) * w).toFixed(1)} ${(b.y + (b.dx / len) * w).toFixed(1)} L${(b.x + (b.dy / len) * w).toFixed(1)} ${(b.y - (b.dx / len) * w).toFixed(1)}`;
+      }
+      P.add(`<g ${P.blur(0.5)}>${line(rings, '#5a4a30', 1, 0.6)}</g>`);
+    }
   }
-  // corpo: pescoço, jaqueta, ombreiras
-  P.add(path('M84 124 L84 156 Q100 166 116 156 L116 124Z', metal ? '#2a2e38' : P.lin([[0, shade(f.skin, 0.5)], [1, shade(f.skin, 0.8)]])));
-  if (metal) P.add(line('M92 130 L90 160 M100 130 L100 164 M108 130 L110 160', '#0a0a0a', 3));
-  leatherJacket(P, f.jacket, shade(f.jacket, 0.6), { rimL: shade(f.bg, 1.7), rimR: shade(f.bg, 1.7) });
-  const pad = P.lin([[0, '#ffffff'], [0.4, shade(f.bg, 1.45)], [1, shade(f.bg, 0.3)]], 0, 0, 0.6, 1);
-  P.add(sym('M14 172 C18 156 36 148 56 150 L50 168 C38 166 26 170 18 180Z', pad, ink(1.6)));
-  if (f.head === 'brute' || ex.has('tusks')) P.add(sym('M24 162 L20 142 L32 158Z M38 154 L38 134 L46 152Z', pad, ink(1.2)));
+  // pescoço e tronco
+  const neck = 'M83 122 L82 158 Q100 168 118 158 L117 122Z';
+  P.add(path(neck, metal ? P.lin([[0, '#3a404c'], [0.5, '#6a7280'], [1, '#22262e']], 0, 0, 1, 0) : P.lin([[0, shade(f.skin, 0.55)], [0.5, shade(f.skin, 0.85)], [1, shade(f.skin, 0.45)]], 0, 0, 1, 0)));
+  if (metal) {
+    P.add(line('M90 128 L89 160 M100 128 L100 164 M110 128 L111 160', '#0a0a0e', 2.6));
+    P.add(line('M90 128 L89 160 M110 128 L111 160', '#c02a1a', 1.2, 0.8));
+  } else P.add(`<path d="M82 124 C90 146 110 146 118 124 L118 150 C108 158 92 158 82 150Z" fill="#1a0804" opacity="0.5" ${P.blur(2.5)}/>`);
+  const jk = f.jacket || shade(f.bg, 0.4);
+  leatherJacket(P, jk, shade(jk, 0.7), { rimL: shade(f.bg, 1.8), rimR: '#ffb040' });
+  // ombreiras de metal com textura escovada, rebites e espinhos
+  const padD = 'M12 176 C16 158 36 148 58 150 L52 170 C40 168 28 172 18 184Z';
+  const pad = P.lin([[0, '#e8ecf2'], [0.3, '#8a92a0'], [0.6, '#3a404c'], [1, '#141820']], 0, 0, 0.6, 1);
+  P.add(sym(padD, pad, ink(1.2)));
+  P.texture(padD, 'metal', 0.5);
+  P.texture(mx(padD), 'metal', 0.5);
+  P.add(`<g ${P.blur(0.8)}>${symLine('M20 170 C28 160 40 155 54 154', '#fff', 1.4, 0.6)}</g>`);
+  P.add(`<g fill="${P.rad([[0, '#ffffff'], [0.5, '#9aa0ae'], [1, '#2a2e38']], 0.35, 0.3, 0.7)}"><circle cx="26" cy="170" r="1.6"/><circle cx="40" cy="162" r="1.6"/><circle cx="174" cy="170" r="1.6"/><circle cx="160" cy="162" r="1.6"/></g>`);
+  if (f.head === 'brute' || ex.has('tusks')) P.add(sym('M24 164 L18 142 L32 160Z M38 156 L36 134 L46 154Z', pad, ink(1)));
   // orelhas
-  if (f.head === 'human' || f.head === 'brute') P.add(sym('M66 84 C57 80 54 92 56 100 C58 108 62 110 67 106Z', P.lin([[0, shade(f.skin, 0.6)], [1, f.skin]]), ink(1.5)));
-  if (f.head === 'long') P.add(sym('M64 76 C50 70 40 60 34 48 C40 66 50 80 62 92Z', P.lin([[0, shade(f.skin, 0.6)], [1, f.skin]]), ink(1.5)));
-  // cabeça
+  if (f.head === 'human' || f.head === 'brute') {
+    const ear = 'M66 84 C57 80 54 92 56 100 C58 108 62 110 67 106Z';
+    P.add(sym(ear, P.lin([[0, shade(f.skin, 0.55)], [1, f.skin]]), ink(1)));
+    P.add(`<g ${P.blur(0.8)}>${symLine('M63 90 C60 94 60 100 63 103', shade(f.skin, 0.4), 1.2, 0.6)}</g>`);
+  }
+  if (f.head === 'long') P.add(sym('M64 76 C50 70 36 58 28 44 C36 66 48 82 62 94Z', P.lin([[0, shade(f.skin, 0.55)], [1, f.skin]]), ink(1)));
+  // cabeça modelada
   const hd = headShape(f.head);
-  const hc = skinFill(P, hd, f.skin, metal ? { light: '#ffffff' } : {});
+  const hc = skinFill(P, hd, f.skin, metal ? { light: '#ffffff', tex: f.head === 'skull' ? 'stone' : 'metal' } : { rim: shade(f.bg, 1.8), rim2: '#ffb050', sss: f.head === 'long' ? '#c8ff4a' : undefined });
   P.add(`<g clip-path="${hc}">`);
   if (f.head === 'long') {
+    // escamas: fileiras de arcos com luz e sombra
     let sc = '';
-    for (let y = 40; y < 90; y += 7) for (let x = 70 + ((y / 7) % 2) * 3.5; x < 132; x += 7) sc += `M${x} ${y} C${x + 2} ${y + 4} ${x + 5} ${y + 4} ${x + 7} ${y}`;
-    P.add(line(sc, shade(f.skin, 0.5), 0.9, 0.5));
+    let hl = '';
+    for (let y = 36; y < 100; y += 5.5) for (let x = 64 + ((y / 5.5) % 2) * 3; x < 136; x += 6) {
+      sc += `M${x} ${y} C${x + 1.5} ${y + 3.6} ${x + 4.5} ${y + 3.6} ${x + 6} ${y}`;
+      hl += `M${x + 1} ${y + 0.8} C${x + 2} ${y + 2.4} ${x + 4} ${y + 2.4} ${x + 5} ${y + 0.8}`;
+    }
+    P.add(line(sc, shade(f.skin, 0.45), 0.8, 0.55), line(hl, shade(f.skin, 1.5), 0.6, 0.35));
   }
-  if (!metal) sculpt(P, f.skin, { eyeY: 91, dx: 18, noseY: 113, mouthY: 125, chin: 140, cool: f.head === 'long' || f.head === 'brute' });
-  if (metal) P.add(`<ellipse cx="82" cy="44" rx="16" ry="7" fill="#fff" opacity="0.5" transform="rotate(-18 82 44)"/>`);
-  if (f.head === 'robot') P.add(line('M100 32 L100 70 M60 58 L80 62 M140 58 L120 62 M58 118 L76 112 M142 118 L124 112', shade(f.skin, 0.4), 1.5));
+  if (!metal) sculpt(P, f.skin, { eyeY: 92, dx: 17, noseY: 115, mouthY: 127, chin: 142, cool: f.head === 'long' || f.head === 'brute' });
+  if (ex.has('beard')) {
+    const bz = 'M66 110 C70 132 86 150 100 150 C114 150 130 132 134 110 C126 122 118 124 113 121 C108 118 92 118 87 121 C82 124 74 122 66 110Z';
+    P.add(path(bz, shade(hairC, 0.8), `opacity="0.35" ${P.blur(2)}`));
+    P.texture(bz, 'stubble', 0.9);
+  }
+  if (metal) {
+    P.add(`<ellipse cx="82" cy="44" rx="16" ry="7" fill="#fff" opacity="0.55" transform="rotate(-18 82 44)" ${P.blur(1.5)}/>`);
+    P.add(`<rect width="200" height="200" fill="${P.lin([[0, '#000', 0.45], [0.25, '#000', 0], [0.7, '#000', 0], [1, '#000', 0.55]], 54, 0, 146, 0, true)}"/>`);
+  }
+  if (f.head === 'robot') {
+    P.add(`<g ${P.blur(0.35)}>${line('M100 32 L100 70 M60 58 L80 62 M140 58 L120 62 M58 118 L76 112 M142 118 L124 112', '#1a1e26', 1.2)}${line('M101 32 L101 70 M60 59.5 L80 63.5', '#fff', 0.6, 0.5)}</g>`);
+    P.add(`<ellipse cx="136" cy="90" rx="6" ry="30" fill="#40ff80" opacity="0.18" ${P.blur(3)}/>`);
+  }
+  if (f.head === 'skull') {
+    P.add(`<g ${P.blur(0.5)}>${line('M100 27 L100 50 M74 40 C82 50 88 54 96 56 M126 40 C118 50 112 54 104 56', '#5a6a78', 1, 0.6)}${line('M120 34 L126 52 L122 62', '#3a4250', 0.9, 0.7)}</g>`);
+  }
   P.add('</g>');
-  if (f.head === 'robot' || ex.has('bolts')) P.add(`<g fill="${P.rad([[0, '#fff'], [1, '#5a6070']])}" ${ink(0.8)}><circle cx="64" cy="42" r="2.6"/><circle cx="136" cy="42" r="2.6"/><circle cx="62" cy="124" r="2.6"/><circle cx="138" cy="124" r="2.6"/></g>`);
+  if (f.head === 'robot' || ex.has('bolts')) P.add(`<g fill="${P.rad([[0, '#fff'], [0.5, '#9aa0ae'], [1, '#3a4050']], 0.35, 0.3, 0.7)}"><circle cx="64" cy="42" r="2.4"/><circle cx="136" cy="42" r="2.4"/><circle cx="62" cy="124" r="2.4"/><circle cx="138" cy="124" r="2.4"/></g>`);
   // olhos
+  const browC = shade(hairC === '#e8e8f0' ? '#7a7a88' : f.head === 'long' || f.head === 'brute' ? f.skin : hairC, 0.55);
   switch (f.eyes) {
-    case 'angry':
-      P.add(eyes(P, 92, 16, 8.5, 4.4, eyeC, { tilt: -8, lid: 0.7 }));
-      P.add(sym(taper([[97, 88], [88, 80], [78, 78], [66, 80]], 6, 2.5), shade(hairC === '#f0f0f0' ? '#8a8a90' : hairC, 0.8), ink(0.6)));
+    case 'angry': {
+      P.add(eyes(P, 93, 16, 8, 3.4, eyeC, { tilt: -8, lid: 0.7 }));
+      const bw: Pt[] = [[97, 89], [89, 82.5], [79, 80.5], [67, 82]];
+      browHairs(P, bw, browC, 4.6, seed + 3);
+      browHairs(P, mirPts(bw), browC, 4.6, seed + 4);
+      P.add(`<g ${P.blur(1)}>${line('M96 84 L99 90 M104 84 L101 90', shade(f.skin, 0.45), 1.3, 0.5)}</g>`);
       break;
+    }
     case 'glow':
-      P.add(sym('M64 84 C74 82 88 86 96 92 C86 100 72 100 64 84Z', '#0a0404', ink(1.4)));
-      P.add(glowEye(P, 82, 91, 4.5, eyeC), glowEye(P, 118, 91, 4.5, eyeC));
-      P.add(sym('M58 78 C70 74 88 80 98 90 C86 84 72 82 60 84Z', shade(f.skin, 0.45), ink(1.2)));
+      P.add(`<g ${P.blur(1.4)}>${sym('M62 84 C74 81 88 86 97 93 C86 102 70 101 62 84Z', '#0a0404', 'opacity="0.9"')}</g>`);
+      P.add(glowEye(P, 82, 91, 4.2, eyeC), glowEye(P, 118, 91, 4.2, eyeC));
+      P.add(`<g ${P.blur(0.8)}>${sym('M56 78 C70 72 88 78 99 90 C86 83 72 81 58 84Z', shade(f.skin, 0.4))}</g>`);
+      P.add(`<g ${P.blur(0.6)}>${symLine('M60 79 C72 74 86 78 96 86', shade(f.skin, 1.35), 1, 0.5)}</g>`);
       break;
     case 'cat':
-      P.add(eyes(P, 88, 17, 11, 5.8, eyeC, { tilt: 16, slit: true, irisR: 6.4, lid: 0.5, sclera: '#e8e070' }));
-      P.add(symLine('M66 78 C74 74 86 76 94 82', shade(f.skin, 0.4), 2.4));
+      P.add(`<g ${P.blur(1.5)}>${sym('M64 82 C74 80 88 84 96 92 C86 98 72 98 64 82Z', shade(f.skin, 0.35), 'opacity="0.7"')}</g>`);
+      P.add(eyes(P, 89, 17, 10.5, 5.2, eyeC, { tilt: 16, slit: true, irisR: 6, lid: 0.5, sclera: '#d8cc50' }));
+      P.add(`<g ${P.blur(0.6)}>${symLine('M64 79 C74 74 86 76 95 83', shade(f.skin, 0.35), 2.4, 0.9)}</g>`);
       break;
     case 'goggles': {
-      P.add(line('M56 90 L144 90', '#3a2a1a', 7), line('M56 88 L144 88', '#6a5030', 1.2, 0.6));
-      const lens = P.rad([[0, shade(eyeC, 1.5)], [0.6, shade(eyeC, 0.7)], [1, shade(eyeC, 0.25)]], 0.4, 0.35, 0.7);
-      for (const cx of [82, 118]) P.add(`<circle cx="${cx}" cy="91" r="12" fill="${P.lin([[0, '#e0e4ea'], [1, '#4a5060']])}" ${ink(1.8)}/><circle cx="${cx}" cy="91" r="8.5" fill="${lens}" ${ink(1)}/><path d="M${cx - 5} ${88} C${cx - 3} ${85} ${cx} ${84} ${cx + 2} ${84}" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/>`);
+      P.add(`<g ${P.blur(0.4)}>${line('M54 90 L146 90', '#2a1c10', 7)}${line('M54 88 L146 88', '#8a6a40', 1, 0.6)}</g>`);
+      P.texture('M54 86.5 L146 86.5 L146 93.5 L54 93.5Z', 'leather', 0.6);
+      const lens = P.rad([[0, shade(eyeC, 1.5)], [0.6, shade(eyeC, 0.6)], [1, shade(eyeC, 0.2)]], 0.4, 0.35, 0.7);
+      for (const cx of [82, 118]) {
+        P.add(`<circle cx="${cx}" cy="91" r="12.5" fill="${P.lin([[0, '#f0f2f6'], [0.4, '#8a92a0'], [1, '#2a303a']], 0, 0, 1, 1)}" ${ink(1.2)}/><circle cx="${cx}" cy="91" r="9" fill="${lens}"/>`);
+        P.add(`<circle cx="${cx}" cy="91" r="9" fill="none" stroke="#000" stroke-width="1.6" opacity="0.5" ${P.blur(0.6)}/><path d="M${cx - 5.5} 88 C${cx - 3.5} 84.5 ${cx} 83.6 ${cx + 2.5} 84" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" ${P.blur(0.4)}/><circle cx="${cx + 4}" cy="95" r="1" fill="#fff" opacity="0.6"/>`);
+      }
       break;
     }
     case 'visor':
-      P.add(`<rect x="60" y="80" width="80" height="20" rx="9" fill="#08090c" ${ink(2)}/><rect x="56" y="76" width="88" height="28" rx="13" fill="${P.rad([[0, eyeC, 0.45], [1, eyeC, 0]])}"/><rect x="65" y="86" width="70" height="8" rx="4" fill="${P.lin([[0, shade(eyeC, 0.6)], [0.5, '#ffffff'], [1, shade(eyeC, 0.6)]], 0, 0, 1, 0)}"/><rect x="65" y="86" width="70" height="8" rx="4" fill="${eyeC}" opacity="0.6"/>`);
+      P.add(`<rect x="60" y="80" width="80" height="20" rx="9" fill="#060709" ${ink(1.2)}/><rect x="52" y="72" width="96" height="36" rx="16" fill="${P.rad([[0, eyeC, 0.5], [1, eyeC, 0]])}"/>`);
+      P.add(`<rect x="65" y="86" width="70" height="8" rx="4" fill="${P.lin([[0, shade(eyeC, 0.5)], [0.5, '#ffffff'], [1, shade(eyeC, 0.5)]], 0, 0, 1, 0)}"/><rect x="65" y="86" width="70" height="8" rx="4" fill="${eyeC}" opacity="0.55"/>`);
+      P.add(line('M68 90 L132 90', '#fff', 0.6, 0.8), `<path d="M62 82 L138 82" stroke="#fff" stroke-width="0.8" opacity="0.35"/>`);
       break;
     case 'shades':
-      P.add(path('M60 82 L140 82 L138 91 C136 102 118 104 110 97 L104 91 L96 91 L90 97 C82 104 64 102 62 91Z', P.lin([[0, '#2a2a3e'], [1, '#08080e']]), ink(2)), line('M68 86 L80 85 M112 85 L124 84', '#fff', 1.4, 0.8));
+      P.add(path('M60 82 L140 82 L138 91 C136 102 118 104 110 97 L104 91 L96 91 L90 97 C82 104 64 102 62 91Z', P.lin([[0, '#2a2a3e'], [1, '#08080e']]), ink(1.2)));
+      P.add(`<g ${P.blur(0.5)}>${line('M68 86 L82 85 M112 85 L126 84', '#fff', 1.4, 0.7)}</g>`);
       break;
   }
   // nariz
-  if (f.head === 'human' || f.head === 'brute' || f.head === 'cat') P.add(nose(96, 113, 6.5, f.skin));
-  if (f.head === 'long') P.add(`<ellipse cx="94" cy="108" rx="1.6" ry="1" fill="${INK}"/><ellipse cx="106" cy="108" rx="1.6" ry="1" fill="${INK}"/>`);
+  if (f.head === 'human' || f.head === 'brute') realNose(P, 92, 115, f.head === 'brute' ? 8.5 : 7, f.skin);
+  if (f.head === 'long') P.add(`<g ${P.blur(0.5)}><ellipse cx="94.5" cy="109" rx="1.8" ry="1.1" fill="#0a1a06"/><ellipse cx="105.5" cy="109" rx="1.8" ry="1.1" fill="#0a1a06"/></g>`, `<ellipse cx="100" cy="104" rx="6" ry="4" fill="#fff" opacity="0.18" ${P.blur(1.5)}/>`);
   // boca
-  const tth = P.lin([[0, '#fffcf0'], [1, '#c8bca0']]);
+  const my = 126;
+  const inner = P.rad([[0, '#6a1010'], [0.7, '#2a0404'], [1, '#100202']], 0.5, 0.3, 0.7);
   switch (f.mouth) {
     case 'grin':
-      P.add(path('M80 120 C92 132 108 132 120 120 C108 126 92 126 80 120Z', tth, ink(1.6)), line('M86 123 L86 127 M93 125 L93 129 M100 126 L100 130 M107 125 L107 129 M114 123 L114 127', INK, 0.8, 0.8), line('M78 118 C80 120 80 122 78 124 M122 118 C120 120 120 122 122 124', INK, 1.2));
+      P.add(path(`M80 ${my - 4} C90 ${my + 8} 110 ${my + 8} 120 ${my - 4} C108 ${my + 1} 92 ${my + 1} 80 ${my - 4}Z`, inner));
+      P.add(teethRow(P, 83, 117, my - 2.2, 1, 8, 4.8));
+      P.add(`<g ${P.blur(0.5)}>${line(`M79 ${my - 4.5} C92 ${my + 0.5} 108 ${my + 0.5} 121 ${my - 4.5}`, '#2a0a04', 1.4)}${line(`M82 ${my + 1} C92 ${my + 9} 108 ${my + 9} 118 ${my + 1}`, '#2a0a04', 1.2, 0.8)}</g>`);
+      P.add(`<ellipse cx="100" cy="${my + 9}" rx="10" ry="1.6" fill="#fff" opacity="0.3" ${P.blur(0.8)}/>`);
       break;
     case 'smirk':
-      P.add(line('M86 124 C96 127 106 126 116 119', INK, 2.2));
+      realMouth(P, my, 13, shade(f.skin, 0.8), { smirk: 3 });
       break;
     case 'fangs':
-      P.add(path('M78 120 C90 116 110 116 122 120 C116 134 84 134 78 120Z', P.rad([[0, '#7a1010'], [1, '#200404']]), ink(1.8)));
-      P.add(path('M84 119.5 L88 131 L91 118.5Z M109 118.5 L112 131 L116 119.5Z', tth, ink(0.9)), path('M91 118.5 L109 118.5 L108 122 L92 122Z', tth, ink(0.6)));
+      P.add(path(`M78 ${my - 5} C90 ${my - 9} 110 ${my - 9} 122 ${my - 5} C116 ${my + 10} 84 ${my + 10} 78 ${my - 5}Z`, inner));
+      P.add(teethRow(P, 84, 116, my - 7.5, 1, 7, 3.2, [0, 6], 11), teethRow(P, 88, 112, my + 7, -1, 6, 2.6, [0, 5], 7));
+      P.add(`<g ${P.blur(0.5)}>${path(`M78 ${my - 5} C90 ${my - 9} 110 ${my - 9} 122 ${my - 5} C116 ${my + 10} 84 ${my + 10} 78 ${my - 5}Z`, 'none', `stroke="#200404" stroke-width="1.4"`)}</g>`);
+      P.add(`<path d="M78 ${my - 6} C90 ${my - 11} 110 ${my - 11} 122 ${my - 6}" fill="none" stroke="${shade(f.skin, 0.55)}" stroke-width="3" opacity="0.6" ${P.blur(1)}/>`);
       break;
     case 'snarl':
-      P.add(path('M76 118 L124 118 L120 132 L80 132Z', '#200404', ink(1.8)));
-      P.add(path('M78 119 L122 119 L121 124.5 L79 124.5Z M80 126 L120 126 L119 131 L81 131Z', tth, ink(0.8)), line('M86 119 L86 131 M93 119 L93 131 M100 119 L100 131 M107 119 L107 131 M114 119 L114 131', INK, 0.8));
+      P.add(path(`M76 ${my - 7} L124 ${my - 7} C122 ${my + 4} 120 ${my + 8} 100 ${my + 8} C80 ${my + 8} 78 ${my + 4} 76 ${my - 7}Z`, inner));
+      P.add(`<path d="M78 ${my - 6.5} L122 ${my - 6.5} L121 ${my - 4.5} L79 ${my - 4.5}Z" fill="#b83a3a" opacity="0.8"/>`);
+      P.add(teethRow(P, 79, 121, my - 4.8, 1, 9, 5.2, ex.has('tusks') ? [] : [0, 8], 8), teethRow(P, 81, 119, my + 7, -1, 8, 4.4));
+      P.add(`<g ${P.blur(0.6)}>${line(`M74 ${my - 8} C88 ${my - 11} 112 ${my - 11} 126 ${my - 8}`, shade(f.skin, 0.4), 2.2, 0.7)}${line(`M80 ${my + 9} C92 ${my + 12} 108 ${my + 12} 120 ${my + 9}`, shade(f.skin, 0.45), 1.6, 0.5)}</g>`);
+      P.add(`<g ${P.blur(1)}>${line('M88 110 C84 116 80 120 76 122 M112 110 C116 116 120 120 124 122', shade(f.skin, 0.45), 1.6, 0.5)}</g>`);
       break;
-    case 'grill':
-      P.add(`<rect x="74" y="116" width="52" height="18" rx="3" fill="#15171c" ${ink(1.6)}/>`, line('M80 117 L80 133 M87 117 L87 133 M94 117 L94 133 M101 117 L101 133 M108 117 L108 133 M115 117 L115 133 M121 117 L121 133', '#8a92a0', 1.8));
+    case 'grill': {
+      P.add(`<rect x="72" y="114" width="56" height="20" rx="4" fill="${P.lin([[0, '#2a2e38'], [1, '#0a0c10']])}" ${ink(1)}/>`);
+      let bars = '';
+      for (let x = 78; x <= 122; x += 6) bars += `M${x} 116 L${x} 132`;
+      P.add(line(bars, '#1a1e26', 3), line(bars, '#b8c0cc', 1.4), `<g ${P.blur(0.4)}>${line(bars.replace(/M(\d+)/g, (_m, x) => `M${+x - 0.5}`), '#fff', 0.5, 0.6)}</g>`);
+      P.add(`<rect x="72" y="114" width="56" height="20" rx="4" fill="${P.rad([[0, eyeC, 0.25], [1, eyeC, 0]])}"/>`);
       break;
-    case 'skull':
-      P.add(path('M100 98 L93 112 C96 114 98 112 100 110 C102 112 104 114 107 112Z', '#0a0406', ink(1.2)));
-      P.add(`<rect x="78" y="118" width="44" height="16" rx="2" fill="#0a0406"/>`);
-      let t = '';
-      for (let i = 0; i < 8; i++) t += `M${79 + i * 5.3} 119 h4.4 v6.5 c-1 1.5 -3.4 1.5 -4.4 0Z M${79 + i * 5.3} 133 h4.4 v-5.5 c-1 -1.5 -3.4 -1.5 -4.4 0Z`;
-      P.add(path(t, tth, ink(0.7)));
+    }
+    case 'skull': {
+      P.add(`<path d="M100 99 L93 113 C96 115 98 113 100 111 C102 113 104 115 107 113Z" fill="#0a0406" ${P.blur(0.4)}/>`);
+      P.add(`<rect x="76" y="117" width="48" height="18" rx="3" fill="#0a0406"/>`);
+      P.add(teethRow(P, 77, 123, 118, 1, 8, 7.4), teethRow(P, 78, 122, 134, -1, 8, 6.2));
+      P.add(`<g ${P.blur(0.6)}>${line('M70 112 C74 128 86 140 100 142 C114 140 126 128 130 112', '#5a6a78', 1.2, 0.6)}</g>`);
       break;
+    }
   }
-  if (ex.has('tusks')) P.add(sym('M80 126 C74 118 72 106 76 98 C78 108 82 116 86 122Z', P.lin([[0, '#fffcf0'], [1, '#b8a880']]), ink(1.4)));
-  if (ex.has('scar')) P.add(line('M122 74 L132 110', '#7a1010', 3), line('M123 82 L130 79 M125 90 L132 87 M127 98 L134 95 M129 104 L135 102', '#7a1010', 1.5));
-  if (ex.has('earring')) P.add(`<circle cx="57" cy="110" r="4.2" fill="none" stroke="#ffd84a" stroke-width="2"/>`);
+  if (ex.has('tusks')) {
+    const tk = 'M80 128 C72 120 70 106 75 96 C78 108 83 117 88 123Z';
+    P.add(sym(tk, P.lin([[0, '#fffcf0'], [0.6, '#d8c8a0'], [1, '#7a6a48']]), ink(1)));
+    P.add(`<g ${P.blur(0.5)}>${symLine('M77 116 C75 108 75 102 76 98', '#fff', 1, 0.6)}</g>`);
+  }
+  if (ex.has('scar')) {
+    P.add(`<g ${P.blur(0.5)}>${line('M122 72 L133 112', '#6a1010', 2.6, 0.85)}${line('M123 81 L130 78.5 M125.5 90 L132.5 87.5 M128 99 L135 96.5 M130 106 L136 104', '#7a1a14', 1.2, 0.8)}</g>`);
+    P.add(`<g ${P.blur(0.4)}>${line('M121.2 72.4 L132.2 112.4', '#ffb0a0', 0.6, 0.45)}</g>`);
+  }
+  if (ex.has('earring')) P.add(`<circle cx="57" cy="110" r="4" fill="none" stroke="${P.lin([[0, '#fff4b0'], [1, '#a07818']])}" stroke-width="1.8"/>`);
   // cabelo da frente
   if (f.hair === 'spikes') {
+    // espetos feitos de mechas afiladas com fios
+    const r = rng(seed + 9);
     let sp = '';
-    const n = 9;
-    for (let i = 0; i < n; i++) {
-      const a = Math.PI * (1.08 + (0.84 * i) / (n - 1));
-      const bx = 100 + Math.cos(a) * 36;
-      const by = 66 + Math.sin(a) * 30;
-      const tx = 100 + Math.cos(a) * 66;
-      const ty = 66 + Math.sin(a) * 62;
-      const px = -Math.sin(a) * 9;
-      const py = Math.cos(a) * 9;
-      sp += `M${(bx - px).toFixed(1)} ${(by - py).toFixed(1)} L${tx.toFixed(1)} ${ty.toFixed(1)} L${(bx + px).toFixed(1)} ${(by + py).toFixed(1)}Z`;
+    let ln = '';
+    for (let i = 0; i < 22; i++) {
+      const a = Math.PI * (1.04 + 0.92 * (i / 21)) + (r() - 0.5) * 0.08;
+      const bx = 100 + Math.cos(a) * 30;
+      const by = 64 + Math.sin(a) * 26;
+      const L = 30 + r() * 26;
+      const tx = 100 + Math.cos(a) * (30 + L);
+      const ty = 64 + Math.sin(a) * (26 + L * 0.9);
+      const p: Pt[] = [[bx, by], [bx + (tx - bx) * 0.35, by + (ty - by) * 0.3 - 3], [bx + (tx - bx) * 0.7, by + (ty - by) * 0.72 - 2], [tx, ty]];
+      sp += taper(p, 11 + r() * 5, 0.5, 14);
+      for (let k = 0; k < 3; k++) ln += taper(p.map(([x, y]) => [x + (r() - 0.5) * 3, y + (r() - 0.5) * 3]) as Pt[], 0.9, 0.1, 10);
     }
-    P.add(path(sp, hairG, ink(1.8)));
-    P.add(path('M62 76 C60 50 76 36 100 36 C124 36 140 50 138 76 C130 62 118 58 108 64 C100 54 88 58 84 64 C76 60 66 66 62 76Z', hairG, ink(1.8)));
+    P.add(path(sp, hairG, ink(0.8)), path(ln, shade(hairC, 1.7), 'opacity="0.5"'), path(ln, shade(hairC, 0.4), 'opacity="0.35" transform="translate(0.8 0.6)"'));
+    const cap = 'M62 78 C60 50 76 34 100 34 C124 34 140 50 138 78 C130 64 118 58 108 64 C100 54 88 58 84 64 C76 60 66 66 62 78Z';
+    P.add(path(cap, hairG, ink(0.8)));
+    P.add(`<g clip-path="${P.clip(`<path d="${cap}"/>`)}">`);
+    strands(P, 50, seed + 11, (r) => {
+      const x = 64 + r() * 72;
+      return [[100 + (x - 100) * 0.3, 34], [x - 2, 44], [x, 58], [x + (x - 100) * 0.2, 78]];
+    }, shade(hairC, 1.7), shade(hairC, 0.4), 1);
+    P.add('</g>');
   }
   if (f.hair === 'mohawk') {
+    // crista de dezenas de espetos finos
+    const r = rng(seed + 5);
     let sp = '';
-    for (let i = 0; i < 5; i++) {
-      const bx = 88 + i * 6;
-      sp += `M${bx - 6} 50 L${76 + i * 12} ${10 + Math.abs(i - 2) * 8} L${bx + 6} 50Z`;
+    let hl = '';
+    for (let i = 0; i < 26; i++) {
+      const t = i / 25;
+      const bx = 80 + t * 40;
+      const tx = 64 + t * 72 + (r() - 0.5) * 6;
+      const ty = 6 + Math.abs(t - 0.5) * 30 + r() * 8;
+      const p: Pt[] = [[bx, 54], [bx + (tx - bx) * 0.3, 40], [tx - (tx - bx) * 0.15, ty + 10], [tx, ty]];
+      sp += taper(p, 7 + r() * 3, 0.4, 12);
+      hl += taper(p, 1, 0.1, 10);
     }
-    P.add(path(sp, P.lin([[0, shade(hairC, 1.6)], [1, shade(hairC, 0.5)]]), ink(1.6)));
+    P.add(path(sp, P.lin([[0, shade(hairC, 1.6)], [0.6, hairC], [1, shade(hairC, 0.35)]], 0, 0, 0, 1), ink(0.6)), path(hl, '#ffffff', 'opacity="0.35"'));
+    P.add(`<ellipse cx="100" cy="30" rx="26" ry="18" fill="${hairC}" opacity="0.3" ${P.blur(6)}/>`);
   }
-  if (f.hair === 'long' || f.hair === 'mullet') P.add(path('M60 76 C56 44 76 28 100 28 C124 28 144 44 140 76 C132 60 118 54 106 58 C96 50 80 56 74 64 C70 66 64 70 60 76Z', hairG, ink(1.8)));
-  if (f.hair === 'crest') P.add(path('M92 38 L84 8 L98 26 L102 2 L108 26 L120 10 L110 38Z', hairG, ink(1.6)));
-  if (ex.has('antenna')) P.add(line('M126 34 L140 10', INK, 2.5), glowEye(P, 140, 10, 3.5, eyeC));
+  if (f.hair === 'long' || f.hair === 'mullet') {
+    const cap = 'M60 78 C56 44 76 26 100 26 C124 26 144 44 140 78 C132 60 118 52 106 56 C96 48 80 54 74 62 C70 66 64 70 60 78Z';
+    P.add(path(cap, hairG, P.blur(0.5)));
+    P.add(`<g clip-path="${P.clip(`<path d="${cap}"/>`)}">`);
+    hairLocks(P, 12, seed + 7, (r, i) => {
+      const sg = i % 2 ? 1 : -1;
+      const x = 100 + sg * (2 + r() * 42);
+      return { p: [[100 + sg * 2, 24], [100 + sg * 14, 30], [x - sg * 4, 50], [x + sg * 8, 82]], w: 8 + r() * 4 };
+    }, hairCols, 1.5, 1);
+    P.add('</g>');
+    // mechas caindo ao lado do rosto
+    for (const sg of [-1, 1]) {
+      const lk = sg < 0 ? 'M70 56 C60 70 60 96 62 118 C64 140 58 170 46 200 L80 200 C76 176 72 150 72 126 C72 100 70 78 78 62Z' : mx('M70 56 C60 70 60 96 62 118 C64 140 58 170 46 200 L80 200 C76 176 72 150 72 126 C72 100 70 78 78 62Z');
+      P.add(path(lk, hairG, P.blur(0.6)));
+      P.add(`<g clip-path="${P.clip(`<path d="${lk}"/>`)}">`);
+      hairLocks(P, 8, seed + 20 + sg, (r) => {
+        const x0 = 100 + sg * (26 + r() * 8);
+        const x1 = 100 + sg * (30 + r() * 28);
+        return { p: [[x0, 56], [x0 + sg * 8, 100], [x1 - sg * 4, 150], [x1, 204]], w: 6 + r() * 4 };
+      }, hairCols, 2.5, 1.2);
+      P.add('</g>');
+    }
+  }
+  if (f.hair === 'crest') P.add(path('M92 38 L84 8 L98 26 L102 2 L108 26 L120 10 L110 38Z', hairG, ink(1)));
+  if (ex.has('antenna')) {
+    P.add(line('M126 34 L140 10', '#1a1e26', 3), line('M126 34 L140 10', '#b8c0cc', 1.2));
+    P.add(glowEye(P, 140, 10, 3.2, eyeC));
+  }
 }
 
 // ---------------------------------------------------------------- montagem
@@ -1068,8 +1583,27 @@ function paintFinish(P: Pic): void {
 
 const HEROES: Record<string, (P: Pic) => void> = { snake, cyberhawk, ivanzypher, katarina, jake, tarquinn, olaf };
 
-/** SVG do retrato (string pronta para innerHTML). */
+const cache = new Map<string, string>();
+
+/**
+ * Retrato pronto para innerHTML. A pintura tem dezenas de filtros (texturas, desfoques); como imagem
+ * (blob) ela é rasterizada uma vez e reaproveitada pelo navegador — barata de redesenhar em menus
+ * e em aparelhos fracos. Sem suporte a blob, devolve o SVG embutido.
+ */
 export function portraitSvg(nameOrId: string, size = 96): string {
+  const label = nameOrId.replace(/[^w .'-]/g, '');
+  if (typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function' || typeof Blob === 'undefined') return portraitSvgRaw(nameOrId, size);
+  const k = `${faceKey(nameOrId) || nameOrId}|${size}`;
+  let url = cache.get(k);
+  if (!url) {
+    url = URL.createObjectURL(new Blob([portraitSvgRaw(nameOrId, size)], { type: 'image/svg+xml' }));
+    cache.set(k, url);
+  }
+  return `<img class="portrait" src="${url}" width="${size}" height="${size}" alt="${label}" draggable="false" decoding="async">`;
+}
+
+/** SVG do retrato (string com o <svg> embutido). */
+export function portraitSvgRaw(nameOrId: string, size = 96): string {
   const key = faceKey(nameOrId);
   const P = new Pic();
   const hero = HEROES[key];
@@ -1082,20 +1616,22 @@ export function portraitSvg(nameOrId: string, size = 96): string {
   const fx = `${P.id}fx`;
   const U = 'x="-20" y="-20" width="240" height="240" filterUnits="userSpaceOnUse"';
   const rimPart = (dx: number, color: string, tag: string) =>
-    `<feOffset in="SourceAlpha" dx="${dx}" dy="1.5" result="${tag}o"/><feComposite in="SourceAlpha" in2="${tag}o" operator="out" result="${tag}e"/><feGaussianBlur in="${tag}e" stdDeviation="0.9" result="${tag}b"/><feFlood flood-color="${color}" flood-opacity="0.95"/><feComposite in2="${tag}b" operator="in" result="${tag}"/>`;
+    `<feOffset in="SourceAlpha" dx="${dx}" dy="1.5" result="${tag}o"/><feComposite in="SourceAlpha" in2="${tag}o" operator="out" result="${tag}e"/><feGaussianBlur in="${tag}e" stdDeviation="1.3" result="${tag}b"/><feFlood flood-color="${color}" flood-opacity="0.5"/><feComposite in2="${tag}b" operator="in" result="${tag}"/>`;
   P.defs.push(
-    `<filter id="${fx}bg" ${U}><feGaussianBlur stdDeviation="${size >= 80 ? 1.1 : 0.6}"/></filter>`,
-    `<filter id="${fx}rim" ${U}>${rimPart(3.2, P.rimL, 'l')}${rimPart(-3.2, P.rimR, 'r')}<feGaussianBlur in="SourceAlpha" stdDeviation="4" result="sh"/><feOffset in="sh" dx="3" dy="4" result="sho"/><feFlood flood-color="#000" flood-opacity="0.55"/><feComposite in2="sho" operator="in" result="shadow"/><feMerge><feMergeNode in="shadow"/><feMergeNode in="SourceGraphic"/></feMerge><feBlend in2="l" mode="screen" result="m1"/><feBlend in="m1" in2="r" mode="screen"/></filter>`,
+    `<filter id="${fx}bg" ${U}><feGaussianBlur stdDeviation="${size >= 80 ? 1.6 : 0.8}"/></filter>`,
+    `<filter id="${fx}rim" ${U}>${rimPart(2.4, P.rimL, 'l')}${rimPart(-2.4, P.rimR, 'r')}<feGaussianBlur in="SourceAlpha" stdDeviation="4" result="sh"/><feOffset in="sh" dx="3" dy="4" result="sho"/><feFlood flood-color="#000" flood-opacity="0.55"/><feComposite in2="sho" operator="in" result="shadow"/><feMerge><feMergeNode in="shadow"/><feMergeNode in="SourceGraphic"/></feMerge><feBlend in2="l" mode="screen" result="m1"/><feBlend in="m1" in2="r" mode="screen"/></filter>`,
   );
   if (size >= 80) {
     // borda pintada: deslocamento leve por ruído (contornos à mão, sem aspecto de vetor)
-    P.defs.push(`<filter id="${fx}p" ${U}><feTurbulence type="fractalNoise" baseFrequency="0.09" numOctaves="2" seed="4"/><feDisplacementMap in="SourceGraphic" scale="${size >= 160 ? 1.7 : 1.2}" xChannelSelector="R" yChannelSelector="G"/></filter>`);
+    P.defs.push(`<filter id="${fx}p" ${U}><feTurbulence type="fractalNoise" baseFrequency="0.09" numOctaves="2" seed="4"/><feDisplacementMap in="SourceGraphic" scale="${size >= 160 ? 0.9 : 0.6}" xChannelSelector="R" yChannelSelector="G"/></filter>`);
   }
   P.add(`<g clip-path="${P.clip('<rect x="3" y="3" width="194" height="194" rx="20"/>')}">`);
   if (size >= 80) P.add(`<g filter="url(#${fx}p)">`);
   P.add(`<g filter="url(#${fx}bg)">`, ...scene.slice(0, s), '</g>');
   P.add(`<rect width="200" height="200" fill="${P.lin([[0, P.fog, 0.04], [0.6, P.fog, 0.22], [1, P.fog, 0.08]])}"/>`);
-  P.add(`<g filter="url(#${fx}rim)">`, ...scene.slice(s), '</g>');
+  // rivais: aproxima a figura (rosto maior, lê melhor nas miniaturas da garagem e dos resultados)
+  const zoom = key in HEROES ? '' : ' transform="translate(100 104) scale(1.16) translate(-100 -104)"';
+  P.add(`<g filter="url(#${fx}rim)"${zoom}>`, ...scene.slice(s), '</g>');
   if (size >= 80) P.add('</g>');
   paintFinish(P);
   // vinheta e brilho de vidro

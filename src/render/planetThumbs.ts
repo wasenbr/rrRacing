@@ -481,7 +481,8 @@ export function planetThumbnail(id: ThemeId, size = 128): string {
     g.drawImage(renderer.domElement, 0, 0);
     url = cv.toDataURL('image/webp', 0.9);
     if (!url.startsWith('data:image/webp')) url = cv.toDataURL('image/png');
-  } catch {
+  } catch (e) {
+    console.warn('miniatura do planeta falhou', id, e);
     url = '';
   } finally {
     scene?.remove(group);
@@ -491,7 +492,8 @@ export function planetThumbnail(id: ThemeId, size = 128): string {
       (m.material as THREE.Material | undefined)?.dispose();
     });
   }
-  urlCache.set(key, url);
+  // falha (ex.: contexto WebGL perdido) não fica no cache: a próxima tela tenta de novo
+  if (url) urlCache.set(key, url);
   return url;
 }
 

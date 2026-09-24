@@ -64,6 +64,79 @@ export function polyShape(points: [number, number][]): THREE.Shape {
   return s;
 }
 
+/** Roda para o cálculo de folga: centro (x > 0, espelhado do outro lado) e esterço máximo (rad). */
+export interface TireSpot {
+  x: number;
+  y: number;
+  z: number;
+  steer: number;
+}
+
+/**
+ * Espaço que o pneu (raio `r` com cravos, meia-largura `hw`) ocupa em qualquer esterço, na altura `y`
+ * e na posição `z`: devolve o intervalo [dentro, fora] de |x| ocupado, ou null se o pneu não chega
+ * ali. Serve para abrir caixas de roda (carroceria e bandeja nunca atravessadas pelo pneu).
+ */
+export function tireSpan(tires: TireSpot[], r: number, hw: number, y: number, z: number): [number, number] | null {
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const t of tires) {
+    const h = y - t.y;
+    if (Math.abs(h) >= r) continue;
+    const c = Math.sqrt(r * r - h * h); // meio-comprimento do corte horizontal do pneu
+    const dz = z - t.z;
+    const steps = t.steer > 0 ? 16 : 0;
+    for (let i = 0; i <= steps; i++) {
+      const th = steps ? -t.steer + (2 * t.steer * i) / steps : 0;
+      const sn = Math.sin(th);
+      const cs = Math.cos(th);
+      // pneu = retângulo |a| <= c (rolagem) x |ax| <= hw (eixo), girado de th; corte na reta z = dz
+      let amin = -hw;
+      let amax = hw;
+      if (Math.abs(sn) < 1e-6) {
+        if (Math.abs(dz) > c) continue;
+      } else {
+        const p = (-c * cs - dz) / sn;
+        const q = (c * cs - dz) / sn;
+        amin = Math.max(amin, Math.min(p, q));
+        amax = Math.min(amax, Math.max(p, q));
+        if (amin > amax) continue;
+      }
+      const tn = sn / cs;
+      lo = Math.min(lo, t.x + amin / cs + dz * tn, t.x + amax / cs + dz * tn);
+      hi = Math.max(hi, t.x + amin / cs + dz * tn, t.x + amax / cs + dz * tn);
+    }
+  }
+  return lo <= hi ? [lo, hi] : null;
+}
+
+/**
+ * Abre caixas de roda numa malha já posicionada no carro (offset `oy` em y): vértices que o pneu
+ * ocuparia são empurrados para dentro (|x| menor) até ficar `gap` longe dele.
+ */
+export function carveTires(geo: THREE.BufferGeometry, tires: TireSpot[], r: number, hw: number, gap: number, oy = 0, cell = 0.08): THREE.BufferGeometry {
+  const pos = geo.getAttribute('position');
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const y = pos.getY(i) + oy;
+    const z = pos.getZ(i);
+    // olha também a vizinhança (~1 face): a face entre um vértice empurrado e um não empurrado
+    // é reta e cortaria o pneu na borda da caixa de roda
+    let span: [number, number] | null = null;
+    for (const dy of [-cell, 0, cell])
+      for (const dz of [-cell, 0, cell]) {
+        const s = tireSpan(tires, r + gap, hw + gap, y + dy, z + dz);
+        if (s) span = span ? [Math.min(span[0], s[0]), Math.max(span[1], s[1])] : s;
+      }
+    if (!span) continue;
+    const ax = Math.abs(x);
+    if (ax > span[0] && ax < span[1] + gap) pos.setX(i, Math.sign(x) * Math.max(0, span[0]));
+  }
+  pos.needsUpdate = true;
+  geo.computeVertexNormals();
+  return geo;
+}
+
 export interface WheelOpts {
   radius: number;
   width: number;
@@ -155,8 +228,51 @@ export interface CockpitOpts {
   /** comprimento do capô à frente do painel */
   hoodLength?: number;
   weapon?: HoodWeapon;
-  /** material do capô (padrão: pintura do carro) */
+  /** material do capô (padrão: pintura do carro, com verniz mais contido) */
   hoodMat?: THREE.Material;
+  /** listras diagonais brancas no capô (quantidade; 0 = sem) */
+  stripes?: number;
+  /** saia tubular preta contornando o bico (hovercraft) */
+  skirt?: boolean;
+  /** tomada de ar no meio do capô (padrão: sim) */
+  intake?: boolean;
+}
+
+/**
+ * Superfície do capô em coordenadas do cockpit: altura (relativa aos olhos) em função do lado x
+ * e da fração t do comprimento. Abaulado no meio, dois vincos longitudinais, bordas arredondadas
+ * que caem para os lados e o bico que mergulha na frente.
+ */
+function hoodHeight(x: number, t: number, hw: number): number {
+  const ax = Math.min(1, Math.abs(x) / hw);
+  let y = t < 0.55 ? -0.46 - (0.1 * t) / 0.55 : -0.56 - 0.34 * ((t - 0.55) / 0.45) ** 2;
+  y += 0.055 * (1 - ax * ax);
+  // vincos: filetes altos e estreitos a ~45% da meia-largura (pegam a luz de lado)
+  const cr = (ax - 0.46) / 0.035;
+  y += 0.02 * Math.exp(-cr * cr);
+  if (ax > 0.84) y -= 0.3 * ((ax - 0.84) / 0.16) ** 2;
+  return y;
+}
+
+/** Malha que acompanha a superfície do capô: (u, v) em [0,1]² -> (x, t) via `at`, a `lift` acima. */
+function hoodPatch(hw: number, L: number, z0: number, eyeY: number, nu: number, nv: number, lift: number, at: (u: number, v: number) => [number, number]): THREE.BufferGeometry {
+  const pos: number[] = [];
+  const idx: number[] = [];
+  for (let j = 0; j <= nv; j++)
+    for (let i = 0; i <= nu; i++) {
+      const [x, t] = at(i / nu, j / nv);
+      pos.push(x, eyeY + hoodHeight(x, t, hw) + lift, z0 + t * L);
+    }
+  for (let j = 0; j < nv; j++)
+    for (let i = 0; i < nu; i++) {
+      const a = j * (nu + 1) + i;
+      idx.push(a, a + nu + 1, a + 1, a + 1, a + nu + 1, a + nu + 2);
+    }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  return geo;
 }
 
 /**
@@ -172,34 +288,80 @@ export function cockpitRig(kit: Kit, o: CockpitOpts, parent: THREE.Object3D = ki
   const hw = o.halfWidth;
   const L = o.hoodLength ?? 1.9;
   const z0 = e.z + 0.5;
-  // capô: some para baixo à frente (ocupa só a faixa de baixo da tela)
-  const hood = new THREE.Shape();
-  hood.moveTo(0, e.y - 0.46);
-  hood.lineTo(L * 0.55, e.y - 0.56);
-  hood.quadraticCurveTo(L * 0.92, e.y - 0.66, L, e.y - 0.9);
-  hood.lineTo(L, e.y - 1.1);
-  hood.lineTo(0, e.y - 1.1);
-  hood.closePath();
-  const hoodGeo = sideProfile(hood, hw * 2, 0.08, 10);
-  hoodGeo.translate(0, 0, z0);
-  const hoodMesh = kit.add(hoodGeo, o.hoodMat ?? kit.paint, 0, 0, 0, cockpit);
-  hoodMesh.castShadow = false;
-  // para-lamas arredondados nas laterais do capô: dão volume e a forma de carro vista de dentro
-  const fenderGeo = new THREE.CapsuleGeometry(0.16, L * 0.62, 6, 14).rotateX(Math.PI / 2);
+  // pintura do capô: metal com verniz fosco (sem o espelho do carro visto de fora, que de dentro
+  // virava um clarão chapado no meio do capô)
+  let hoodMat = o.hoodMat;
+  if (!hoodMat) {
+    const hp = kit.paint.clone();
+    hp.metalness = 0.35;
+    hp.roughness = 0.55;
+    hp.clearcoat = 0.2;
+    hp.clearcoatRoughness = 0.45;
+    hp.envMapIntensity = 0.5;
+    hoodMat = hp;
+  }
+  const noShadow = <T extends THREE.Mesh>(m: T): T => {
+    m.castShadow = false;
+    return m;
+  };
+  // capô: superfície abaulada com vincos, bordas arredondadas e bico caído
+  noShadow(kit.add(hoodPatch(hw, L, z0, e.y, 28, 22, 0, (u, v) => [(u * 2 - 1) * hw, v]), hoodMat, 0, 0, 0, cockpit));
+  // borda do bico: friso escuro de borracha acompanhando a frente
+  const lip = new THREE.CatmullRomCurve3(
+    Array.from({ length: 13 }, (_, k) => {
+      const x = ((k / 12) * 2 - 1) * hw * 0.98;
+      return new THREE.Vector3(x, e.y + hoodHeight(x, 1, hw) - 0.01, z0 + L - 0.015);
+    }),
+  );
+  noShadow(kit.add(new THREE.TubeGeometry(lip, 24, 0.028, 6, false), kit.trim, 0, 0, 0, cockpit));
+  // para-lamas: lombadas nas laterais, acima da linha do capô (a forma do carro vista de dentro)
+  const fenderGeo = new THREE.CapsuleGeometry(0.2, L * 0.6, 6, 16).rotateX(Math.PI / 2);
   for (const sx of [-1, 1]) {
-    const f = kit.add(fenderGeo, o.hoodMat ?? kit.paint, sx * (hw - 0.1), e.y - 0.58, z0 + L * 0.42, cockpit);
-    f.scale.set(1, 0.7, 1);
-    f.rotation.x = 0.08;
-    f.castShadow = false;
-    // farol na ponta de cada para-lama (domo visível de dentro)
-    kit.add(new THREE.SphereGeometry(0.09, 14, 10), kit.chrome, sx * (hw - 0.1), e.y - 0.55, z0 + L * 0.74, cockpit).scale.set(1, 0.6, 1);
-    kit.add(new THREE.SphereGeometry(0.065, 14, 10), new THREE.MeshBasicMaterial({ color: 0xfff4c8 }), sx * (hw - 0.1), e.y - 0.53, z0 + L * 0.745, cockpit).scale.set(1, 0.6, 1);
+    const fx = sx * (hw - 0.13);
+    const f = kit.add(fenderGeo, hoodMat, fx, e.y + hoodHeight(fx, 0.45, hw) - 0.1, z0 + L * 0.45, cockpit);
+    f.scale.set(0.9, 0.75, 1);
+    f.rotation.x = 0.09;
+    noShadow(f);
+    // farol na ponta de cada para-lama (domo cromado com a lâmpada acesa)
+    const hy = e.y + hoodHeight(fx, 0.78, hw) - 0.02;
+    kit.add(new THREE.SphereGeometry(0.1, 14, 10), kit.chrome, fx, hy, z0 + L * 0.78, cockpit).scale.set(1, 0.6, 1);
+    kit.add(new THREE.SphereGeometry(0.07, 14, 10), new THREE.MeshBasicMaterial({ color: 0xfff4c8 }), fx, hy + 0.012, z0 + L * 0.785, cockpit).scale.set(1, 0.6, 1);
+  }
+  // tomada de ar no meio do capô: moldura na cor do carro, boca preta e aletas cromadas
+  if (o.intake ?? true) {
+    const iz = z0 + L * 0.3;
+    const iy = e.y + hoodHeight(0, 0.3, hw);
+    const scoop = kit.add(new THREE.BoxGeometry(0.46, 0.09, 0.5), hoodMat, 0, iy + 0.02, iz, cockpit);
+    scoop.rotation.x = 0.12;
+    noShadow(scoop);
+    const mouth = kit.add(new THREE.BoxGeometry(0.38, 0.055, 0.04), kit.dash, 0, iy + 0.04, iz + 0.255, cockpit);
+    mouth.rotation.x = 0.12;
+    for (const dy of [-0.012, 0.012]) kit.add(new THREE.BoxGeometry(0.36, 0.008, 0.02), kit.chrome, 0, iy + 0.04 + dy, iz + 0.27, cockpit).rotation.x = 0.12;
+  }
+  // listras diagonais brancas (paralelogramos que acompanham a curva do capô)
+  const n = o.stripes ?? 0;
+  if (n > 0) {
+    const white = new THREE.MeshStandardMaterial({ color: 0xf2f2ee, roughness: 0.4, metalness: 0.1 });
+    const sw = 0.1;
+    for (let k = 0; k < n; k++) {
+      const x0 = (k - (n - 1) / 2) * sw * 2.1 - 0.12;
+      noShadow(kit.add(hoodPatch(hw, L, z0, e.y, 2, 10, 0.006, (u, v) => [x0 + (u - 0.5) * sw + (v - 0.5) * 0.34, 0.18 + v * 0.5]), white, 0, 0, 0, cockpit));
+    }
+  }
+  // saia tubular preta contornando os lados e o bico (hovercraft)
+  if (o.skirt) {
+    const pts: THREE.Vector3[] = [];
+    const R = hw + 0.08;
+    for (let k = 0; k <= 24; k++) {
+      const a = (k / 24) * Math.PI; // de um lado, pela frente, ao outro
+      const x = -Math.cos(a) * R;
+      const t = Math.min(1, 0.25 + Math.sin(a) * 0.8);
+      pts.push(new THREE.Vector3(x, e.y + hoodHeight(Math.sign(x) * Math.min(hw, Math.abs(x)), t, hw) - 0.1, z0 + (0.25 + Math.sin(a) * 0.8) * L));
+    }
+    noShadow(kit.add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 48, 0.15, 12, false), kit.rubber, 0, 0, 0, cockpit));
   }
   // friso cromado na borda do painel (separa o capô do interior)
-  kit.add(new THREE.CylinderGeometry(0.025, 0.025, hw * 2, 10).rotateZ(Math.PI / 2), kit.chrome, 0, e.y - 0.47, z0 + 0.02, cockpit);
-  // faixa central escura no capô (referência de direção)
-  const stripe = kit.add(new THREE.BoxGeometry(0.22, 0.02, L * 0.5), kit.trim, 0, e.y - 0.49, z0 + L * 0.28, cockpit);
-  stripe.rotation.x = 0.1;
+  kit.add(new THREE.CylinderGeometry(0.025, 0.025, hw * 2, 10).rotateZ(Math.PI / 2), kit.chrome, 0, e.y - 0.45, z0 + 0.02, cockpit);
   // painel: faixa baixa e fina, com dois mostradores acesos
   kit.add(new THREE.BoxGeometry(hw * 2, 0.1, 0.28), kit.dash, 0, e.y - 0.43, e.z + 0.42, cockpit).rotation.x = 0.2;
   const gaugeGeo = new THREE.CircleGeometry(0.04, 18);
@@ -215,12 +377,13 @@ export function cockpitRig(kit: Kit, o: CockpitOpts, parent: THREE.Object3D = ki
   const top = new THREE.Mesh(new THREE.TorusGeometry(0.15, 0.024, 8, 10, Math.PI * 0.35), kit.accent);
   top.rotation.z = Math.PI * 0.325;
   steeringWheel.add(top);
-  // arma no capô
+  // arma no capô (sempre por cima da superfície, para aparecer na faixa de baixo da tela)
   const w = o.weapon ?? 'none';
-  const gy = e.y - 0.5;
+  const surf = (x: number, t: number) => e.y + hoodHeight(x, t, hw);
   if (w === 'plasma') {
     for (const sx of [-1, 1]) {
       const x = sx * hw * 0.62;
+      const gy = surf(x, 0.35) + 0.08;
       kit.add(new THREE.CylinderGeometry(0.05, 0.06, 0.9, 10).rotateX(Math.PI / 2), kit.gunMetal, x, gy, z0 + 0.75, cockpit);
       kit.add(new THREE.BoxGeometry(0.18, 0.12, 0.35), kit.gunMetal, x, gy - 0.02, z0 + 0.25, cockpit);
       kit.add(new THREE.CylinderGeometry(0.035, 0.035, 0.05, 10).rotateX(Math.PI / 2), kit.plasmaGlow, x, gy, z0 + 1.22, cockpit);
@@ -228,13 +391,26 @@ export function cockpitRig(kit: Kit, o: CockpitOpts, parent: THREE.Object3D = ki
   } else if (w === 'missiles') {
     for (const sx of [-1, 1]) {
       const x = sx * hw * 0.55;
-      kit.add(new THREE.BoxGeometry(0.3, 0.2, 0.8), kit.gunMetal, x, gy + 0.02, z0 + 0.7, cockpit);
-      kit.add(new THREE.BoxGeometry(0.31, 0.05, 0.12), kit.warn, x, gy + 0.1, z0 + 0.45, cockpit);
-      for (const dx of [-0.07, 0.07]) kit.add(new THREE.ConeGeometry(0.05, 0.16, 8).rotateX(Math.PI / 2), kit.tail, x + dx, gy + 0.02, z0 + 1.17, cockpit);
+      const gy = surf(x, 0.35) + 0.1;
+      kit.add(new THREE.BoxGeometry(0.3, 0.2, 0.8), kit.gunMetal, x, gy, z0 + 0.7, cockpit);
+      kit.add(new THREE.BoxGeometry(0.31, 0.05, 0.12), kit.warn, x, gy + 0.08, z0 + 0.45, cockpit);
+      for (const dx of [-0.07, 0.07]) kit.add(new THREE.ConeGeometry(0.05, 0.16, 8).rotateX(Math.PI / 2), kit.tail, x + dx, gy, z0 + 1.17, cockpit);
     }
   } else if (w === 'sundog') {
-    kit.add(new THREE.TorusGeometry(0.14, 0.03, 8, 20).rotateX(Math.PI / 2), kit.chrome, 0, gy - 0.1, z0 + 1.05, cockpit);
-    kit.add(new THREE.SphereGeometry(0.09, 14, 10), kit.sundogGlow, 0, gy - 0.05, z0 + 1.05, cockpit);
+    // emissor Sundog no bico: pedestal, aro cromado virado para a frente, sol aceso e raios
+    const t = 0.8;
+    const zz = z0 + L * t;
+    const gy = surf(0, t) + 0.16;
+    kit.add(new THREE.CylinderGeometry(0.07, 0.11, 0.16, 12), kit.gunMetal, 0, gy - 0.1, zz, cockpit);
+    kit.add(new THREE.TorusGeometry(0.15, 0.03, 8, 24), kit.chrome, 0, gy, zz, cockpit);
+    // (brilho contido: colado na câmera, o emissivo forte estourava o bloom e cobria a tela)
+    const core = new THREE.MeshStandardMaterial({ color: 0xffc040, emissive: 0xff9020, emissiveIntensity: 1.1, roughness: 0.4 });
+    kit.add(new THREE.SphereGeometry(0.075, 16, 12), core, 0, gy, zz, cockpit);
+    for (let k = 0; k < 8; k++) {
+      const a = (k / 8) * Math.PI * 2;
+      const ray = kit.add(new THREE.ConeGeometry(0.022, 0.09, 5), kit.gunMetal, Math.cos(a) * 0.2, gy + Math.sin(a) * 0.2, zz, cockpit);
+      ray.rotation.z = a - Math.PI / 2;
+    }
   }
   return { cockpit, steeringWheel };
 }

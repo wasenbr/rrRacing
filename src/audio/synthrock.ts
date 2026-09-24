@@ -26,18 +26,26 @@ export interface Song {
   groove: 'rock' | 'gallop' | 'punk' | 'heavy' | 'boogie';
   /** seção do `form` tocada como ponte (bateria em meio-tempo, guitarra rarefeita) */
   bridge: number;
+  /**
+   * Timbre de cada planeta: `drive` (distorção da guitarra), `cab` (corte da caixa, Hz: mais baixo =
+   * mais escuro), `bass` (onda do baixo) e `room` (quanto de sala).
+   */
+  tone: { drive: number; cab: number; bass: OscillatorType; room: number };
 }
 
 /** Papel de cada seção: muda densidade e dinâmica (intro → riff → refrão → ponte). */
 type Role = 'intro' | 'riff' | 'chorus' | 'bridge';
-const ROLE_VEL: Record<Role, number> = { intro: 0.6, riff: 0.82, chorus: 1, bridge: 0.68 };
+const ROLE_VEL: Record<Role, number> = { intro: 0.45, riff: 0.72, chorus: 1, bridge: 0.55 };
 const BRIDGE_MOVE = [0, 0, 5, 3];
+/** Volume de cada seção depois do compressor (intro e ponte recuam, refrão abre). */
+const SECTION_GAIN: Record<Role, number> = { intro: 0.55, riff: 0.8, chorus: 1.12, bridge: 0.62 };
 
 const r = (s: string) => s.trim().split(/\s+/);
 
 export const SONGS: Song[] = [
   {
     name: 'Chem Overdrive',
+    tone: { drive: 60, cab: 3600, bass: 'sawtooth', room: 0.35 },
     bpm: 150,
     root: 40,
     feel: 'straight',
@@ -52,6 +60,7 @@ export const SONGS: Song[] = [
   },
   {
     name: 'Drakonis Night',
+    tone: { drive: 85, cab: 3000, bass: 'square', room: 0.5 },
     bpm: 138,
     root: 42,
     feel: 'straight',
@@ -66,6 +75,7 @@ export const SONGS: Song[] = [
   },
   {
     name: 'Bogmire Boogie',
+    tone: { drive: 18, cab: 2600, bass: 'triangle', room: 0.3 },
     bpm: 126,
     root: 45,
     feel: 'shuffle',
@@ -80,6 +90,7 @@ export const SONGS: Song[] = [
   },
   {
     name: 'Mojave Highway',
+    tone: { drive: 40, cab: 4400, bass: 'sawtooth', room: 0.25 },
     bpm: 160,
     root: 43,
     feel: 'straight',
@@ -94,6 +105,7 @@ export const SONGS: Song[] = [
   },
   {
     name: 'Inferno Riot',
+    tone: { drive: 120, cab: 3300, bass: 'square', room: 0.3 },
     bpm: 172,
     root: 38,
     feel: 'straight',
@@ -108,6 +120,7 @@ export const SONGS: Song[] = [
   },
   {
     name: 'Nho Descent',
+    tone: { drive: 70, cab: 2400, bass: 'sawtooth', room: 0.6 },
     bpm: 132,
     root: 38,
     feel: 'straight',
@@ -122,6 +135,7 @@ export const SONGS: Song[] = [
   },
   {
     name: 'Garage Grind',
+    tone: { drive: 25, cab: 3900, bass: 'triangle', room: 0.2 },
     bpm: 112,
     root: 40,
     feel: 'shuffle',
@@ -163,7 +177,13 @@ function roomImpulse(ctx: BaseAudioContext, seconds: number, decay: number): Aud
 }
 
 /** Um lado da guitarra dobrada: distorção + "caixa" + pan. */
-function guitarSide(ctx: BaseAudioContext, dest: AudioNode, pan: number, delay: number, drive: number): GainNode {
+interface GuitarSide {
+  input: GainNode;
+  dist: WaveShaperNode;
+  cab: BiquadFilterNode;
+}
+
+function guitarSide(ctx: BaseAudioContext, dest: AudioNode, pan: number, delay: number, drive: number): GuitarSide {
   const input = ctx.createGain();
   const pre = ctx.createBiquadFilter();
   pre.type = 'highpass';
@@ -195,7 +215,7 @@ function guitarSide(ctx: BaseAudioContext, dest: AudioNode, pan: number, delay: 
   scoop.connect(d);
   d.connect(p);
   p.connect(dest);
-  return input;
+  return { input, dist, cab };
 }
 
 export class SynthRock {
@@ -204,7 +224,12 @@ export class SynthRock {
   private guitarL: GainNode;
   private guitarR: GainNode;
   private lead: GainNode;
+  private sides: GuitarSide[] = [];
+  private guitarBus: GainNode;
+  private section: GainNode;
   private reverb: GainNode;
+  /** dinâmica da seção atual (intro mais baixa, refrão cheio): guitarra e baixo seguem a bateria */
+  private roleLevel = 1;
   private noise: AudioBuffer;
   private timer: number | null = null;
   private song: Song = SONGS[0];
@@ -212,6 +237,8 @@ export class SynthRock {
   private nextTime = 0;
   private chordVoices: { osc: OscillatorNode[]; gain: GainNode } | null = null;
   private seed = 1;
+  /** porta de saída: com a antecipação longa do agendador, o stop() precisa calar o que já foi agendado */
+  private gate: GainNode;
 
   constructor(
     private ctx: AudioContext,
@@ -220,16 +247,23 @@ export class SynthRock {
     this.out = ctx.createGain();
     this.out.gain.value = 0.55;
     const comp = ctx.createDynamicsCompressor();
-    comp.threshold.value = -18;
-    comp.knee.value = 6;
-    comp.ratio.value = 4;
-    comp.attack.value = 0.004;
-    comp.release.value = 0.15;
+    // compressão leve: segura os picos sem achatar a dinâmica entre seções (intro → refrão)
+    comp.threshold.value = -12;
+    comp.knee.value = 8;
+    comp.ratio.value = 2.2;
+    comp.attack.value = 0.015;
+    comp.release.value = 0.25;
     const makeup = ctx.createGain();
-    makeup.gain.value = 1.2;
+    makeup.gain.value = 1.25;
     this.out.connect(comp);
     comp.connect(makeup);
-    makeup.connect(destination);
+    // volume da seção DEPOIS do compressor (como um técnico subindo o fader no refrão): a
+    // compressão não desfaz a diferença entre intro, riff, refrão e ponte
+    this.section = ctx.createGain();
+    makeup.connect(this.section);
+    this.gate = ctx.createGain();
+    this.section.connect(this.gate);
+    this.gate.connect(destination);
     // reverb de sala (caixa, solos e um pouco da guitarra)
     const conv = ctx.createConvolver();
     conv.buffer = roomImpulse(ctx, 1.4, 3);
@@ -238,8 +272,15 @@ export class SynthRock {
     this.reverb.connect(conv);
     conv.connect(this.out);
 
-    this.guitarL = guitarSide(ctx, this.out, -0.75, 0, 60);
-    this.guitarR = guitarSide(ctx, this.out, 0.75, 0.013, 45);
+    // barramento da guitarra base DEPOIS da distorção: a dinâmica da seção muda o volume de verdade
+    // (antes da distorção só mudaria a saturação)
+    this.guitarBus = ctx.createGain();
+    this.guitarBus.connect(this.out);
+    const gl = guitarSide(ctx, this.guitarBus, -0.75, 0, 60);
+    const gr = guitarSide(ctx, this.guitarBus, 0.75, 0.013, 45);
+    this.sides = [gl, gr];
+    this.guitarL = gl.input;
+    this.guitarR = gr.input;
     this.guitarL.gain.value = 0.17;
     this.guitarR.gain.value = 0.17;
     const gSend = ctx.createGain();
@@ -247,7 +288,7 @@ export class SynthRock {
     this.guitarL.connect(gSend);
     gSend.connect(this.reverb);
     // guitarra solo: centro, mais aguda, com eco
-    this.lead = guitarSide(ctx, this.out, 0.1, 0, 90);
+    this.lead = guitarSide(ctx, this.out, 0.1, 0, 90).input;
     this.lead.gain.value = 0.11;
     const echo = ctx.createDelay(1);
     echo.delayTime.value = 0.28;
@@ -275,14 +316,26 @@ export class SynthRock {
     this.song = song;
     this.step = 0;
     this.seed = song.bpm * 7 + song.root;
-    this.nextTime = this.ctx.currentTime + 0.1;
-    this.timer = window.setInterval(() => this.schedule(), 25);
+    const now = this.ctx.currentTime;
+    // timbre do planeta: distorção, caixa e sala próprias
+    this.sides.forEach((sd, i) => {
+      sd.dist.curve = distortionCurve(song.tone.drive * (i ? 0.75 : 1));
+      sd.cab.frequency.setValueAtTime(song.tone.cab * (i ? 1.06 : 1), now);
+    });
+    this.reverb.gain.setValueAtTime(song.tone.room, now);
+    this.gate.gain.cancelScheduledValues(now);
+    this.gate.gain.setValueAtTime(1, now);
+    this.nextTime = now + 0.1;
+    this.timer = window.setInterval(() => this.schedule(), 40);
   }
 
   stop(): void {
     if (this.timer !== null) window.clearInterval(this.timer);
     this.timer = null;
-    this.releaseChord(this.ctx.currentTime);
+    const now = this.ctx.currentTime;
+    this.releaseChord(now);
+    this.gate.gain.cancelScheduledValues(now);
+    this.gate.gain.setTargetAtTime(0, now, 0.03);
   }
 
   /* ---------------- sequenciador ---------------- */
@@ -291,9 +344,12 @@ export class SynthRock {
     return 60 / this.song.bpm / 2;
   }
 
-  /** Agenda as notas dos próximos ~150 ms (chamado por timer). */
+  /**
+   * Agenda as notas dos próximos ~400 ms (chamado por timer). Antecipação folgada: um quadro
+   * pesado ou o timer atrasado (aba em segundo plano) não deixa buraco na música.
+   */
   schedule(): void {
-    while (this.nextTime < this.ctx.currentTime + 0.15) {
+    while (this.nextTime < this.ctx.currentTime + 0.4) {
       this.playStep(this.step, this.stepTime(this.nextTime));
       this.nextTime += this.eighth();
       this.step++;
@@ -325,6 +381,11 @@ export class SynthRock {
     const role: Role = sectionIndex === 0 ? 'intro' : section === s.bridge ? 'bridge' : riffIndex === 2 ? 'chorus' : 'riff';
     const chorus = role === 'chorus';
     const bridge = role === 'bridge';
+    if (inSection === 0 || step === 0) {
+      this.roleLevel = ROLE_VEL[role];
+      this.guitarBus.gain.setTargetAtTime(0.35 + 0.65 * this.roleLevel, t, 0.08);
+      this.section.gain.setTargetAtTime(SECTION_GAIN[role], t, 0.15);
+    }
     // antes do refrão a virada começa mais cedo (a música "cresce")
     const toChorus = s.form[(section + 1) % s.form.length] === 2;
 
@@ -376,14 +437,18 @@ export class SynthRock {
       return;
     }
     if (tok === '-') return;
+    // pausas: a guitarra abafa com um release curto (não corta seco), o baixo segue soando por
+    // cima da pausa e um chimbal aberto baixinho preenche o agudo: sem buraco no espectro todo
+    const restAfter = (i: number) => riff[(i + 1) % riff.length] === '.';
     if (tok === '.') {
       this.releaseChord(t);
+      if (!intro && !bridge) this.hat(t, 0.16, true);
       return;
     }
     if (tok === 'x') {
       this.releaseChord(t);
       this.chug(s.root, t);
-      if (!intro) this.bass(s.root, t, e * 0.9);
+      if (!intro) this.bass(s.root, t, e * (restAfter(inSection) ? 1.8 : 1.02));
       return;
     }
     const n = Number(tok);
@@ -392,7 +457,7 @@ export class SynthRock {
     for (let i = inSection + 1; i < inSection + 16 && riff[i % riff.length] === '-'; i++) hold++;
     this.chord(s.root + n, t, e * hold);
     if (intro) return;
-    this.bass(s.root + n - 12, t, e * Math.min(hold, 2) * 0.95);
+    this.bass(s.root + n - 12, t, e * (hold === 1 && restAfter(inSection) ? 1.8 : Math.min(hold, 2) * 0.98));
     if (hold > 2) for (let i = 2; i < hold; i += 2) this.bass(s.root + n - 12, t + e * i, e * 1.8);
   }
 
@@ -538,14 +603,16 @@ export class SynthRock {
     lp.frequency.exponentialRampToValueAtTime(420, t + 0.12);
     lp.Q.value = 2;
     const g = this.ctx.createGain();
+    const lvl = 0.4 * (0.55 + 0.45 * this.roleLevel);
     g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(0.4, t + 0.006);
-    g.gain.setValueAtTime(0.32, t + dur * 0.8);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    g.gain.exponentialRampToValueAtTime(lvl, t + 0.006);
+    g.gain.setTargetAtTime(lvl * 0.8, t + 0.03, dur * 0.5);
+    // release de ~40 ms DEPOIS do fim: a nota seguinte entra por cima, sem micro-silêncio entre elas
+    g.gain.setTargetAtTime(0.0001, t + dur, 0.012);
     lp.connect(g);
     g.connect(this.out);
     const layers: [OscillatorType, number, number][] = [
-      ['sawtooth', 1, 1],
+      [this.song.tone.bass, 1, 1],
       ['sine', 0.5, 0.8],
     ];
     for (const [type, mul, lvl] of layers) {
@@ -557,7 +624,7 @@ export class SynthRock {
       o.connect(og);
       og.connect(lp);
       o.start(t);
-      o.stop(t + dur + 0.02);
+      o.stop(t + dur + 0.08);
     }
   }
 
@@ -596,8 +663,8 @@ export class SynthRock {
     // corta no fim da duração, a menos que outro evento corte antes
     const end = t + dur;
     g.gain.setValueAtTime(0.72 * level, end - 0.02);
-    g.gain.exponentialRampToValueAtTime(0.0001, end + 0.04);
-    for (const o of osc) o.stop(end + 0.06);
+    g.gain.exponentialRampToValueAtTime(0.0001, end + 0.1);
+    for (const o of osc) o.stop(end + 0.12);
   }
 
   private releaseChord(t: number): void {
@@ -605,8 +672,9 @@ export class SynthRock {
     const { osc, gain } = this.chordVoices;
     try {
       gain.gain.cancelScheduledValues(t);
-      gain.gain.setTargetAtTime(0.0001, t, 0.015);
-      for (const o of osc) o.stop(t + 0.08);
+      // release de ~120 ms: a nota morre como corda abafada, sem "buraco" seco na mixagem
+      gain.gain.setTargetAtTime(0.0001, t, 0.035);
+      for (const o of osc) o.stop(t + 0.2);
     } catch {
       /* já parou */
     }
@@ -620,7 +688,13 @@ export class SynthRock {
       [this.guitarR, 6],
     ];
     for (const [side, det] of sides) {
-      const g = this.env(t, 0.95, 0.003, 0.085, side);
+      const g = this.ctx.createGain();
+      const peak = 0.95 * (0.6 + 0.4 * this.roleLevel);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(peak, t + 0.003);
+      g.gain.setTargetAtTime(peak * 0.35, t + 0.01, 0.03);
+      g.gain.setTargetAtTime(0.0001, t + 0.09, 0.013);
+      g.connect(side);
       for (const iv of [0, 7]) {
         const o = this.ctx.createOscillator();
         o.type = 'sawtooth';
@@ -628,7 +702,7 @@ export class SynthRock {
         o.detune.value = det;
         o.connect(g);
         o.start(t);
-        o.stop(t + 0.12);
+        o.stop(t + 0.16);
       }
     }
   }

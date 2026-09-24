@@ -1,16 +1,29 @@
 import * as THREE from 'three';
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
-import { carFrame, cockpitRig, Kit, sideProfile, wheel, type CarVisual } from './common';
+import { carFrame, carveTires, cockpitRig, Kit, sideProfile, tireSpan, wheel, type CarVisual, type TireSpot } from './common';
 
 const WR = 0.82; // rodas de monster truck, como no sprite do original
 const WX = 0.94; // meia-bitola
 const WZ = 1.25; // meio entre-eixos
 const BOT = 1.32; // fundo da carroceria (bem acima do chão)
 const BL = 1.95; // meio-comprimento da bolha
+const STEER = 0.45; // esterço máximo das rodas da frente (rad)
+const TW = 0.64; // largura do pneu
+// pneus (com cravos) em todo o esterço: casco e bandeja abrem caixa de roda em volta deles
+const TIRES: TireSpot[] = [
+  { x: WX, y: WR, z: WZ, steer: STEER },
+  { x: WX, y: WR, z: -WZ, steer: 0 },
+];
+const TIRE_R = WR * 1.035;
+const TIRE_HW = TW / 2 + 0.02;
 
 // casco (metade de baixo do fusca: capô, laterais e traseira) e cabine-cúpula por cima
 const TUB = { w: 0.95, h: 0.7, l: 1.98, y: BOT + 0.24 };
-const CAB = { w: 0.76, h: 0.74, l: 1.08, y: BOT + 0.56, z: -0.28 };
+// cúpula ALTA e redonda de fusca/jipe (bem mais alta que o teto rasante do Marauder)
+const CAB = { w: 0.84, h: 0.98, l: 1.16, y: BOT + 0.52, z: -0.3 };
+
+/** expoente da cúpula: perto de 1 = bolha redonda */
+const CAB_P = 0.9;
 
 const smooth = (a: number, b: number, v: number) => {
   const t = Math.min(1, Math.max(0, (v - a) / (b - a)));
@@ -22,8 +35,8 @@ const spow = (v: number, p: number) => Math.sign(v) * Math.pow(Math.abs(v), p);
  * Superelipsoide liso (esfera "estufada" pelo expoente `p` < 1): volume cheio de brinquedo, sem
  * facetas. `t0..t1` recorta faixas a partir do topo; `top(zn)` modela a altura ao longo do comprimento.
  */
-function blob(w: number, h: number, l: number, p: number, t0: number, t1: number, hb: number, top: (zn: number) => number = () => 1): THREE.BufferGeometry {
-  const g = new THREE.SphereGeometry(1, 44, 26, 0, Math.PI * 2, t0, t1 - t0);
+function blob(w: number, h: number, l: number, p: number, t0: number, t1: number, hb: number, top: (zn: number) => number = () => 1, seg = 44, rings = 26): THREE.BufferGeometry {
+  const g = new THREE.SphereGeometry(1, seg, rings, 0, Math.PI * 2, t0, t1 - t0);
   const pos = g.getAttribute('position');
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i);
@@ -89,39 +102,54 @@ export function createDirtDevil(color: number, shadows: boolean): CarVisual {
 
   // ---- casco: capô baixo e comprido na frente, traseira redonda de fusca
   const tubTop = (zn: number) => (zn > 0 ? 1 - 0.34 * smooth(0.05, 1, zn) : 1 - 0.08 * smooth(0.4, 1, -zn));
-  const tub = k.add(blob(TUB.w, TUB.h, TUB.l, 0.72, 0, Math.PI, 0.42, tubTop), gloss, 0, TUB.y, 0);
+  // (caixas de roda abertas embaixo: o pneu, mesmo esterçado, não entra no casco)
+  const tubGeo = carveTires(blob(TUB.w, TUB.h, TUB.l, 0.72, 0, Math.PI, 0.42, tubTop, 96, 40), TIRES, TIRE_R, TIRE_HW, 0.04, TUB.y);
+  const tub = k.add(tubGeo, gloss, 0, TUB.y, 0);
 
   // ---- cabine-cúpula: vidro escuro brilhante, teto redondo pintado e colunas pintadas
-  const cabTop = (zn: number) => 1 - 0.1 * smooth(0, 1, zn);
+  const cabTop = (zn: number) => 1 - 0.04 * smooth(0, 1, zn);
   const RT = 0.62; // corte teto/vidro (a partir do topo)
-  k.add(blob(CAB.w * 0.985, CAB.h * 0.985, CAB.l * 0.985, 0.8, RT - 0.08, Math.PI / 2, 0.3, cabTop), glass, 0, CAB.y, CAB.z);
-  const roof = k.add(blob(CAB.w, CAB.h, CAB.l, 0.8, 0, RT, 0.3, cabTop), gloss, 0, CAB.y, CAB.z);
+  const cabGeo = (g: THREE.BufferGeometry) => carveTires(g.translate(0, CAB.y, CAB.z), TIRES, TIRE_R, TIRE_HW, 0.04);
+  k.add(cabGeo(blob(CAB.w * 0.985, CAB.h * 0.985, CAB.l * 0.985, CAB_P, RT - 0.08, Math.PI / 2, 0.3, cabTop)), glass, 0, 0, 0);
+  const roof = k.add(cabGeo(blob(CAB.w, CAB.h, CAB.l, CAB_P, 0, RT, 0.3, cabTop)), gloss, 0, 0, 0);
   // colunas: seguem a superfície da cúpula do teto até o casco
   const cabPt = (th: number, ph: number) => {
     const x = Math.sin(th) * Math.sin(ph);
     const y = Math.cos(th);
     const z = Math.sin(th) * Math.cos(ph);
-    const zn = spow(z, 0.8);
-    return V(spow(x, 0.8) * CAB.w * 1.005, CAB.y + spow(y, 0.8) * CAB.h * cabTop(zn) * 1.005, CAB.z + zn * CAB.l * 1.005);
+    const zn = spow(z, CAB_P);
+    return V(spow(x, CAB_P) * CAB.w * 1.005, CAB.y + spow(y, CAB_P) * CAB.h * cabTop(zn) * 1.005, CAB.z + zn * CAB.l * 1.005);
   };
   for (const ph of [0.62, -0.62, Math.PI - 0.7, Math.PI + 0.7, Math.PI / 2 - 0.1, -Math.PI / 2 + 0.1]) {
     const pts: THREE.Vector3[] = [];
     for (let i = 0; i <= 6; i++) pts.push(cabPt(RT - 0.05 + (i / 6) * (Math.PI / 2 - RT + 0.05), ph));
-    k.add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 8, 0.065, 8), gloss, 0, 0, 0);
+    k.add(carveTires(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 8, 0.065, 8), TIRES, TIRE_R, TIRE_HW, 0.04), gloss, 0, 0, 0);
   }
 
   // ---- bandeja/chassi escuro por baixo (como a bandeja cinza do pack)
-  const trayShape = new THREE.Shape();
+  // retângulo arredondado com recortes em volta dos pneus (esterçados), na altura da bandeja
   const tw = 0.62;
   const tl = 1.72;
-  trayShape.moveTo(-tw, -tl + 0.3);
-  trayShape.quadraticCurveTo(-tw, -tl, -tw + 0.3, -tl);
-  trayShape.lineTo(tw - 0.3, -tl);
-  trayShape.quadraticCurveTo(tw, -tl, tw, -tl + 0.3);
-  trayShape.lineTo(tw, tl - 0.3);
-  trayShape.quadraticCurveTo(tw, tl, tw - 0.3, tl);
-  trayShape.lineTo(-tw + 0.3, tl);
-  trayShape.quadraticCurveTo(-tw, tl, -tw, tl - 0.3);
+  const trayHalf = (z: number): number => {
+    const e = Math.max(0, Math.abs(z) - (tl - 0.3)) / 0.3;
+    let w = tw - 0.3 + 0.3 * Math.sqrt(Math.max(0, 1 - e * e));
+    for (let y = BOT - 0.2; y <= BOT + 0.1; y += 0.05) {
+      const span = tireSpan(TIRES, TIRE_R + 0.04, TIRE_HW + 0.04, y, z);
+      if (span) w = Math.min(w, span[0] - 0.06); // 0,06 do chanfro
+    }
+    return Math.max(0.2, w);
+  };
+  const trayShape = new THREE.Shape();
+  const TS = 120;
+  for (let i = 0; i <= TS; i++) {
+    const z = -tl + (2 * tl * i) / TS;
+    if (i === 0) trayShape.moveTo(trayHalf(z), z);
+    else trayShape.lineTo(trayHalf(z), z);
+  }
+  for (let i = TS; i >= 0; i--) {
+    const z = -tl + (2 * tl * i) / TS;
+    trayShape.lineTo(-trayHalf(z), z);
+  }
   trayShape.closePath();
   const trayGeo = new THREE.ExtrudeGeometry(trayShape, { depth: 0.12, bevelEnabled: true, bevelSize: 0.06, bevelThickness: 0.06, bevelSegments: 2, curveSegments: 6 });
   trayGeo.rotateX(Math.PI / 2);
@@ -142,7 +170,8 @@ export function createDirtDevil(color: number, shadows: boolean): CarVisual {
   // ---- GRADE BRANCA com espinhos cromados: a marca do sprite do original
   const gz = BL + 0.26;
   bar(k, V(-0.8, BOT + 0.02, gz - 0.02), V(0.8, BOT + 0.02, gz - 0.02), 0.12, white);
-  for (const sx of [-1, 1]) bar(k, V(sx * 0.8, BOT + 0.02, gz - 0.02), V(sx * 0.62, BOT + 0.06, gz - 0.6), 0.09, white);
+  // (hastes laterais curtas e por dentro: o pneu esterçado passa atrás delas)
+  for (const sx of [-1, 1]) bar(k, V(sx * 0.8, BOT + 0.02, gz - 0.02), V(sx * 0.46, BOT + 0.05, gz - 0.3), 0.09, white);
   bar(k, V(-0.7, BOT + 0.54, gz - 0.3), V(0.7, BOT + 0.54, gz - 0.3), 0.075, white);
   for (const x of [-0.72, -0.24, 0.24, 0.72]) bar(k, V(x, BOT + 0.02, gz - 0.02), V(x * 0.97, BOT + 0.54, gz - 0.3), 0.065, white);
   k.spikes(V(-0.68, BOT + 0.02, gz + 0.06), V(0.68, BOT + 0.02, gz + 0.06), 5, 0.4, V(0, 0.05, 1));
@@ -168,13 +197,14 @@ export function createDirtDevil(color: number, shadows: boolean): CarVisual {
   // ---- VK Plasma Rifles apoiados no capô (sobre selas escuras)
   for (const sx of [-0.46, 0.46]) {
     k.add(new THREE.CapsuleGeometry(0.1, 0.34, 3, 10).rotateX(Math.PI / 2), k.trim, sx, TUB.y + 0.5, 1.02);
-    k.plasmaRifle(sx, TUB.y + 0.6, 1.2, 1.0);
+    k.plasmaRifle(sx, TUB.y + 0.62, 1.2, 1.0, k.body, 1.25);
   }
   // BF's Slipsauce sob a traseira e escapamentos cromados subindo
   k.slipsauceTank(0, BOT + 0.02, -BL + 0.02, 0.9);
-  for (const sx of [-0.66, 0.66]) {
-    bar(k, V(sx, BOT + 0.05, -BL + 0.12), V(sx * 1.06, BOT + 0.95, -BL + 0.18), 0.07, k.chrome);
-    k.add(new THREE.CylinderGeometry(0.1, 0.085, 0.14, 12), k.trim, sx * 1.06, BOT + 1.0, -BL + 0.18);
+  // (atrás do pneu traseiro, sem encostar nele)
+  for (const sx of [-0.56, 0.56]) {
+    bar(k, V(sx, BOT + 0.05, -BL + 0.02), V(sx * 1.1, BOT + 0.95, -BL + 0.1), 0.07, k.chrome);
+    k.add(new THREE.CylinderGeometry(0.1, 0.085, 0.14, 12), k.trim, sx * 1.1, BOT + 1.0, -BL + 0.1);
   }
   // Locust Jump Jets sob o assoalho
   for (const sx of [-1, 1]) k.jumpJet(sx * 0.42, BOT - 0.18, 0);
@@ -185,8 +215,9 @@ export function createDirtDevil(color: number, shadows: boolean): CarVisual {
     k.add(new THREE.SphereGeometry(0.2, 16, 10), k.gunMetal, 0, WR, sz * WZ);
     bar(k, V(0, WR, sz * WZ), V(0, BOT - 0.06, sz * (WZ - 0.6)), 0.06, k.gunMetal);
     for (const sx of [-1, 1]) {
-      bar(k, V(sx * 0.46, BOT - 0.02, sz * (WZ + 0.2)), V(sx * 0.64, WR, sz * WZ), 0.085, k.warn);
-      bar(k, V(sx * 0.46, BOT - 0.02, sz * (WZ - 0.2)), V(sx * 0.64, WR, sz * WZ), 0.085, k.warn);
+      // topo preso na bandeja, por dentro da caixa de roda (o pneu esterçado passa por fora)
+      bar(k, V(sx * 0.3, BOT - 0.02, sz * (WZ + 0.2)), V(sx * 0.64, WR, sz * WZ), 0.085, k.warn);
+      bar(k, V(sx * 0.3, BOT - 0.02, sz * (WZ - 0.2)), V(sx * 0.64, WR, sz * WZ), 0.085, k.warn);
       const spring = new THREE.TorusGeometry(0.1, 0.02, 5, 12).rotateX(Math.PI / 2);
       for (let i = 0; i < 3; i++) k.add(spring, k.chrome, sx * (0.5 + i * 0.04), BOT - 0.12 - i * 0.12, sz * WZ);
     }
@@ -194,6 +225,7 @@ export function createDirtDevil(color: number, shadows: boolean): CarVisual {
 
   k.decalOn(roof, 0.8, 0.7, 0, CAB.z - 0.1, 'number');
   k.decalOn(tub, 0.62, 0.6, 0, 1.55, 'stripes');
+  for (const sx of [-1, 1]) k.decalSide(tub, 0.6, 0.48, sx, TUB.y + 0.3, 0.3, 'number');
   const flames = k.flames([[-0.7, BOT + 1.0, -BL - 0.1], [0.7, BOT + 1.0, -BL - 0.1]], 0.7);
 
   // rodas enormes com aro cromado (anel e calota) por cima da roda padrão
@@ -201,7 +233,7 @@ export function createDirtDevil(color: number, shadows: boolean): CarVisual {
   const cap = new THREE.SphereGeometry(0.16, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2).rotateZ(-Math.PI / 2);
   const wheels = [-1, 1].flatMap((sx) =>
     [-1, 1].map((sz) => {
-      const w = wheel(k, { radius: WR, width: 0.64, spokes: 5, knobby: true }, sx * WX, WR, sz * WZ);
+      const w = wheel(k, { radius: WR, width: TW, spokes: 5, knobby: true }, sx * WX, WR, sz * WZ);
       const ring = new THREE.Mesh(lip, k.chrome);
       ring.position.x = sx * 0.3;
       const c = new THREE.Mesh(cap, k.chrome);
@@ -212,7 +244,7 @@ export function createDirtDevil(color: number, shadows: boolean): CarVisual {
     }),
   );
 
-  const eye = new THREE.Vector3(0, 2.3, -0.2);
+  const eye = new THREE.Vector3(0, 2.4, -0.2);
   const { cockpit, steeringWheel } = cockpitRig(k, { eye, halfWidth: 0.78, weapon: 'plasma', hoodLength: 1.8 }, body);
   k.merge();
 
@@ -227,7 +259,7 @@ export function createDirtDevil(color: number, shadows: boolean): CarVisual {
     animate(a) {
       for (const w of wheels) {
         w.spin.rotation.x = a.spin;
-        if (w.sz > 0) w.pivot.rotation.y = -a.steer * 0.45;
+        if (w.sz > 0) w.pivot.rotation.y = -a.steer * STEER;
       }
     },
   };

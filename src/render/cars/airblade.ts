@@ -127,15 +127,18 @@ function hullGeo(): THREE.BufferGeometry {
 /* ------------------------------------------------------------------ */
 
 const FIN_Y0 = 1.45; // a raiz fica dentro do casco: a barbatana nasce dele
-const FIN_H = 2.05;
+const FIN_H = 2.3;
 /** bordo de ataque: convexo, subindo e curvando cada vez mais para trás */
-const finLE = (t: number) => -0.05 - 1.0 * t - 1.4 * t * t;
+const finLE = (t: number) => -0.05 - 0.8 * t - 1.6 * t * t;
 /** bordo de fuga: côncavo (foice), da cauda até a ponta */
-const finTE = (t: number) => -2.02 - 0.43 * t + 1.25 * t * Math.pow(1 - t, 1.3);
-/** meia-espessura: na raiz acompanha a largura do casco (continua com ele), vira lâmina acima */
+const finTE = (t: number) => -2.02 - 0.43 * t + 1.0 * t * Math.pow(1 - t, 1.3);
+/**
+ * meia-espessura: na raiz acompanha a largura do casco (continua com ele) e só vira lâmina bem acima
+ * — base larga fundida ao casco, perfil contínuo de tubarão (não um "leme" espetado)
+ */
 const finTh = (t: number, z: number) => {
-  const blade = 0.035 + 0.11 * Math.pow(1 - t, 0.7);
-  const k = smooth(clamp01(t / 0.32));
+  const blade = 0.035 + 0.2 * Math.pow(1 - t, 1.1);
+  const k = smooth(clamp01(t / 0.55));
   return hullW(z) * 0.9 * (1 - k) + blade * k;
 };
 
@@ -165,7 +168,7 @@ function finGeo(): THREE.BufferGeometry {
 }
 
 /** altura da raiz das asas (no ombro do casco, saindo da base da barbatana) */
-const WING_Y = 1.9;
+const WING_Y = 1.76;
 const WING_SPAN = 1.5;
 const WING_X0 = 0.22;
 const wingLE = (s: number) => -0.35 - 1.35 * s;
@@ -187,7 +190,8 @@ function wingGeo(side: number): THREE.BufferGeometry {
     const k = s > 0.94 ? Math.sqrt(Math.max(0, 1 - Math.pow((s - 0.94) / 0.06, 2))) : 1;
     const mid = (le + te) / 2;
     const hc = ((le - te) / 2) * Math.max(0.6, k);
-    const th = (0.09 - 0.03 * s) * Math.max(0.15, k);
+    // grossa na raiz (nasce do ombro do casco) afinando até a ponta
+    const th = (0.07 + 0.15 * Math.pow(1 - s, 2.2)) * Math.max(0.15, k);
     const ring: THREE.Vector3[] = [];
     for (let j = 0; j < N; j++) {
       const a = (j / N) * Math.PI * 2;
@@ -207,13 +211,33 @@ function wingGeo(side: number): THREE.BufferGeometry {
  * Contorno da bandeja: bem mais larga que o casco (a aba cinza aparece dos dois lados, como no
  * modelo de referência), cantos arredondados, cabendo entre as rodas.
  */
+/**
+ * Meia-largura máxima da bandeja em z: recorte (caixa de roda) em volta de cada pneu para o pneu,
+ * inclusive esterçado (STEER), não entrar na placa. `REACH` é quanto o pneu avança para dentro do
+ * centro da roda, na altura da bandeja, a cada 0,1 de distância em z do eixo.
+ */
+const REACH = [0.35, 0.39, 0.44, 0.48, 0.53, 0.57, 0.62, 0.59, 0.45, 0.19, 0];
+function trayNotch(z: number): number {
+  let w = 9;
+  for (const wz of [WZ, -WZ]) {
+    const d = Math.abs(z - wz) * 10;
+    if (d >= REACH.length - 1) continue;
+    const i = Math.floor(d);
+    const reach = REACH[i] + (REACH[i + 1] - REACH[i]) * (d - i);
+    w = Math.min(w, WX - reach - 0.14); // 0,09 do chanfro da placa + folga
+  }
+  return w;
+}
+
 function trayOutline(margin: number, path: THREE.Path): THREE.Path {
   const pts: THREE.Vector2[] = [];
-  const S = 28;
-  const z0 = TAIL - 0.22 - margin;
+  const S = 90;
+  const z0 = TAIL - 0.06 - margin; // quase rente à cauda: pouca bandeja à mostra por trás
   const z1 = NOSE + 0.04 + margin;
   const half = (z: number) => {
-    const w = Math.min(0.97, Math.max(hullW(Math.min(z, NOSE - 0.45)), 0.46) + 0.2) + margin;
+    // aba larga dos lados na frente e no meio; atrás estreita junto com a cauda
+    const extra = 0.2 - 0.14 * clamp01((-0.9 - z) / 1.1);
+    const w = Math.min(0.97, trayNotch(z), Math.max(hullW(Math.min(z, NOSE - 0.45)), 0.46 - 0.12 * clamp01((-1.2 - z) / 0.9)) + extra) + margin;
     const r = 0.45 + margin;
     const e0 = clamp01((z - z0) / r);
     const e1 = clamp01((z1 - z) / r);

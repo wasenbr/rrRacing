@@ -22,6 +22,8 @@ let voiceBus: GainNode | null = null;
 let musicDuck: GainNode | null = null;
 let impactDuck: GainNode | null = null;
 let engineDuck: GainNode | null = null;
+/** realce transitório dos efeitos (explosões, mísseis): +2–3 dB por um instante */
+let sfxLift: GainNode | null = null;
 let muted = false;
 let sfxOn = true;
 
@@ -102,7 +104,9 @@ function buildGraph(c: BaseAudioContext): void {
   sfxCut.type = 'highpass';
   sfxCut.frequency.value = 25;
   sfxCut.Q.value = 0.7;
-  sfxBus.connect(sfxCut);
+  sfxLift = ctx.createGain();
+  sfxBus.connect(sfxLift);
+  sfxLift.connect(sfxCut);
   sfxCut.connect(preLimit);
   engineDuck = ctx.createGain();
   engineDuck.connect(bed);
@@ -129,26 +133,46 @@ export function unlockAudio(): void {
   }
   const AC = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
   if (!AC) return;
-  buildGraph(new AC());
+  // buffer de áudio maior ('balanced') em todos os aparelhos. Com o mínimo ('interactive'), qualquer
+  // engasgo da CPU esvaziava o buffer e o som picotava (também no PC); o atraso extra (~20 ms) não se percebe
+  let c: AudioContext;
+  try {
+    c = new AC({ latencyHint: 'balanced' });
+  } catch {
+    c = new AC();
+  }
+  buildGraph(c);
 }
 
 /**
  * Abaixa a música (e um pouco o motor) por um instante, para um efeito saltar na mixagem.
  * `amount` 0..1 = quanto abaixa; volta ao normal em `recover` segundos. Usa um ganho próprio,
  * separado do ducking do locutor, para um tiro não cancelar a fala abaixando a música.
+ * Efeitos em sequência (rajada, explosão logo após o míssil) REFORÇAM o ducking: cada um abaixa
+ * a cama a partir do nível atual, então o segundo também ganha contraste (antes era ignorado).
+ * `liftDb` realça os próprios efeitos por um instante (explosões): soma ao contraste do ducking.
  */
-export function duck(amount: number, recover = 0.8): void {
-  if (!ctx || !impactDuck || !engineDuck) return;
+export function duck(amount: number, recover = 0.8, liftDb = 0): void {
+  if (!ctx || !impactDuck || !engineDuck || !sfxLift) return;
   const t = ctx.currentTime;
   const k = Math.min(0.85, Math.max(0, amount));
   for (const [g, depth] of [[impactDuck.gain, k], [engineDuck.gain, k * 0.6]] as const) {
-    const low = 1 - depth;
     const cur = g.value;
-    if (cur < low - 0.02) continue; // já está mais abaixado por outro efeito
+    // já abaixado: afunda mais, proporcionalmente (piso de ~-18 dB para a cama não sumir)
+    const low = Math.max(0.12, Math.min(1 - depth, cur * (1 - depth * 0.55)));
     g.cancelScheduledValues(t);
     g.setValueAtTime(cur, t);
     g.linearRampToValueAtTime(low, t + 0.012);
     g.setTargetAtTime(1, t + 0.1, recover / 3);
+  }
+  if (liftDb > 0) {
+    const g = sfxLift.gain;
+    const peak = Math.max(g.value, Math.pow(10, Math.min(3, liftDb) / 20));
+    g.cancelScheduledValues(t);
+    g.setValueAtTime(g.value, t);
+    g.linearRampToValueAtTime(peak, t + 0.005);
+    g.setValueAtTime(peak, t + 0.12);
+    g.setTargetAtTime(1, t + 0.12, 0.12);
   }
 }
 

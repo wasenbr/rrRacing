@@ -30,8 +30,9 @@ html, body {
   overscroll-behavior: none;
 }
 
-/* altura real visível (--app-h vem do JS; no iOS 100% inclui a área atrás da barra do navegador) */
-#game { position: fixed; top: 0; left: 0; width: 100%; height: var(--app-h, 100dvh); overflow: hidden; }
+/* ocupa a janela visível pelo CSS (inset 0 acompanha a barra do navegador no iOS); a altura medida
+   por JS (visualViewport) vinha errada no Chrome do iPhone e deixava o jogo numa faixa com tela preta */
+#game { position: fixed; inset: 0; overflow: hidden; }
 #game canvas { display: block; }
 
 button { font: inherit; color: inherit; cursor: pointer; }
@@ -39,7 +40,8 @@ button { font: inherit; color: inherit; cursor: pointer; }
 /* ---------- HUD (layout inspirado no original) ---------- */
 .vignette {
   position: absolute; inset: 0; pointer-events: none;
-  background: radial-gradient(ellipse 75% 70% at 50% 52%, rgba(0, 0, 0, 0) 44%, rgba(0, 0, 0, 0.55) 76%, rgba(0, 0, 0, 0.9) 100%);
+  /* 100% = canto da tela: limpo até ~50%, anel escuro de 0,7 a 0,95 a partir de ~60% (visual alvo) */
+  background: radial-gradient(ellipse farthest-corner at 50% 50%, rgba(0, 0, 0, 0) 48%, rgba(0, 0, 0, 0.38) 60%, rgba(0, 0, 0, 0.7) 76%, rgba(0, 0, 0, 0.95) 100%);
 }
 .hud { position: absolute; inset: 0; pointer-events: none; text-shadow: 0 2px 0 #000, 0 0 6px #000; font-weight: 800; }
 .hud-tl { position: absolute; top: max(10px, env(safe-area-inset-top)); left: max(10px, env(safe-area-inset-left)); display: flex; align-items: flex-start; gap: 8px; }
@@ -132,19 +134,28 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .touch.off > :not(.rotate-hint) { display: none; }
 .touch button, .touch .steer {
   pointer-events: auto; position: relative; border: 2px solid rgba(255, 255, 255, 0.4);
-  background: rgba(20, 16, 28, 0.35); border-radius: 50%; font-weight: 900; font-size: 13px; letter-spacing: 1px;
-  color: #fff; text-shadow: 0 1px 2px #000; touch-action: none; backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px);
+  background: rgba(20, 16, 28, 0.45); border-radius: 50%; font-weight: 900; font-size: 13px; letter-spacing: 1px;
+  color: #fff; text-shadow: 0 1px 2px #000; touch-action: none;
+  /* sem backdrop-filter: desfocar o canvas do jogo atrás de cada botão custava GPU em todo quadro no tablet */
 }
-.touch button.on { background: rgba(242, 195, 24, 0.55); border-color: var(--accent); transform: scale(0.94); }
+.touch button.on { background: rgba(242, 195, 24, 0.75); border-color: var(--accent); transform: scale(0.94); }
+/* botões de ação: ícone da arma/função + nome curto, fundo bem opaco para ler sobre a pista */
+.touch button[data-a] { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; padding: 0; line-height: 1; }
+.touch .t-ic { display: block; width: 24px; height: 24px; font-style: normal; pointer-events: none; filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.8)); }
+.touch .t-ic:empty { display: none; }
+.touch .t-ic svg { display: block; width: 100%; height: 100%; }
+.touch button[data-a] span { pointer-events: none; font-size: 10px; letter-spacing: 0.3px; white-space: nowrap; }
+.touch .fire .t-ic, .touch .fire2 .t-ic { width: 28px; height: 28px; }
+.touch .fire span, .touch .fire2 span { font-size: 13px; }
 .touch-left {
   position: absolute; left: max(10px, env(safe-area-inset-left)); bottom: max(10px, env(safe-area-inset-bottom));
   display: flex; flex-direction: column; align-items: flex-start; gap: 10px;
 }
 .touch-actions { display: flex; align-items: flex-end; gap: 10px; margin-left: 34px; }
-.touch-actions .act { width: 62px; height: 62px; }
-.touch-actions .fire { width: 80px; height: 80px; font-size: 15px; background: rgba(224, 52, 42, 0.38); border-color: rgba(255, 120, 100, 0.8); }
-.touch-actions .drop { background: rgba(255, 150, 30, 0.3); border-color: rgba(255, 190, 90, 0.75); }
-.touch-actions .nitro { background: rgba(40, 170, 255, 0.32); border-color: rgba(120, 210, 255, 0.8); }
+.touch-actions .act { width: 64px; height: 64px; }
+.touch-actions .fire { width: 80px; height: 80px; font-size: 15px; background: rgba(150, 26, 20, 0.62); border-color: rgba(255, 120, 100, 0.9); }
+.touch-actions .drop { background: rgba(150, 80, 8, 0.62); border-color: rgba(255, 190, 90, 0.9); }
+.touch-actions .nitro { background: rgba(10, 90, 160, 0.62); border-color: rgba(120, 210, 255, 0.9); }
 .touch .steer {
   width: 210px; height: 78px; border-radius: 40px; display: flex; align-items: center; justify-content: space-between; padding: 0 16px;
   background: linear-gradient(90deg, rgba(255, 255, 255, 0.14), rgba(20, 16, 28, 0.3) 35%, rgba(20, 16, 28, 0.3) 65%, rgba(255, 255, 255, 0.14));
@@ -161,15 +172,17 @@ button { font: inherit; color: inherit; cursor: pointer; }
   display: flex; align-items: flex-end; gap: 12px;
 }
 .touch-rcol { display: flex; flex-direction: column; align-items: center; gap: 10px; }
-.touch-right .brake { width: 72px; height: 72px; background: rgba(224, 52, 42, 0.22); }
-.touch-right .sharp { width: 60px; height: 60px; font-size: 11px; background: rgba(176, 64, 224, 0.3); border-color: rgba(210, 150, 255, 0.8); }
+.touch-right .brake { width: 72px; height: 72px; background: rgba(120, 24, 20, 0.6); border-color: rgba(255, 140, 120, 0.85); }
+.touch-right .sharp { width: 64px; height: 64px; background: rgba(90, 30, 130, 0.62); border-color: rgba(210, 150, 255, 0.9); }
+.touch-right .sharp span { font-size: 9px; letter-spacing: 0; }
 .steer.sharp { border-color: #d296ff; box-shadow: 0 0 12px rgba(210, 150, 255, 0.6); }
-.touch-right .gas { width: 108px; height: 108px; font-size: 16px; background: rgba(92, 255, 92, 0.22); border-color: rgba(140, 255, 140, 0.8); }
+.touch-right .gas { width: 108px; height: 108px; font-size: 16px; background: rgba(30, 130, 30, 0.58); border-color: rgba(140, 255, 140, 0.9); }
 .touch.auto-gas .gas { display: none; }
 .touch.auto-gas .brake { width: 80px; height: 80px; }
 /* aceleração automática: o polegar direito freia e atira */
-.touch-right .fire2 { display: none; width: 104px; height: 104px; font-size: 16px; background: rgba(224, 52, 42, 0.38); border-color: rgba(255, 120, 100, 0.8); }
-.touch.auto-gas .fire2 { display: block; }
+.touch-right .fire2 { display: none; width: 104px; height: 104px; font-size: 16px; background: rgba(150, 26, 20, 0.62); border-color: rgba(255, 120, 100, 0.9); }
+.touch.auto-gas .fire2 { display: flex; }
+.touch:not(.auto-gas) .touch-right .fire2 { display: none; }
 /* direção por inclinação: sem volante, armas maiores no polegar esquerdo */
 .touch.tilt .steer { display: none; }
 .touch.tilt .touch-actions { margin-left: 0; }
@@ -195,16 +208,43 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .touch ~ .hud .hud-bl, .hud:has(~ .touch) .hud-bl { left: 50%; bottom: max(8px, env(safe-area-inset-bottom)); transform: translateX(-50%); }
 @media (max-height: 460px) {
   .touch-actions { margin-left: 20px; gap: 8px; }
-  .touch-actions .act { width: 54px; height: 54px; font-size: 11px; }
-  .touch-actions .fire { width: 68px; height: 68px; }
+  .touch-actions .act { width: 58px; height: 58px; }
+  .touch-actions .fire { width: 70px; height: 70px; }
   .touch .steer { width: 186px; height: 66px; }
   .steer .knob { width: 44px; height: 44px; left: calc(50% - 22px); top: calc(50% - 22px); }
-  .touch-right .brake { width: 62px; height: 62px; }
-  .touch-right .sharp { width: 50px; height: 50px; font-size: 10px; }
+  .touch-right .brake { width: 64px; height: 64px; }
+  .touch-right .sharp { width: 58px; height: 58px; }
   .touch-rcol { gap: 6px; }
   .touch-right .gas { width: 92px; height: 92px; }
   .touch-top { top: 138px; }
   .touch-top button { width: 40px; height: 40px; font-size: 16px; }
+}
+/* celular deitado com pouca altura: controles compactos e translúcidos quando parados (não
+   escondem rivais e minas); ao tocar voltam a ficar opacos. O layout não muda (armas à esquerda). */
+@media (max-height: 400px) {
+  /* só o volante fica translúcido parado; os botões mantêm fundo opaco (≥ 0,55) para achar com o polegar */
+  .touch .steer { opacity: 0.6; transition: opacity 0.12s; }
+  .touch .steer.held { opacity: 1; }
+  .touch .t-ic { width: 20px; height: 20px; }
+  .touch .fire .t-ic, .touch .fire2 .t-ic { width: 22px; height: 22px; }
+  .touch button[data-a] span { font-size: 9px; letter-spacing: 0; }
+  .touch .fire span, .touch .fire2 span { font-size: 11px; }
+  .touch-left { gap: 6px; }
+  .touch-actions { margin-left: 14px; gap: 6px; }
+  .touch-actions .act { width: 56px; height: 56px; }
+  .touch-actions .fire { width: 64px; height: 64px; }
+  .touch .steer { width: 150px; height: 56px; padding: 0 10px; }
+  .steer .arrow { font-size: 20px; }
+  .steer .knob { width: 38px; height: 38px; left: calc(50% - 19px); top: calc(50% - 19px); }
+  .touch-right { gap: 8px; }
+  .touch-right .brake { width: 58px; height: 58px; }
+  .touch-right .sharp { width: 56px; height: 56px; }
+  .touch-right .sharp span { font-size: 8px; }
+  .touch-right .gas { width: 76px; height: 76px; font-size: 13px; }
+  .touch.auto-gas .brake { width: 62px; height: 62px; }
+  .touch-right .fire2 { width: 72px; height: 72px; font-size: 13px; }
+  .touch.tilt .touch-actions .act { width: 60px; height: 60px; }
+  .touch.tilt .touch-actions .fire { width: 70px; height: 70px; }
 }
 /* botão flutuante de tela cheia nos menus (celular) */
 .fs-float {
@@ -288,7 +328,8 @@ tr.total td { font-weight: 800; color: var(--accent); border-bottom: none; }
   background: rgba(255, 255, 255, 0.06); border: 2px solid var(--line); border-radius: 10px; padding: 12px; font-size: 17px;
 }
 .main-buttons .go { margin-top: 0; background: linear-gradient(180deg, #ffd84a, #e0a800); border: none; }
-.link { display: block; margin: 12px auto 0; background: none; border: none; color: var(--muted); font-size: 15px; }
+/* botões avulsos do cartão (Voltar, Sair da sala…): largura cheia, no mesmo tamanho dos demais */
+.card > button:not(.go) { display: block; width: 100%; margin-top: 10px; }
 .tracks, .chars { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
 .trk, .char { background: rgba(255, 255, 255, 0.06); border: 2px solid var(--line); border-radius: 10px; padding: 10px; text-align: left; }
 .trk small, .char small { display: block; color: var(--muted); font-size: 12px; margin-top: 3px; }
@@ -384,6 +425,7 @@ h2 { color: #ffb030; text-shadow: 2px 2px 0 #3a0e04; font-style: italic; }
 .car-img { display: block; width: 100%; max-width: 170px; aspect-ratio: 1; object-fit: contain; margin: -8px auto -14px; pointer-events: none; }
 .trk-img { display: block; width: 100%; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.12); margin-bottom: 6px; pointer-events: none; }
 .logo-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.title-card .version { margin: 10px 0 0; text-align: center; font-size: 11px; color: var(--muted); opacity: 0.8; letter-spacing: 0.3px; }
 .logo-faces { display: flex; }
 .logo-faces .portrait { margin-right: -14px; transform: rotate(-4deg); }
 .logo-faces .portrait:nth-child(2) { transform: translateY(-6px) rotate(3deg); z-index: 1; }
@@ -567,7 +609,7 @@ h3 {
 /* corrida rápida: abas de planeta e pistas numa fileira */
 .planet-tabs { flex-wrap: wrap; }
 .planet-tabs .tab { flex: 1 1 110px; font-size: 14px; padding: 8px; }
-.track-row { grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); }
+.track-row { grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); }
 .quick-opts { display: grid; grid-template-columns: auto 1fr; gap: 0 18px; align-items: start; }
 @media (max-width: 640px), (max-height: 460px) {
   .card { padding: 20px 14px 18px; }
@@ -705,3 +747,65 @@ h3 {
 /* linhas de atributo com a mesma altura, com ou sem a marca FORTE/FRACO */
 .cars .stat, .shop-carcard .stat { grid-template-rows: 16px 8px; row-gap: 3px; margin-bottom: 2px; }
 .cars .stat span, .cars .stat em, .shop-carcard .stat span, .shop-carcard .stat em { line-height: 16px; }
+
+/* ---------------- loja: aba Melhorias (atributos no topo + prévia do ganho) ---------------- */
+.shop-car { align-items: start; }
+.shop-car-stats { padding: 10px 12px 12px; border-radius: 10px; background: rgba(0, 0, 0, 0.28); border: 1px solid rgba(255, 255, 255, 0.08); }
+.shop-car-stats h4 { margin: 0 0 6px; font-family: var(--display); font-weight: 400; font-size: 13px; letter-spacing: 1.5px; color: #ffcf6a; text-transform: uppercase; }
+.shop-car-stats .stats { gap: 12px; }
+.shop-car-stats .stat { font-size: 13px; grid-template-columns: 100px 1fr 46px; }
+.shop-car-stats .stat i b { height: 14px; }
+.upg-legend { display: flex; align-items: center; gap: 6px; margin: 10px 0 0; font-size: 12px; color: var(--muted); }
+.upg-legend i, .upg-prev u {
+  background: repeating-linear-gradient(-45deg, rgba(120, 255, 140, 0.95) 0 3px, rgba(120, 255, 140, 0.45) 3px 6px);
+  box-shadow: 0 0 6px rgba(120, 255, 140, 0.55);
+}
+.upg-legend i { display: inline-block; width: 18px; height: 9px; border-radius: 2px; transform: skewX(-14deg); }
+.upg-next { color: #8aff9a; }
+.upg-prev { display: grid; gap: 4px; margin-top: 6px; max-width: 460px; }
+.up-row { display: grid; grid-template-columns: 84px 1fr 42px; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.up-row i { position: relative; display: block; height: 8px; border-radius: 2px; overflow: hidden; transform: skewX(-14deg);
+  background: repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.1) 0 calc(10% - 2px), transparent calc(10% - 2px) 10%); }
+.up-row b { position: absolute; left: 0; top: 0; bottom: 0; background: linear-gradient(#ffe070, #e0a020); }
+.up-row u { position: absolute; top: 0; bottom: 0; animation: upg-pulse 1.4s ease-in-out infinite; }
+.up-row em { font-style: normal; font-weight: 800; color: #8aff9a; text-align: right; }
+.up-row.down u { background: repeating-linear-gradient(-45deg, rgba(255, 90, 70, 0.95) 0 3px, rgba(255, 90, 70, 0.4) 3px 6px); box-shadow: none; }
+.up-row.down em { color: #ff7a6a; }
+@keyframes upg-pulse { 50% { opacity: 0.55; } }
+@media (prefers-reduced-motion: reduce) { .up-row u { animation: none; } }
+
+/* ---------------- loja: aba Armas (vitrine com miniaturas 3D grandes) ---------------- */
+.weapon-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; padding: 4px 0 10px; }
+.weapon-card { display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: 12px;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.32), rgba(0, 0, 0, 0.45)); border: 1px solid rgba(255, 255, 255, 0.1); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06); }
+.weapon-img { position: relative; border-radius: 9px; overflow: hidden; border: 2px solid #5e5c66; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.6); aspect-ratio: 1; background: #1a1c24; }
+.weapon-img .item-img { display: block; width: 100%; max-width: none; margin: 0; aspect-ratio: 1; }
+.weapon-slot { position: absolute; left: 8px; top: 8px; padding: 2px 8px; border-radius: 3px; font-family: var(--display); font-size: 12px; letter-spacing: 1px; color: #1a0e04; background: linear-gradient(#ffd070, #ff9a1a); transform: skewX(-8deg); }
+.weapon-card .grow b { display: block; font-size: 16px; margin-bottom: 4px; }
+.weapon-card .grow small { display: block; color: var(--muted); font-size: 12px; margin-top: 4px; }
+.weapon-card .buy, .weapon-card .maxed { width: 100%; margin-top: auto; }
+@media (max-width: 640px), (max-height: 460px) {
+  .weapon-cards { grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .weapon-card { padding: 6px; }
+  .weapon-card .grow b { font-size: 13px; }
+  .up-row { grid-template-columns: 70px 1fr 38px; }
+}
+
+/* corrida rápida / cards de carro: rótulo não encosta na barra */
+.cars .stat, .shop-carcard .stat { row-gap: 4px; }
+.cars .stats, .shop-carcard .stats { gap: 6px; }
+
+/* placa do nome em moldura metálica também nas miniaturas (grade de pilotos e rivais da garagem) */
+.nameplate.mini { display: block; margin: -16px -4px 0; padding: 2px; z-index: 1; clip-path: polygon(9px 0, calc(100% - 9px) 0, 100% 50%, calc(100% - 9px) 100%, 9px 100%, 0 50%); }
+.nameplate.mini::before { clip-path: polygon(8px 1px, calc(100% - 8px) 1px, calc(100% - 1px) 50%, calc(100% - 8px) calc(100% - 1px), 8px calc(100% - 1px), 1px 50%); }
+.nameplate.mini span { padding: 4px 11px 3px; font-size: 11px; letter-spacing: 0.5px; clip-path: polygon(7px 0, calc(100% - 7px) 0, 100% 50%, calc(100% - 7px) 100%, 7px 100%, 0 50%); overflow: hidden; text-overflow: ellipsis; }
+.char-pick .char { gap: 0; }
+.char-pick .char .nameplate.mini { max-width: 100%; }
+.rivals li > .rv-portrait, .rv-portrait { position: relative; flex: none; width: 76px; display: flex; flex-direction: column; align-items: center; margin-bottom: 2px; }
+.rv-portrait .portrait { width: 76px; height: 76px; }
+.rv-portrait .nameplate.mini { margin: -14px -8px 0; }
+.rv-portrait .nameplate.mini span { font-size: 10px; padding: 3px 9px 2px; }
+@media (max-height: 460px) {
+  .rv-portrait, .rv-portrait .portrait { width: 60px; height: auto; }
+  .rv-portrait .portrait { height: 60px; }
+}
