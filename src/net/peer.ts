@@ -36,11 +36,36 @@ async function createPeer(id = `${PREFIX}g-${Math.random().toString(36).slice(2,
   }
 }
 
+let iceServers: Promise<RTCIceServer[] | undefined> | undefined;
+let iceFetchedAt = 0;
+
+/**
+ * Servidores TURN da Cloudflare (via /api/turn do worker), para conectar quem está atrás de
+ * NAT/CGNAT/4G. Sem eles (dev local, falha), o PeerJS usa os servidores públicos padrão.
+ */
+function getIceServers(): Promise<RTCIceServer[] | undefined> {
+  // as credenciais valem 6 h (worker/index.ts); renova antes
+  if (Date.now() - iceFetchedAt > 4 * 3600_000) iceServers = undefined;
+  if (!iceServers) iceFetchedAt = Date.now();
+  iceServers ??= fetch('/api/turn', { signal: AbortSignal.timeout(5000) })
+    .then((r) => (r.ok ? r.json() : undefined))
+    .then((d: { iceServers?: RTCIceServer[] } | undefined) => (d?.iceServers?.length ? d.iceServers : undefined))
+    .catch(() => undefined)
+    .then((list) => {
+      if (!list) iceServers = undefined; // tenta de novo na próxima conexão
+      return list;
+    });
+  return iceServers;
+}
+
 async function openPeer(id: string): Promise<PeerType> {
-  const { Peer } = await import('peerjs');
+  const [{ Peer }, ice] = await Promise.all([import('peerjs'), getIceServers()]);
   return new Promise((resolve, reject) => {
     // ?netdebug na URL: logs do PeerJS no console
-    const opts = { debug: new URLSearchParams(location.search).has('netdebug') ? 3 : 0 } as const;
+    const opts = {
+      debug: new URLSearchParams(location.search).has('netdebug') ? 3 : 0,
+      ...(ice && { config: { iceServers: ice } }),
+    } as const;
     const peer = new Peer(id, opts);
     const timer = setTimeout(() => {
       peer.destroy();
