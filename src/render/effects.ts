@@ -24,10 +24,35 @@ interface Particle {
   drag: number;
 }
 
-/** Textura de partícula: mancha suave (fogo) ou nuvem com bordas irregulares (fumaça). */
-function particleTexture(kind: 'fire' | 'smoke'): THREE.CanvasTexture {
+export type ParticleKind = 'fire' | 'smoke' | 'ball';
+
+/**
+ * Textura de partícula: mancha suave (fogo), nuvem com bordas irregulares (fumaça) ou labareda
+ * encaracolada (bola de fogo das explosões: RGB = tom, miolo claro e bordas escuras/fuliginosas).
+ */
+function particleTexture(kind: ParticleKind): THREE.CanvasTexture {
   const tex = canvasTexture(128, 128, (ctx) => {
     ctx.clearRect(0, 0, 128, 128);
+    if (kind === 'ball') {
+      let seed = 13;
+      const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+      // vários rolos de chama sobrepostos: clareiam no meio, bordas em tom mais escuro
+      for (let i = 0; i < 34; i++) {
+        const a = rnd() * Math.PI * 2;
+        const d = Math.sqrt(rnd()) * 30;
+        const x = 64 + Math.cos(a) * d;
+        const y = 64 + Math.sin(a) * d;
+        const r = 14 + rnd() * 20;
+        const v = Math.round(150 + (1 - d / 30) * 105 * rnd());
+        const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+        g.addColorStop(0, `rgba(${v},${v},${v},0.5)`);
+        g.addColorStop(0.6, `rgba(${Math.round(v * 0.6)},${Math.round(v * 0.6)},${Math.round(v * 0.6)},0.3)`);
+        g.addColorStop(1, 'rgba(40,40,40,0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, 128, 128);
+      }
+      return;
+    }
     if (kind === 'fire') {
       const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 62);
       g.addColorStop(0, 'rgba(255,255,255,1)');
@@ -104,15 +129,28 @@ const SMOKE_FS = /* glsl */ `
     gl_FragColor = vec4(vColor * (0.75 + 0.25 * t.r), a);
   }`;
 
+/** Bola de fogo: mistura normal (pode escurecer até a fuligem), tom da textura modula o brilho. */
+const BALL_FS = /* glsl */ `
+  uniform sampler2D map;
+  varying vec2 vUv;
+  varying vec3 vColor;
+  varying float vAlpha;
+  void main() {
+    vec4 t = texture2D(map, vUv);
+    float a = min(1.0, t.a * 1.6) * vAlpha;
+    if (a < 0.01) discard;
+    gl_FragColor = vec4(vColor * (0.45 + 0.75 * t.r), a);
+  }`;
+
 /**
  * Billboard instanciado: cada partícula é um quadrado virado para a câmera (no vertex shader),
  * com cor e opacidade por instância. A fumaça não é iluminada (não vira "bola facetada").
  */
-export function particleMaterial(kind: 'fire' | 'smoke'): THREE.ShaderMaterial {
+export function particleMaterial(kind: ParticleKind): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     uniforms: { map: { value: particleTexture(kind) } },
     vertexShader: PARTICLE_VS,
-    fragmentShader: kind === 'fire' ? FIRE_FS : SMOKE_FS,
+    fragmentShader: kind === 'fire' ? FIRE_FS : kind === 'ball' ? BALL_FS : SMOKE_FS,
     transparent: true,
     depthWrite: false,
     blending: kind === 'fire' ? THREE.AdditiveBlending : THREE.NormalBlending,
@@ -131,6 +169,9 @@ export function billboardGeometry(capacity: number): { geo: THREE.PlaneGeometry;
   return { geo, alpha, rot };
 }
 
+/** fim da bola de fogo: fuligem quase preta */
+const SOOT = new THREE.Color(0x0e0a08);
+
 class ParticlePool {
   readonly mesh: THREE.InstancedMesh;
   private items: (Particle & { rot: number; spin: number })[] = [];
@@ -144,7 +185,7 @@ class ParticlePool {
 
   constructor(
     private capacity: number,
-    private kind: 'fire' | 'smoke',
+    private kind: ParticleKind,
   ) {
     const { geo, alpha, rot } = billboardGeometry(capacity);
     this.alpha = alpha;
@@ -154,7 +195,7 @@ class ParticlePool {
     this.mesh.setColorAt(0, new THREE.Color());
     this.mesh.frustumCulled = false;
     this.mesh.count = 0;
-    this.mesh.renderOrder = kind === 'fire' ? 3 : 2;
+    this.mesh.renderOrder = kind === 'fire' ? 3 : kind === 'ball' ? 2.5 : 2;
   }
 
   /** fração das partículas emitidas (qualidade gráfica) */
@@ -206,14 +247,18 @@ class ParticlePool {
       const p = items[i];
       const t = 1 - p.life / p.max;
       // tamanho = diâmetro do billboard (a esfera antiga tinha raio 0,5 × size)
-      const size = (p.size0 + (p.size1 - p.size0) * t) * (this.kind === 'smoke' ? 1.25 : 1.1);
+      const size = (p.size0 + (p.size1 - p.size0) * (this.kind === 'ball' ? 1 - (1 - t) * (1 - t) : t)) * (this.kind === 'smoke' ? 1.25 : 1.1);
       this.m.compose(this.p.set(p.x, p.y, p.z), this.q, this.s.setScalar(size));
       this.mesh.setMatrixAt(i, this.m);
-      this.c.copy(p.c0).lerp(p.c1, t);
+      // bola de fogo: três tons (laranja → vermelho → fuligem preta); demais: dois
+      if (this.kind === 'ball') {
+        if (t < 0.3) this.c.copy(p.c0).lerp(p.c1, t / 0.3);
+        else this.c.copy(p.c1).lerp(SOOT, Math.min(1, (t - 0.3) / 0.5));
+      } else this.c.copy(p.c0).lerp(p.c1, t);
       this.mesh.setColorAt(i, this.c);
       // entra rápido e some aos poucos
-      const fadeIn = Math.min(1, t / 0.08);
-      this.alpha.setX(i, fadeIn * (this.kind === 'smoke' ? 0.62 * (1 - t) : 1 - t * t));
+      const fadeIn = Math.min(1, t / (this.kind === 'ball' ? 0.04 : 0.08));
+      this.alpha.setX(i, fadeIn * (this.kind === 'smoke' ? 0.62 * (1 - t) : this.kind === 'ball' ? 0.95 * (1 - t * t * t) : 1 - t * t));
       this.rot.setX(i, p.rot);
     }
     this.mesh.count = n;
@@ -445,6 +490,11 @@ const TMP = new THREE.Vector3();
 /** raio visual da mancha de óleo (igual ao da simulação) */
 const OIL_R = (WEAPONS as unknown as { oil: { radius: number } }).oil.radius;
 
+/** Destroço sólido da explosão (reaproveitado de uma lista livre). */
+interface Debris { x: number; y: number; z: number; vx: number; vy: number; vz: number; floor: number; rx: number; ry: number; rz: number; spin: number; s: number; life: number }
+/** Emissor da coluna de fumaça escura de uma explosão. */
+interface Column { x: number; y: number; z: number; s: number; t: number; acc: number; rate: number }
+
 /**
  * Tudo que aparece e some durante a corrida: tiros, mísseis, minas, óleo,
  * dinheiro/blindagem na pista, explosões, faíscas e fumaça.
@@ -453,17 +503,24 @@ export class Effects {
   readonly group = new THREE.Group();
   private fire: ParticlePool;
   private smoke: ParticlePool;
+  /** bola de fogo das explosões (mistura normal: esfria de laranja a fuligem) */
+  private ball: ParticlePool;
+  /** nível baixo/celular: explosão reduzida (menos bolas, destroços e fumaça) */
+  private lite = false;
   private projectiles = new Map<number, THREE.Object3D>();
   private hazards = new Map<number, THREE.Object3D>();
   private pickups = new Map<number, THREE.Object3D>();
   private flashes: { light: THREE.PointLight; life: number }[] = [];
-  private rings: { mesh: THREE.Mesh; life: number }[] = [];
+  /** ondas de choque (pool): anel esfumado que se expande e some em ~0,3 s */
+  private rings: { mesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>; life: number; s0: number }[] = [];
+  private static readonly RING_LIFE = 0.3;
   private time = 0;
   /** clarão aditivo curto das explosões (pool de sprites reaproveitados) */
   private blasts: { sprite: THREE.Sprite; life: number; max: number; size: number }[] = [];
   /** destroços sólidos com gravidade e quique (um InstancedMesh só, anel de instâncias) */
   private debris: THREE.InstancedMesh;
-  private debrisItems: { x: number; y: number; z: number; vx: number; vy: number; vz: number; floor: number; rx: number; ry: number; rz: number; spin: number; s: number; life: number }[] = [];
+  private debrisItems: Debris[] = [];
+  private debrisFree: Debris[] = [];
   private static readonly DEBRIS = 64;
   private debrisDensity = 1;
   private dm = new THREE.Matrix4();
@@ -473,7 +530,8 @@ export class Effects {
   /** marcador discreto sob o carro do jogador (anel + seta no chão) */
   readonly marker: THREE.Group;
   /** emissores de coluna de fumaça das explosões */
-  private columns: { x: number; y: number; z: number; s: number; t: number; acc: number; rate: number }[] = [];
+  private columns: Column[] = [];
+  private columnsFree: Column[] = [];
 
   // geometrias e materiais compartilhados
   /** VK Plasma Rifles: bola de plasma verde com rastro */
@@ -519,9 +577,22 @@ export class Effects {
   /** Bear Claw Mines: disco com garras e luz piscando */
   private mineGeo = new THREE.CylinderGeometry(0.55, 0.7, 0.3, 16);
   private clawGeo = new THREE.ConeGeometry(0.1, 0.55, 5);
-  private mineMat = new THREE.MeshStandardMaterial({ color: 0x3a3c42, metalness: 0.8, roughness: 0.35 });
+  private mineMat = new THREE.MeshStandardMaterial({ color: 0x3a3c42, metalness: 0.8, roughness: 0.35, emissive: 0x5a0604, emissiveIntensity: 0.6 });
   private clawMat = new THREE.MeshStandardMaterial({ color: 0xd8dce2, metalness: 1, roughness: 0.25 });
-  private ledMat = new THREE.MeshBasicMaterial({ color: HOT(0xff2010, 5) });
+  private ledMat = new THREE.MeshBasicMaterial({ color: HOT(0xff2010, 3) });
+  /** halo vermelho pequeno das minas (um material para todas) */
+  private mineHaloMat = new THREE.SpriteMaterial({
+    map: canvasTexture(64, 64, (ctx) => {
+      ctx.clearRect(0, 0, 64, 64);
+      const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+      g.addColorStop(0, 'rgba(255,120,100,1)');
+      g.addColorStop(0.25, 'rgba(255,40,20,0.6)');
+      g.addColorStop(1, 'rgba(255,0,0,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, 64, 64);
+    }),
+    color: HOT(0xff3020, 1.4), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true,
+  });
   /** KO Scatterpack: bolinhas espinhosas amarelas e pretas */
   // scatter: esfera de metal escuro com núcleo vermelho aceso (como no visual alvo)
   private scatterGeo = new THREE.SphereGeometry(0.24, 16, 12);
@@ -563,7 +634,7 @@ export class Effects {
   private coinGeo = new THREE.CylinderGeometry(0.7, 0.7, 0.14, 24).rotateX(Math.PI / 2);
   private coinMat: THREE.Material[];
   private armorMat = new THREE.MeshStandardMaterial({ color: 0x20c060, emissive: 0x0a6a2a, metalness: 0.4, roughness: 0.3 });
-  private ringGeo = new THREE.RingGeometry(0.8, 1, 32).rotateX(-Math.PI / 2);
+  private ringGeo = new THREE.PlaneGeometry(2, 2).rotateX(-Math.PI / 2);
   /** marcas de pneu no chão (anel de instâncias: as mais antigas são reaproveitadas) */
   private skids: THREE.InstancedMesh;
   private skidNext = 0;
@@ -576,12 +647,20 @@ export class Effects {
     this.smoke.density = d;
     this.fire.density = Math.min(1, d + 0.3);
     this.debrisDensity = d;
+    let touch = false;
+    try {
+      touch = typeof window !== 'undefined' && (window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window);
+    } catch {
+      touch = false;
+    }
+    this.lite = d < 0.7 || touch;
   }
 
   constructor() {
     this.fire = new ParticlePool(500, 'fire');
     this.smoke = new ParticlePool(700, 'smoke');
-    this.group.add(this.fire.mesh, this.smoke.mesh);
+    this.ball = new ParticlePool(96, 'ball');
+    this.group.add(this.fire.mesh, this.smoke.mesh, this.ball.mesh);
     this.skids = new THREE.InstancedMesh(
       new THREE.PlaneGeometry(0.34, 0.75).rotateX(-Math.PI / 2),
       new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.42, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3 }),
@@ -610,12 +689,25 @@ export class Effects {
       ctx.fillStyle = g;
       ctx.fillRect(0, 0, 128, 128);
     });
+    // onda de choque: anel esfumado (borda externa nítida, rastro suave para dentro)
+    const shockTex = canvasTexture(128, 128, (ctx) => {
+      ctx.clearRect(0, 0, 128, 128);
+      const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 63);
+      g.addColorStop(0, 'rgba(255,255,255,0)');
+      g.addColorStop(0.55, 'rgba(255,255,255,0.05)');
+      g.addColorStop(0.82, 'rgba(255,255,255,0.45)');
+      g.addColorStop(0.93, 'rgba(255,255,255,1)');
+      g.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, 128, 128);
+    });
     // anéis de choque e marcas queimadas: pools criados uma vez (antes, um material por explosão)
     for (let i = 0; i < 4; i++) {
-      const mesh = new THREE.Mesh(this.ringGeo, new THREE.MeshBasicMaterial({ color: HOT(0xff8a30, 1.1), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+      const mesh = new THREE.Mesh(this.ringGeo, new THREE.MeshBasicMaterial({ map: shockTex, color: HOT(0xffc890, 1.1), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4 }));
       mesh.visible = false;
+      mesh.renderOrder = 2;
       this.group.add(mesh);
-      this.rings.push({ mesh, life: 0 });
+      this.rings.push({ mesh, life: 0, s0: 1 });
     }
     const scorchMap = scorchTexture();
     for (let i = 0; i < 8; i++) {
@@ -667,13 +759,15 @@ export class Effects {
   }
 
   /** Posiciona o marcador do jogador (chamado a cada quadro pelo jogo). */
-  markPlayer(x: number, y: number, z: number, heading: number, visible: boolean): void {
+  markPlayer(x: number, y: number, z: number, heading: number, visible: boolean, near = false): void {
     this.marker.visible = visible;
     if (!visible) return;
     this.marker.position.set(x, y + 0.04, z);
     this.marker.rotation.y = heading;
+    // perseguição/cockpit: anel menor e discreto (na vista aérea ele identifica o carro)
+    this.marker.scale.setScalar(near ? 0.5 : 1);
     const m = (this.marker.children[0] as THREE.Mesh).material as THREE.MeshBasicMaterial;
-    m.opacity = 0.4 + Math.sin(this.time * 4) * 0.1;
+    m.opacity = near ? 0.35 : 0.4 + Math.sin(this.time * 4) * 0.1;
   }
 
   /** Remove as marcas de pneu (troca de pista). */
@@ -689,11 +783,16 @@ export class Effects {
    */
   reset(): void {
     for (const map of [this.projectiles, this.hazards, this.pickups]) {
-      for (const o of map.values()) this.group.remove(o);
+      for (const o of map.values()) {
+        this.group.remove(o);
+        if (map === this.projectiles) this.releaseProjectile(o);
+      }
       map.clear();
     }
     this.clearSkids();
+    for (const c of this.columns) this.columnsFree.push(c);
     this.columns.length = 0;
+    for (const d of this.debrisItems) this.debrisFree.push(d);
     this.debrisItems.length = 0;
     this.debris.count = 0;
     for (const r of this.rings) {
@@ -713,6 +812,7 @@ export class Effects {
       f.light.intensity = 0;
     }
     this.fire.clear();
+    this.ball.clear();
     this.smoke.clear();
     this.world = null;
   }
@@ -760,7 +860,7 @@ export class Effects {
         x: ex + (Math.random() - 0.5) * 0.1, y: y + (Math.random() - 0.5) * 0.08, z: ez + (Math.random() - 0.5) * 0.1,
         vx: cx + bx * sp, vy: 0, vz: cz + bz * sp,
         life: 0.08 + Math.random() * 0.05, size0: 0.7, size1: 0.35,
-        c0: HOT(0xdcecff, 4), c1: HOT(0x3a6aff, 2.5), gravity: 0, drag: 0,
+        c0: HOT(0xdcecff, 2.4), c1: HOT(0x3a6aff, 1.5), gravity: 0, drag: 0,
       });
       // língua laranja mais longa
       sp = 9 + Math.random() * 5;
@@ -768,7 +868,7 @@ export class Effects {
         x: ex + (Math.random() - 0.5) * 0.15, y: y + (Math.random() - 0.5) * 0.1, z: ez + (Math.random() - 0.5) * 0.15,
         vx: cx + bx * sp + (Math.random() - 0.5), vy: Math.random() * 0.6, vz: cz + bz * sp + (Math.random() - 0.5),
         life: 0.12 + Math.random() * 0.1, size0: 0.8, size1: 0.15,
-        c0: HOT(0xffa040, 2.6), c1: HOT(0xff3a08, 1.2), gravity: -1, drag: 0,
+        c0: HOT(0xffa040, 1.8), c1: HOT(0xff3a08, 0.9), gravity: -1, drag: 0,
       });
     }
     if (Math.random() < 0.3) this.glowBit(x, y, z, 0xffa040);
@@ -778,50 +878,83 @@ export class Effects {
 
   explosion(x: number, y: number, z: number, big = true): void {
     const s = big ? 1.5 : 0.75;
+    const lite = this.lite;
     // clarão curto e contido (~0,1 s), alaranjado: o "estalo" sem estourar a tela de branco
     const b = this.blasts.reduce((a, c) => (a.life < c.life ? a : c));
     b.sprite.position.set(x, y + 1.1 * s, z);
-    b.max = b.life = big ? 0.11 : 0.08;
-    b.size = (big ? 2.6 : 2.2) * s;
+    b.max = b.life = big ? 0.1 : 0.07;
+    b.size = (big ? 2.4 : 2.0) * s;
     b.sprite.visible = true;
-    // núcleo colorido: amarelo no centro, laranja em volta, esfriando para vermelho-escuro
-    for (let i = 0; i < (big ? 9 : 4); i++) {
-      this.fire.emit({
-        x: x + (Math.random() - 0.5) * 1.1 * s, y: y + 0.9 + Math.random() * s, z: z + (Math.random() - 0.5) * 1.1 * s,
-        vx: (Math.random() - 0.5) * 2.5 * s, vy: 2 + Math.random() * 2.5, vz: (Math.random() - 0.5) * 2.5 * s,
-        life: 0.45 + Math.random() * 0.35, size0: 1.7 * s, size1: 2.8 * s,
-        c0: i % 3 === 0 ? HOT(0xffe070, 1.25) : HOT(0xff9a28, 1.15), c1: HOT(0xa01800, 0.45), gravity: -2, drag: 2.5,
+    // bola de fogo com volume: rolos de chama texturizados (laranja -> vermelho -> fuligem preta),
+    // que crescem, sobem e escurecem; mistura normal, então a fuligem tapa o fundo de verdade
+    const balls = (big ? 11 : 5) >> (lite ? 1 : 0);
+    for (let i = 0; i < balls; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const r = Math.random() * 0.8 * s;
+      const hot = i < balls * 0.4;
+      this.ball.emit({
+        x: x + Math.cos(a) * r, y: y + 0.7 + Math.random() * 0.9 * s, z: z + Math.sin(a) * r,
+        vx: Math.cos(a) * (1 + Math.random() * 2) * s, vy: 1.5 + Math.random() * 2.5, vz: Math.sin(a) * (1 + Math.random() * 2) * s,
+        life: 0.75 + Math.random() * 0.45, size0: (hot ? 1.2 : 1.6) * s, size1: (hot ? 3.0 : 3.8) * s,
+        c0: hot ? HOT(0xffd26a, 1.5) : HOT(0xff9a30, 1.3), c1: HOT(0xc0280a, 0.75), gravity: -1.5, drag: 2.8,
       });
     }
-    // línguas de fogo laranja saindo para os lados
-    const n = big ? 30 : 12;
+    // núcleo aditivo curto (o brilho do miolo) e algumas línguas de fogo para os lados
+    for (let i = 0; i < (big ? 4 : 2); i++) {
+      this.fire.emit({
+        x: x + (Math.random() - 0.5) * 0.8 * s, y: y + 0.9 + Math.random() * 0.6 * s, z: z + (Math.random() - 0.5) * 0.8 * s,
+        vx: 0, vy: 1.5, vz: 0,
+        life: 0.22 + Math.random() * 0.12, size0: 1.8 * s, size1: 2.6 * s,
+        c0: HOT(0xffe090, 1.2), c1: HOT(0xff5010, 0.4), gravity: 0, drag: 3,
+      });
+    }
+    const n = (big ? 14 : 6) >> (lite ? 1 : 0);
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2;
       const up = Math.random();
-      const sp = (4 + Math.random() * 10) * s;
+      const sp = (4 + Math.random() * 9) * s;
       this.fire.emit({
         x, y: y + 0.8, z,
         vx: Math.cos(a) * sp * (1 - up * 0.5), vy: up * sp * 1.1, vz: Math.sin(a) * sp * (1 - up * 0.5),
-        life: 0.3 + Math.random() * 0.45, size0: 1.2 * s, size1: 0.3,
+        life: 0.25 + Math.random() * 0.35, size0: 1.0 * s, size1: 0.25,
         c0: HOT(0xff8a20, 1.2), c1: HOT(0xb01800, 0.45), gravity: 4, drag: 3,
       });
     }
-    // destroços sólidos maiores (6–10), com gravidade, giro e quique no chão (menos no celular)
-    const pieces = Math.max(3, Math.round((big ? 10 : 5) * Math.max(0.5, this.debrisDensity)));
-    for (let i = 0; i < pieces; i++) {
+    // destroços sólidos (8-12 na grande), com gravidade, giro e quique no chão (metade no celular)
+    const pieces = big ? 8 + Math.floor(Math.random() * 5) : 4 + Math.floor(Math.random() * 3);
+    const count = lite ? Math.max(3, Math.round(pieces * Math.min(0.5, this.debrisDensity + 0.1))) : pieces;
+    for (let i = 0; i < count; i++) {
       const a = Math.random() * Math.PI * 2;
       const sp = (4 + Math.random() * 6) * (big ? 1.15 : 0.85);
-      if (this.debrisItems.length >= Effects.DEBRIS) this.debrisItems.shift();
-      this.debrisItems.push({
-        x, y: y + 0.8, z, vx: Math.cos(a) * sp, vy: 5 + Math.random() * 7, vz: Math.sin(a) * sp, floor: y,
-        rx: Math.random() * 6, ry: Math.random() * 6, rz: Math.random() * 6, spin: 5 + Math.random() * 8,
-        s: (0.9 + Math.random() * 1.1) * (big ? 1.35 : 0.8), life: 2.2 + Math.random() * 1.2,
-      });
+      if (this.debrisItems.length >= Effects.DEBRIS) this.debrisFree.push(this.debrisItems.shift()!);
+      const d = this.debrisFree.pop() ?? ({} as Debris);
+      d.x = x;
+      d.y = y + 0.8;
+      d.z = z;
+      d.vx = Math.cos(a) * sp;
+      d.vy = 5 + Math.random() * 7;
+      d.vz = Math.sin(a) * sp;
+      d.floor = y;
+      d.rx = Math.random() * 6;
+      d.ry = Math.random() * 6;
+      d.rz = Math.random() * 6;
+      d.spin = 5 + Math.random() * 8;
+      d.s = (0.9 + Math.random() * 1.1) * (big ? 1.35 : 0.8);
+      d.life = 2.2 + Math.random() * 1.2;
+      this.debrisItems.push(d);
     }
-    // coluna de fumaça escura: carro destruído solta fumaça por ~1,8 s, que sobe e dura 3–4 s
-    this.columns.push({ x, y, z, s, t: big ? 1.8 : 0.5, acc: 0, rate: big ? 26 : 16 });
+    // coluna de fumaça escura: o carro destruído solta fumaça por ~1,2 s, que sobe e dura 2-3 s
+    const col = this.columnsFree.pop() ?? ({} as Column);
+    col.x = x;
+    col.y = y;
+    col.z = z;
+    col.s = s;
+    col.t = big ? 1.2 : 0.45;
+    col.acc = 0;
+    col.rate = (big ? 22 : 14) * (lite ? 0.5 : 1);
+    this.columns.push(col);
     // fumaça baixa que se espalha pelo chão
-    const low = big ? 10 : 5;
+    const low = (big ? 10 : 5) >> (lite ? 1 : 0);
     for (let i = 0; i < low; i++) {
       const a = (i / low) * Math.PI * 2;
       this.smoke.emit({
@@ -831,23 +964,25 @@ export class Effects {
         c0: HOT(0x2e2620), c1: HOT(0x121110), gravity: -0.2, drag: 2.5,
       });
     }
-    this.sparks(x, y + 0.8, z, big ? 30 : 12);
+    this.sparks(x, y + 0.8, z, (big ? 24 : 10) >> (lite ? 1 : 0));
     // luz pontual temporária, mais fraca: reaproveita a luz do pool que está mais perto de apagar
     const flash = this.flashes.reduce((a, c) => (a.life < c.life ? a : c));
     flash.light.position.set(x, y + 2, z);
     flash.light.color.set(0xff7a20);
     flash.life = big ? 0.45 : 0.25;
-    flash.light.intensity = big ? 170 : 60;
-    // anel de choque rente ao chão (pool)
-    const ring = this.rings.reduce((a, c) => (a.life < c.life ? a : c));
-    ring.life = 0.45;
-    ring.mesh.visible = true;
-    ring.mesh.position.set(x, y + 0.2, z);
-    ring.mesh.userData.s0 = big ? 1.1 : 0.55;
-    ring.mesh.scale.setScalar(ring.mesh.userData.s0);
-    // marca queimada no chão (~8 s)
+    flash.light.intensity = big ? 150 : 55;
+    // onda de choque rente ao chão (pool): expande rápido e some em ~0,3 s
     const ground = this.world ? this.world.track.query(x, z).height : y;
-    if (Math.abs(ground - y) < 2.5) {
+    const onGround = Math.abs(ground - y) < 2.5;
+    const ring = this.rings.reduce((a, c) => (a.life < c.life ? a : c));
+    ring.life = Effects.RING_LIFE;
+    ring.mesh.visible = true;
+    ring.mesh.position.set(x, (onGround ? ground : y) + 0.12, z);
+    ring.s0 = big ? 0.9 : 0.5;
+    ring.mesh.scale.setScalar(ring.s0);
+    ring.mesh.material.opacity = 1;
+    // marca queimada no chão (~8 s)
+    if (onGround) {
       const sc = this.scorches.reduce((a, c) => (a.life < c.life ? a : c));
       sc.life = Effects.SCORCH_LIFE;
       sc.mesh.visible = true;
@@ -1038,7 +1173,11 @@ export class Effects {
         const led = new THREE.Mesh(this.ledScatterGeo, this.ledMat);
         led.position.y = 0.26;
         led.name = 'led';
-        g.add(led);
+        const halo = new THREE.Sprite(this.mineHaloMat);
+        halo.scale.setScalar(0.7);
+        halo.position.y = 0.26;
+        halo.name = 'halo';
+        g.add(led, halo);
         return g;
       }
       default: {
@@ -1055,7 +1194,12 @@ export class Effects {
         const led = new THREE.Mesh(this.ledMineGeo, this.ledMat);
         led.position.y = 0.2;
         led.name = 'led';
-        g.add(led);
+        // halo vermelho pequeno (como as minas acesas do visual alvo)
+        const halo = new THREE.Sprite(this.mineHaloMat);
+        halo.scale.setScalar(1.1);
+        halo.position.y = 0.24;
+        halo.name = 'halo';
+        g.add(led, halo);
         return g;
       }
     }
@@ -1119,7 +1263,37 @@ export class Effects {
 
   private syncStamp = 0;
 
-  private syncMap<T extends { id: number }>(map: Map<number, THREE.Object3D>, items: T[], create: (it: T) => THREE.Object3D, update: (o: THREE.Object3D, it: T) => void): void {
+  /** projéteis fora de uso, por tipo (reaproveitados no próximo tiro: sem montar grupos por disparo) */
+  private projectileFree = new Map<string, THREE.Object3D[]>();
+
+  private takeProjectile(kind: string): THREE.Object3D {
+    const o = this.projectileFree.get(kind)?.pop() ?? this.makeProjectile(kind);
+    o.userData.kind = kind;
+    return o;
+  }
+
+  private releaseProjectile = (o: THREE.Object3D): void => {
+    const kind = o.userData.kind as string;
+    let list = this.projectileFree.get(kind);
+    if (!list) this.projectileFree.set(kind, (list = []));
+    if (list.length < 16) list.push(o);
+  };
+
+  /** Parte nomeada de um objeto, guardada no userData (getObjectByName percorre a árvore a cada quadro). */
+  private part(o: THREE.Object3D, name: string): THREE.Object3D | undefined {
+    const key = `part_${name}`;
+    let found = o.userData[key] as THREE.Object3D | null | undefined;
+    if (found === undefined) found = o.userData[key] = o.getObjectByName(name) ?? null;
+    return found ?? undefined;
+  }
+
+  private syncMap<T extends { id: number }>(
+    map: Map<number, THREE.Object3D>,
+    items: T[],
+    create: (it: T) => THREE.Object3D,
+    update: (o: THREE.Object3D, it: T) => void,
+    release?: (o: THREE.Object3D) => void,
+  ): void {
     // marca de "visto" por chamada no próprio objeto (sem alocar um Set a cada quadro)
     const stamp = ++this.syncStamp;
     for (const it of items) {
@@ -1136,6 +1310,7 @@ export class Effects {
       if (o.userData.syncSeen !== stamp) {
         this.group.remove(o);
         map.delete(id);
+        release?.(o);
       }
     }
   }
@@ -1150,7 +1325,7 @@ export class Effects {
     this.syncMap(
       this.projectiles,
       world.projectiles,
-      (p: Projectile) => this.makeProjectile(p.kind as string),
+      (p: Projectile) => this.takeProjectile(p.kind as string),
       (o, p: Projectile) => {
         o.position.set(p.x + forwardX(p.heading) * p.speed * ahead, p.y, p.z + forwardZ(p.heading) * p.speed * ahead);
         o.rotation.y = p.heading;
@@ -1162,10 +1337,10 @@ export class Effects {
           this.puff(bx, p.y, bz, 0xd8d2cc, 0.75);
           this.puff(bx, p.y, bz, 0x9a948e, 0.55);
           this.flame(bx, p.y, bz);
-          const fl = o.getObjectByName('flame');
+          const fl = this.part(o, 'flame');
           if (fl) fl.scale.set(1, 1, 0.8 + Math.random() * 0.6);
         } else if (kind === 'sundog') {
-          const spr = o.getObjectByName('sun') as THREE.Sprite | undefined;
+          const spr = this.part(o, 'sun') as THREE.Sprite | undefined;
           if (spr) spr.scale.setScalar(2.4 + Math.sin(this.time * 20 + p.id) * 0.25);
           if (Math.random() < 0.6) this.glowBit(p.x, p.y, p.z, 0xffc040);
         } else {
@@ -1173,6 +1348,7 @@ export class Effects {
           if (Math.random() < 0.7) this.glowBit(bx, p.y, bz, 0x50ff80);
         }
       },
+      this.releaseProjectile,
     );
 
     this.syncMap(
@@ -1188,13 +1364,16 @@ export class Effects {
           o.position.set(h.x, h.y + 0.03, h.z);
         } else if (kind === 'mine' || kind === 'scatter') {
           o.position.set(h.x, h.y + (kind === 'mine' ? 0.15 : 0.22), h.z);
-          const led = o.getObjectByName('led');
-          if (led) led.visible = h.age < 0.6 || Math.sin(this.time * (kind === 'mine' ? 12 : 16) + h.id) > 0;
+          const led = this.part(o, 'led');
+          const on = h.age < 0.6 || Math.sin(this.time * (kind === 'mine' ? 12 : 16) + h.id) > 0;
+          if (led) led.visible = on;
+          const halo = this.part(o, 'halo');
+          if (halo) halo.scale.setScalar((kind === 'mine' ? 1.1 : 0.7) * (on ? 1 : 0.55));
           if (kind === 'scatter') o.rotation.y = h.id;
         } else {
           o.position.set(h.x, h.y + 0.03, h.z);
           if (kind === 'lava') {
-            const m = o.getObjectByName('bubble');
+            const m = this.part(o, 'bubble');
             if (m) m.scale.setScalar(0.5 + ((this.time * 0.8 + h.id * 0.3) % 1) * 0.7);
           }
         }
@@ -1222,9 +1401,11 @@ export class Effects {
     for (const r of this.rings) {
       if (r.life <= 0) continue;
       r.life -= dt;
-      const t = Math.min(1, 1 - r.life / 0.45);
-      r.mesh.scale.setScalar(r.mesh.userData.s0 * (1 + t * 8));
-      (r.mesh.material as THREE.MeshBasicMaterial).opacity = Math.max(0, 0.8 * (1 - t));
+      const t = Math.min(1, 1 - r.life / Effects.RING_LIFE);
+      // sai rápido e desacelera (ease-out); vai apagando enquanto abre
+      const e = 1 - (1 - t) * (1 - t) * (1 - t);
+      r.mesh.scale.setScalar(r.s0 * (1 + e * 7));
+      r.mesh.material.opacity = Math.max(0, (1 - t) * (1 - t));
       if (r.life <= 0) r.mesh.visible = false;
     }
     // marcas queimadas: somem aos poucos nos últimos 2 s
@@ -1244,7 +1425,10 @@ export class Effects {
       if (b.life <= 0) b.sprite.visible = false;
     }
     this.updateDebris(dt);
-    this.columns = this.columns.filter((c) => {
+    // colunas de fumaça (compacta no próprio vetor; emissores terminados voltam à lista livre)
+    let nc = 0;
+    for (let i = 0; i < this.columns.length; i++) {
+      const c = this.columns[i];
       c.t -= dt;
       c.acc += dt * c.rate;
       for (; c.acc >= 1; c.acc--) {
@@ -1252,24 +1436,32 @@ export class Effects {
         const r = Math.random() * 0.6 * c.s;
         this.smoke.emit({
           x: c.x + Math.cos(a) * r, y: c.y + 0.8 + Math.random() * 0.6, z: c.z + Math.sin(a) * r,
-          vx: Math.cos(a) * 0.5, vy: 3 + Math.random() * 2.5, vz: Math.sin(a) * 0.5,
-          life: 1.6 + Math.random() * 0.6, size0: 1.1 * c.s, size1: 3.8 * c.s,
-          c0: HOT(0x241e1a), c1: HOT(0x0c0c0c), gravity: -0.4, drag: 0.9,
+          vx: Math.cos(a) * 0.5, vy: 2.6 + Math.random() * 2, vz: Math.sin(a) * 0.5,
+          life: 2 + Math.random(), size0: 1.1 * c.s, size1: 4 * c.s,
+          c0: HOT(0x1e1814), c1: HOT(0x0a0a0a), gravity: -0.4, drag: 0.9,
         });
       }
       if (c.s > 1 && Math.random() < dt * 14) this.flame(c.x + (Math.random() - 0.5) * 1.2, c.y + 0.5, c.z + (Math.random() - 0.5) * 1.2);
-      return c.t > 0;
-    });
+      if (c.t > 0) this.columns[nc++] = c;
+      else this.columnsFree.push(c);
+    }
+    this.columns.length = nc;
     this.fire.update(dt);
+    this.ball.update(dt);
     this.smoke.update(dt);
   }
 
   private updateDebris(dt: number): void {
     if (!this.debrisItems.length && this.debris.count === 0) return;
-    const alive: typeof this.debrisItems = [];
-    for (const d of this.debrisItems) {
+    const items = this.debrisItems;
+    let n = 0;
+    for (let i = 0; i < items.length; i++) {
+      const d = items[i];
       d.life -= dt;
-      if (d.life <= 0) continue;
+      if (d.life <= 0) {
+        this.debrisFree.push(d);
+        continue;
+      }
       d.vy -= 22 * dt;
       d.x += d.vx * dt;
       d.y += d.vy * dt;
@@ -1284,16 +1476,17 @@ export class Effects {
       }
       d.rx += d.spin * dt;
       d.rz += d.spin * 0.7 * dt;
-      alive.push(d);
+      items[n++] = d;
     }
-    this.debrisItems = alive;
-    alive.forEach((d, i) => {
+    items.length = n;
+    for (let i = 0; i < n; i++) {
+      const d = items[i];
       const k = d.s * Math.min(1, d.life / 0.3);
       this.dq.setFromEuler(this.de.set(d.rx, d.ry, d.rz));
       this.dm.compose(this.dv.set(d.x, d.y, d.z), this.dq, TMP.set(k, k, k));
       this.debris.setMatrixAt(i, this.dm);
-    });
-    this.debris.count = alive.length;
+    }
+    this.debris.count = n;
     this.debris.instanceMatrix.needsUpdate = true;
   }
 }

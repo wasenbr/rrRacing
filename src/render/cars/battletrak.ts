@@ -104,7 +104,7 @@ function treadPlates(): THREE.CanvasTexture {
 /**
  * Battle Trak: casco facetado largo entre duas ESTEIRAS enormes à mostra (não usa pneus), com um
  * para-brisa preto grande em cunha na frente, espinhos roxos na face externa de cada esteira,
- * torreta sextavada com cano curto, escape grande atrás, Rogue Missiles sob o nariz e KO
+ * torreta sextavada com o lançador dos Rogue Missiles, escape grande atrás e KO
  * Scatterpack na traseira.
  */
 export function createBattleTrak(color: number, shadows: boolean): CarVisual {
@@ -201,19 +201,16 @@ export function createBattleTrak(color: number, shadows: boolean): CarVisual {
   // faixa escura na base do casco, entre o casco e as esteiras
   k.add(new THREE.BoxGeometry(HW - 0.1, 0.12, 3.1), k.trim, 0, 0.3, -0.55);
 
-  // torreta sextavada no dorso (40% maior que a primeira versão) com cano 30% maior
+  // torreta sextavada no dorso
   const TY = lowY(1.2);
   const TZ = -0.62;
   k.add(new THREE.CylinderGeometry(0.5, 0.59, 0.2, 6), k.gunMetal, 0, TY, TZ);
   k.add(new THREE.CylinderGeometry(0.31, 0.48, 0.22, 6), k.steel, 0, TY + 0.2, TZ);
-  k.add(new THREE.CylinderGeometry(0.1, 0.11, 0.91, 12).rotateX(Math.PI / 2), k.gunMetal, 0, TY + 0.2, TZ + 0.6);
-  k.add(new THREE.CylinderGeometry(0.13, 0.13, 0.13, 12).rotateX(Math.PI / 2), k.trim, 0, TY + 0.2, TZ + 1.06);
-
-  // Rogue Missiles: dois canos curtos sob o nariz, ogivas vermelhas
-  for (const sx of [-0.36, 0.36]) {
-    k.add(new THREE.CylinderGeometry(0.08, 0.09, 0.5, 12).rotateX(Math.PI / 2), k.gunMetal, sx, 0.4, 2.42);
-    k.add(new THREE.ConeGeometry(0.06, 0.16, 10).rotateX(Math.PI / 2), k.tail, sx, 0.4, 2.74);
-  }
+  // Rogue Missiles: lançador sobre a torreta (é dali que saem os mísseis, à frente e na altura dele):
+  // dois casulos 2x2 lado a lado num suporte, ogivas vermelhas para a frente
+  k.add(new THREE.BoxGeometry(0.3, 0.16, 0.5), k.gunMetal, 0, TY + 0.36, TZ + 0.1);
+  for (const sx of [-0.25, 0.25]) k.missilePod(sx, TY + 0.58, TZ + 0.4, 1.05);
+  k.add(new THREE.BoxGeometry(0.94, 0.05, 0.14), k.warn, 0, TY + 0.44, TZ + 0.75);
 
   const EXH_Y = 1.6;
   // escape: cilindro grande deitado no alto da traseira (sai o nitro) e KO Scatterpack embaixo

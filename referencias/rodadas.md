@@ -258,3 +258,40 @@ Feito na rodada 9 (4 agentes em paralelo):
 - Estabilidade: sem WebGL a simulação segue e surge "Recarregar"; resultados congelam a corrida e o
   som; renderizador de miniaturas liberado na corrida; testes de largada/ré/posições (bug de ré
   na linha corrigido em race.ts).
+
+# Rodada 10 (2026-09-25) — todos os grupos (pedido do usuário: mais 3 rodadas com todos), volta 1/3
+
+Evidências completas (tudo; parte ui refeita após corrigir as capturas do final).
+Notas: Visual 6,9 · Carros 7 · Jogabilidade 7,7 · Pistas 6,9 · Campanha 7,6 · Interface 7,4 ·
+Desempenho 6,5 · Som 7 · Online 5 · QA 6,8 (nenhum aprovado; nenhum bloqueante).
+
+Pendências altas: explosões sem volume, bloom/nitro estourando, avisos no centro, piso fora do alvo;
+Air Blade longe do alvo, Air Blade no máximo < Marauder, carros de fábrica iguais; Plasma fraco;
+22 pistas planas, sem evidência de salto; motor sintético em giro médio/alto, fogos do final fracos,
+emoção do locutor; bateria só manual, queda de nível recompila, hud.message força layout, 90/100 Hz;
+online sem reconexão, host sai derruba todos, placar não final, previsão sem colisão; item 55 (vão
+16 px), barras enganosas, miniaturas de armas; carro terminado para no meio da pista (28/36),
+recarregar a página escapa da desistência.
+
+Feito na rodada 10 (9 agentes em paralelo):
+- Visual: explosão com bola de fogo, destroços, onda de choque e fumaça; bloom com teto; avisos
+  fora do centro (faixa sob a posição / canto inferior esquerdo); piso com chapa e juntas; anel do
+  jogador menor fora da aérea; minimapa novo; etiquetas limitadas; chamas apagadas após a chegada.
+- Carros: Air Blade refeito (casco-barbatana única, bandeja larga, pneus +20%); progressão estrita
+  DD<MA<AB<BT<HV; estilos de fábrica distintos; vitrine com câmera própria e espaçada; mísseis
+  visíveis; suspensão por Linkage e folga do para-lama.
+- Jogabilidade: estacionamento na borda 0/432 no meio; plasma 25 de dano (Chem VI 4,3 explosões);
+  míssil em cone e Sundog 1,2 s (acerto 50–55%); corridas mistas; óleo 25 s; sem AltLeft.
+- Pistas: relevo em 35/36 (bogmire-5 sem, drakonis-4 e newmojave-6 planas); salto com queda (Gv);
+  capturas de salto; Inferno e Nho mais escuros.
+- Campanha/QA: corrida em andamento no save (recarregar conta como último); pausa sabe se largou;
+  "Desistir e ir para a próxima"; sem custo com WebGL perdido; teto de dinheiro e revenda ≤80%;
+  viagem e final refeitos (pódio com rivais); capturas de resultados/chefe/repescagem.
+- Interface: vão ≥32 px (item 55), barras em escala real, miniaturas de armas novas, TIRO à direita,
+  capturas da garagem/loja no celular.
+- Desempenho: economia de bateria automática; queda de nível sem recompilar; hud.message sem layout;
+  90/100 Hz fluidos; menu desenha só quando muda; pools e menos alocações; powerPreference.
+- Som: fogos e multidão no final; grave do motor segue a rotação; cadeia de arena no locutor;
+  efeitos com sub; nitro com estalos; silêncio dos resultados também online.
+- Online: reconexão com ficha de sessão; host sai → placar com nota; placar ao vivo e final oficial;
+  colisão na previsão; contadores de toque; canal sem ordem; ping no HUD e na sala.

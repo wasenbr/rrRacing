@@ -187,8 +187,9 @@ function cycleBuffer(ctx: BaseAudioContext, heavy: boolean, seed: number): Audio
  *  - explosões: ruído em banda modulado por pulsos na frequência de queima (textura de
  *    escapamento de verdade), mais forte com o pé embaixo;
  *  - admissão: sopro filtrado que cresce com a carga;
- *  - sub: senoide na meia-ordem, só para dar peso;
- *  - nitro: sopro grave (300–900 Hz) e "whoosh" de ignição ao acionar, sem chiado agudo.
+ *  - grave: pilha de harmônicos da meia-ordem que sobe com a rotação e cresce com a carga;
+ *  - nitro: +15% de giro, mais drive e formante alto aberto, sopro grave (300–900 Hz), "whoosh"
+ *    e estalos de escape na ignição, sem chiado agudo.
  * A frequência de queima vai de ~50 Hz (lenta) a ~310 Hz (corte): a subida de giro é clara.
  * (Amostras CC0 de motor testadas — OpenGameArt/Freesound — eram só rumor sub-grave ou vento de
  * microfone; a síntese em camadas soou melhor.)
@@ -201,6 +202,9 @@ export class EngineSound {
   private heavyGain!: GainNode;
   private sub!: OscillatorNode;
   private subGain!: GainNode;
+  private subTone!: BiquadFilterNode;
+  /** ganho antes da saturação do ronco: o nitro "abre" o drive */
+  private drive!: GainNode;
   private fire!: OscillatorNode;
   private fireBand!: BiquadFilterNode;
   private fireGain!: GainNode;
@@ -317,7 +321,10 @@ export class EngineSound {
     const tone2 = biquad('lowpass', 3200, 0.5);
     const chest = biquad('peaking', 150, 0.9, 3);
     const hp = biquad('highpass', 40, 0.7);
-    this.body.connect(shaper);
+    this.drive = ctx.createGain();
+    this.drive.gain.value = 1;
+    this.body.connect(this.drive);
+    this.drive.connect(shaper);
     shaper.connect(this.tone);
     this.tone.connect(this.formant1);
     this.formant1.connect(this.formant2);
@@ -365,15 +372,24 @@ export class EngineSound {
     fireAm.connect(this.fireGain);
     this.fireGain.connect(this.tone);
 
-    // sub: meia-ordem em senoide, só peso
+    // grave com tom: pilha de harmônicos da meia-ordem (f/2, f, 3f/2, 2f...) que SOBE com a
+    // rotação (antes era uma senoide só, e no giro médio/alto o grave parecia parado). Passa-baixa
+    // que acompanha a rotação (~3,5 f) e ainda entra de leve no ronco (ganha os formantes e o lope)
     this.sub = ctx.createOscillator();
-    this.sub.type = 'sine';
+    const re = new Float32Array([0, 1, 0.75, 0.45, 0.4, 0.22, 0.18, 0.1, 0.08]);
+    this.sub.setPeriodicWave(ctx.createPeriodicWave(re, new Float32Array(re.length), { disableNormalization: false }));
     this.subGain = ctx.createGain();
     this.subGain.gain.value = 0.12;
+    this.subTone = biquad('lowpass', 300, 0.6);
     const subHp = biquad('highpass', 38, 0.7);
     this.sub.connect(this.subGain);
-    this.subGain.connect(subHp);
+    this.subGain.connect(this.subTone);
+    this.subTone.connect(subHp);
     subHp.connect(this.out);
+    const subIntoBody = ctx.createGain();
+    subIntoBody.gain.value = 0.25;
+    this.subTone.connect(subIntoBody);
+    subIntoBody.connect(this.body);
 
     // admissão: sopro médio que cresce com a carga
     this.intake = biquad('bandpass', 500, 0.8);
@@ -455,6 +471,28 @@ export class EngineSound {
     og.connect(this.out);
     o.start(t);
     o.stop(t + 0.25);
+    // estalos de escape (backfire): 4–6 pipocos secos e graves nos primeiros ~0,6 s
+    const pops = 4 + Math.floor(Math.random() * 3);
+    let tt = t + 0.03;
+    for (let i = 0; i < pops; i++) {
+      const s = ctx.createBufferSource();
+      s.buffer = this.noiseBuf;
+      const pb = ctx.createBiquadFilter();
+      pb.type = 'bandpass';
+      pb.frequency.value = 280 + Math.random() * 450;
+      pb.Q.value = 0.9;
+      const pg = ctx.createGain();
+      const peak = (0.9 - i * 0.1) * (0.7 + Math.random() * 0.3);
+      pg.gain.setValueAtTime(0.0001, tt);
+      pg.gain.exponentialRampToValueAtTime(peak, tt + 0.002);
+      pg.gain.exponentialRampToValueAtTime(0.0001, tt + 0.035 + Math.random() * 0.03);
+      s.connect(pb);
+      pb.connect(pg);
+      pg.connect(this.drive);
+      s.start(tt, Math.random() * 1.5);
+      s.stop(tt + 0.08);
+      tt += 0.06 + Math.random() * 0.1;
+    }
   }
 
   /**
@@ -483,10 +521,10 @@ export class EngineSound {
     // cada marcha sobe o giro de ~25% a ~90%; marchas altas começam um pouco mais alto
     let target = s < 0.03 ? 0.08 + throttle * 0.5 : 0.25 + g * 0.03 + inGear * 0.62 + (g === 0 ? throttle * 0.08 : 0);
     if (throttle < 0.1 && s >= 0.03) target -= 0.08; // pé fora: o giro cai um pouco (freio-motor)
-    if (boosting) target += 0.1;
+    if (boosting) target += 0.15; // nitro: +15% de giro (ruge acima do corte normal)
     const rate = target > this.rpm ? 5 : 6;
     this.rpm += (target - this.rpm) * Math.min(1, dt * rate);
-    const rpm = Math.max(0, Math.min(1.1, this.rpm));
+    const rpm = Math.max(0, Math.min(1.15, this.rpm));
     const shifting = t < this.shiftUntil;
     const load = shifting ? 0.1 : throttle;
 
@@ -521,20 +559,24 @@ export class EngineSound {
       this.recBus.gain.setTargetAtTime(recW * REC_LEVEL * (0.75 + load * 0.35), t, 0.06);
     }
     this.sub.frequency.setTargetAtTime(f / 2, t, k);
+    this.subTone.frequency.setTargetAtTime(f * 3.5, t, k);
+    // nitro: mais drive na saturação (o ronco rasga)
+    this.drive.gain.setTargetAtTime(boosting ? 1.9 : 1, t, boosting ? 0.06 : 0.25);
     this.fire.frequency.setTargetAtTime(f, t, k);
     this.lope.frequency.setTargetAtTime(f / 8, t, k);
     this.lopeDepth.gain.setTargetAtTime(0.22 - rpm * 0.16, t, 0.1);
     // o timbre abre com rotação e carga: grave e redondo na lenta, rasgado no alto giro
-    this.tone.frequency.setTargetAtTime(380 + rpm * 1700 + load * 600 + (boosting ? 300 : 0), t, k);
+    this.tone.frequency.setTargetAtTime(380 + rpm * 1700 + load * 600 + (boosting ? 700 : 0), t, k);
     this.formant1.frequency.setTargetAtTime(190 + rpm * 260, t, k);
     this.formant1.gain.setTargetAtTime(4 + load * 3, t, 0.08);
     this.formant2.frequency.setTargetAtTime(650 + rpm * 950, t, k);
-    this.formant2.gain.setTargetAtTime(1 + load * 5 + rpm * 2, t, 0.08);
+    this.formant2.gain.setTargetAtTime(1 + load * 5 + rpm * 2 + (boosting ? 4 : 0), t, 0.08);
     this.fireBand.frequency.setTargetAtTime(350 + rpm * 900, t, k);
     // queima: dominante na síntese pura; com a gravação vira só textura por cima
     this.fireGain.gain.setTargetAtTime((0.55 + load * 1.1) * (1 - recW * 0.55), t, 0.05);
     // sub: a gravação já tem o grave; outra fonte no mesmo tom por baixo só criaria batimento
-    this.subGain.gain.setTargetAtTime((0.14 - Math.min(1, rpm) * 0.05) * (1 - recW * 0.8), t, 0.1);
+    // o grave cresce com a rotação e a carga (antes caía: o giro alto ficava sem peso)
+    this.subGain.gain.setTargetAtTime((0.1 + Math.min(1, rpm) * 0.06 + load * 0.03) * (1 - recW * 0.8), t, 0.1);
     this.intake.frequency.setTargetAtTime(350 + rpm * 900, t, k);
     const intakeLevel = load * (0.02 + rpm * 0.07);
     this.intakeGain.gain.setTargetAtTime(intakeLevel, t, 0.06);

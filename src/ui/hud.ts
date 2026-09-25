@@ -2,6 +2,7 @@ import type { Track } from '../sim/track';
 import './hud.css';
 import { drawTrack, trackTransform } from './trackMap';
 import { withIcons } from './icons';
+import { THEMES } from '../render/themes';
 
 /** Esferas de blindagem (como o medidor do original, sob o contador de voltas). */
 const ARMOR_DOTS = 10;
@@ -91,6 +92,11 @@ export class Hud {
   private pos: HTMLElement;
   private center: HTMLElement;
   private toast: HTMLElement;
+  /** aviso de sistema (música, câmera, som, sala): canto de baixo, longe da contagem */
+  private note: HTMLElement;
+  private noteTimer = 0;
+  /** relógio do HUD (pulso da seta do jogador no minimapa) */
+  private clock = 0;
   private mirrorFrame: HTMLElement;
   private minimap: HTMLCanvasElement;
   private mapCtx: CanvasRenderingContext2D;
@@ -98,7 +104,12 @@ export class Hud {
   private mapTransform: (x: number, z: number) => [number, number];
   private toastTimer = 0;
   private centerTimer = 0;
+  /** repetição da entrada da mensagem central (sem ler offsetWidth) */
+  private centerAnim: Animation | null = null;
   private lapNow = 1;
+  /** indicador de ping do online (criado no primeiro uso) */
+  private pingEl: HTMLElement | null = null;
+  private pingKey = '';
 
   constructor(root: HTMLElement) {
     this.el = document.createElement('div');
@@ -121,9 +132,10 @@ export class Hud {
         <div class="rh-time">0:00.00</div>
         <div class="rh-best"></div>
         <div class="rh-speed"><b>0</b><span>km/h</span></div>
+        <div class="rh-toast"></div>
       </div>
       <div class="rh-center"></div>
-      <div class="rh-toast"></div>
+      <div class="rh-note"></div>
       <div class="rh-mirror"></div>`;
     root.appendChild(this.el);
     const q = (s: string) => this.el.querySelector(s) as HTMLElement;
@@ -139,6 +151,7 @@ export class Hud {
     this.pos = q('.rh-pos');
     this.center = q('.rh-center');
     this.toast = q('.rh-toast');
+    this.note = q('.rh-note');
     this.mirrorFrame = q('.rh-mirror');
     this.minimap = q('.rh-map') as HTMLCanvasElement;
     this.mapCtx = this.minimap.getContext('2d')!;
@@ -153,6 +166,23 @@ export class Hud {
     this.mapTransform = trackTransform(track, size, size, 18);
     const ctx = this.mapBase.getContext('2d')!;
     ctx.clearRect(0, 0, size, size);
+    // borda da pista na cor do planeta (contorno preto por fora), traçado por cima
+    const theme = THEMES[track.def.theme];
+    const pts = track.sampleCenterline(2);
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    for (const [w, c] of [[22, 'rgba(0,0,0,0.85)'], [17, theme ? theme.roadEdge : '#c0c0c0']] as const) {
+      ctx.beginPath();
+      pts.forEach((p, i) => {
+        const [x, y] = this.mapTransform(p.x, p.z);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.closePath();
+      ctx.lineWidth = w;
+      ctx.strokeStyle = c;
+      ctx.stroke();
+    }
     drawTrack(ctx, track, this.mapTransform, 8);
     // já mostra a pista nova: durante o preparo da largada o HUD não é atualizado e o quadro
     // visível ficava com o minimapa da pista anterior
@@ -214,6 +244,7 @@ export class Hud {
   private minimapTick(dt: number, data: HudData): void {
 
     // minimapa a ~30 quadros por segundo basta
+    this.clock += dt;
     this.mapTimer -= dt;
     if (this.mapTimer > 0) return this.tickToast(dt);
     this.mapTimer = 1 / 30;
@@ -236,7 +267,8 @@ export class Hud {
         const h = c.heading ?? 0;
         const [fx, fy] = this.mapTransform(c.x + Math.sin(h), c.z + Math.cos(h));
         const a = Math.atan2(fy - y, fx - x);
-        const r = 7.5 * k;
+        // seta pulsante: acha o jogador de relance
+        const r = 7.5 * k * (1 + 0.16 * Math.sin(this.clock * 7));
         ctx.save();
         ctx.translate(x, y);
         ctx.rotate(a);
@@ -256,11 +288,12 @@ export class Hud {
         ctx.stroke();
         ctx.restore();
       } else {
+        // rival: ponto de ~6 px na cor do carro, contorno preto
         ctx.beginPath();
-        ctx.arc(x, y, 3.8 * k, 0, Math.PI * 2);
+        ctx.arc(x, y, 3 * k, 0, Math.PI * 2);
         ctx.fillStyle = c.color;
         ctx.fill();
-        ctx.lineWidth = 1.5 * k;
+        ctx.lineWidth = 1.2 * k;
         ctx.strokeStyle = '#000';
         ctx.stroke();
       }
@@ -282,6 +315,10 @@ export class Hud {
       this.toastTimer -= dt;
       if (this.toastTimer <= 0) this.toast.classList.remove('show');
     }
+    if (this.noteTimer > 0) {
+      this.noteTimer -= dt;
+      if (this.noteTimer <= 0) this.note.classList.remove('show');
+    }
     if (this.centerTimer > 0) {
       this.centerTimer -= dt;
       if (this.centerTimer <= 0) this.center.classList.remove('show');
@@ -290,11 +327,21 @@ export class Hud {
 
   /** Mensagem grande no centro (contagem, "VOLTA FINAL", etc.). duration <= 0 = fica até trocar. */
   message(text: string, duration = 1.5, cls = ''): void {
-    this.center.textContent = text;
-    this.center.className = `rh-center show ${cls ? `m-${cls}` : ''}`;
-    // reinicia a animação de entrada
-    void this.center.offsetWidth;
+    const className = `rh-center show ${cls ? `m-${cls}` : ''}`;
+    const el = this.center;
+    const showing = this.centerTimer > 0;
     this.centerTimer = duration > 0 ? duration : Infinity;
+    // chamada a cada passo na contagem e no CONTRAMÃO: mesma mensagem na tela, só renova o tempo
+    // (antes reescrevia o texto e lia offsetWidth: layout síncrono 60–120 vezes por segundo)
+    if (showing && el.textContent === text && el.className === className) return;
+    if (el.textContent !== text) el.textContent = text;
+    if (el.className !== className) el.className = className;
+    // já estava visível (3 → 2 → 1): repete a entrada (a transição do CSS) com a Web Animations,
+    // sem forçar layout; entrando agora, a própria classe "show" dispara a transição
+    if (showing && typeof el.animate === 'function') {
+      this.centerAnim?.cancel();
+      this.centerAnim = el.animate(CENTER_POP, CENTER_POP_TIMING);
+    }
   }
 
   clearMessage(): void {
@@ -302,10 +349,53 @@ export class Hud {
     this.centerTimer = 0;
   }
 
-  showToast(text: string): void {
+  /**
+   * Aviso curto. Os de sistema (música, som, câmera, sala online) vão para o canto de baixo; os de
+   * corrida (acertos, dinheiro, voltas) numa faixa sob o bloco de posição — nenhum no centro, sobre
+   * a contagem ou o carro.
+   */
+  showToast(text: string, kind: 'race' | 'system' = SYSTEM_TOAST.test(text) ? 'system' : 'race'): void {
+    if (kind === 'system') {
+      this.note.innerHTML = withIcons(text);
+      this.note.classList.add('show');
+      this.noteTimer = 2.2;
+      return;
+    }
     this.toast.innerHTML = withIcons(text);
     this.toast.classList.add('show');
-    this.toastTimer = 1.6;
+    this.toastTimer = 1.8;
+  }
+
+  /**
+   * Indicador de ping (só no online): bolinha colorida com os ms. `undefined` esconde; `null` =
+   * ainda sem medida. Só mexe no DOM quando o texto ou a cor mudam.
+   */
+  setPing(ms: number | null | undefined, tone: 'good' | 'ok' | 'bad' | 'none' = 'none'): void {
+    if (ms === undefined) {
+      if (this.pingEl) this.pingEl.style.display = 'none';
+      return;
+    }
+    if (!this.pingEl) {
+      this.pingEl = document.createElement('div');
+      this.pingEl.className = 'rh-ping';
+      Object.assign(this.pingEl.style, {
+        display: 'flex', alignItems: 'center', gap: '5px', justifyContent: 'flex-end', marginTop: '4px',
+        font: '700 11px/1 "Trebuchet MS", sans-serif', color: '#e8e8e8', textShadow: '0 1px 2px #000', pointerEvents: 'none',
+      });
+      this.pingEl.innerHTML = '<i style="display:inline-block;width:8px;height:8px;border-radius:50%;box-shadow:0 0 4px currentColor"></i><span></span>';
+      (this.el.querySelector('.rh-right') ?? this.el).appendChild(this.pingEl);
+    }
+    this.pingEl.style.display = 'flex';
+    const text = ms === null ? '— ms' : `${Math.round(ms)} ms`;
+    const key = `${text}|${tone}`;
+    if (key === this.pingKey) return;
+    this.pingKey = key;
+    const dot = this.pingEl.firstElementChild as HTMLElement;
+    const color = { good: '#3cff4a', ok: '#ffd21a', bad: '#ff3a1a', none: '#888' }[tone];
+    dot.style.background = color;
+    dot.style.color = color;
+    this.pingEl.lastElementChild!.textContent = text;
+    this.pingEl.title = 'Ping com o host';
   }
 
   setMirror(visible: boolean, rect?: { x: number; y: number; w: number; h: number }): void {
@@ -320,6 +410,16 @@ export class Hud {
     if (v) this.mapK = 0;
   }
 }
+
+/** entrada da mensagem central: a mesma transição do .rh-center (hud.css), repetida pela Web Animations */
+const CENTER_POP: Keyframe[] = [
+  { opacity: 0, transform: 'scale(1.6)' },
+  { opacity: 1, transform: 'scale(1)' },
+];
+const CENTER_POP_TIMING: KeyframeAnimationOptions = { duration: 180, easing: 'cubic-bezier(0.2, 1.6, 0.4, 1)' };
+
+/** avisos de sistema reconhecidos pelo ícone inicial (música, som, câmera, sala online) */
+const SYSTEM_TOAST = /^\s*(♪|🔇|🔊|🎥|🌐)/u;
 
 function setText(el: HTMLElement, text: string): void {
   if (el.textContent !== text) el.textContent = text;

@@ -112,8 +112,9 @@ export function upgradeName(vehicleId: string, kind: UpgradeKind, level: number)
 
 /**
  * Classe de cada carro: quanto motor e blindagem rendem nele (um chassi melhor aguenta peças maiores).
- * Assim o máximo de cada carro supera o do anterior (Dirt Devil < Marauder ≈ Air Blade < Battle Trak
- * < Havac), como no original. Os preços das peças são os do original para todos.
+ * Assim a volta de cada carro no máximo supera a do anterior (Dirt Devil < Marauder < Air Blade <
+ * Battle Trak < Havac, ordem estrita), como no original. Os preços das peças são os do original para todos.
+ * Com tudo no máximo (volta média, CPU 0,9 sozinha): 17,0 · 16,5 · 16,3 · 16,0 · 15,8 s.
  */
 export interface CarPotential {
   /** quanto o motor rende em velocidade final */
@@ -128,9 +129,11 @@ export const CAR_POTENTIAL: Record<string, CarPotential> = {
   dirtdevil: { speed: 0.75, accel: 0.6, armor: 0.75 },
   marauder: { speed: 0.85, accel: 0.85, armor: 0.85 },
   // o Air Blade já sai de fábrica com o melhor arranque: o motor rende mais em final que em arranque
-  airblade: { speed: 0.8, accel: 0.3, armor: 0.8 },
-  battletrak: { speed: 1.1, accel: 1.1, armor: 1.1 },
-  havac: { speed: 1.3, accel: 1.3, armor: 1.3 },
+  // (e a final no máximo passa a do Marauder: antes ele ficava mais lento que o Marauder no máximo)
+  airblade: { speed: 0.95, accel: 0.3, armor: 0.9 },
+  // o tanque arranca devagar e rola pesado de fábrica: o chassi aguenta motor grande
+  battletrak: { speed: 1.25, accel: 1.15, armor: 1.2 },
+  havac: { speed: 1.15, accel: 1.1, armor: 1.3 },
 };
 
 function carClass(vehicleId: string): CarPotential {
@@ -222,11 +225,23 @@ export function tradeInValue(setup: CarSetup, _base?: VehicleSpec): number {
 }
 
 /**
- * Quanto custa trocar o carro atual por outro: preço do novo menos a revenda do atual.
- * Negativo = a revenda passa do preço e a diferença volta para o jogador.
+ * Quanto custa trocar o carro atual por outro: preço do novo menos a revenda do atual (no máximo
+ * 80 % do novo, ver TRADE_CAP): sempre paga ao menos 20 % do preço, o carro novo nunca sai de graça.
  */
 export function carSwapCost(setup: CarSetup, vehicleId: string): number {
-  return CAR_PRICES[vehicleId].price - tradeInValue(setup);
+  return CAR_PRICES[vehicleId].price - tradeInFor(setup, vehicleId);
+}
+
+/**
+ * A troca paga no máximo 80 % do preço do carro novo (antes o Battle Trak no máximo levava o Havac de
+ * graça e ainda devolvia $22 mil). Com 70 % o Dirt Devil do começo também perdia valor na troca pelo
+ * Marauder, o que atrasava as peças do jogador mediano na Chem VI.
+ */
+export const TRADE_CAP = 0.8;
+
+/** Revenda do carro atual na troca por `vehicleId`: tradeInValue limitado a TRADE_CAP do preço do novo. */
+export function tradeInFor(setup: CarSetup, vehicleId: string): number {
+  return Math.min(tradeInValue(setup), Math.round((CAR_PRICES[vehicleId].price * TRADE_CAP) / 500) * 500);
 }
 
 /**

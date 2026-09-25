@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { TRACKS, tracksOfPlanet } from '../data/tracks';
 import { leftX, leftZ } from './math';
-import { parsePieces, reverseWarpSide, surfaceEffect, Track, type ThemeId } from './track';
+import { parsePieces, RAMP_HEIGHT, reverseWarpSide, surfaceEffect, Track, type ThemeId } from './track';
 
 describe('pistas do original', () => {
   it('36 pistas, na quantidade de cada planeta do jogo de 1993', () => {
@@ -51,6 +51,21 @@ describe('pistas do original', () => {
         expect(Math.abs(tr.heightOn(a, 0) - tr.heightOn(b!, 0)), def.id).toBeLessThan(1e-6);
       }
     }
+  });
+
+  it('vão com queda (Gv): pouso um nível abaixo, borda da malha no nível da decolagem', () => {
+    const tr = new Track({ id: 'queda', name: 'queda', planet: 'x', theme: 'chem6', laps: 1, layout: 'F S U J Gv S R S S R S S S S S S R S S R' });
+    expect(tr.isClosed).toBe(true);
+    const j = tr.pieces[3];
+    const g = tr.pieces[4];
+    const land = tr.pieces[5];
+    expect(land.h0).toBeCloseTo(j.h0 - RAMP_HEIGHT);
+    expect(tr.heightOn(g, 0)).toBeCloseTo(land.h0);
+    const mid = tr.pointOn(g, g.length / 2);
+    expect(tr.query(mid.x, mid.z, g.index).void).toBe(true);
+    const run = tr.meshRuns(1).find((r) => r.some((p) => p.pieceIndex === 3))!;
+    expect(run[run.length - 1].h).toBeCloseTo(tr.heightOn(j, j.length));
+    expect(() => new Track({ ...tr.def, layout: 'F S Sv' })).toThrow();
   });
 
   it('vão não tem chão; fora dele a pista tem', () => {

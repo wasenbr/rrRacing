@@ -125,20 +125,23 @@ export const THEMES: Record<ThemeId, Theme> = {
     skirt: 0x22242c, walls: 'icerock', wallAccent: 0x1a3aa0,
     rail: ['#4a8aff', '#d8ecff'], railStyle: 'ice',
     props: [0x2a6a3a, 0x8ab8ff, 0xc8d8f0], glow: 0x60c8ff, flames: false,
-    sun: 0xffd6a8, sunIntensity: 4.4, ambientSky: 0x7a9ad8, ambientGround: 0x2a3a58, surface: 'metal',
+    // sol mais fraco e disco menos branco: na perseguição o sol baixo estourava em clarão (rodada 10)
+    sun: 0xe8bc90, sunIntensity: 3.4, ambientSky: 0x7a9ad8, ambientGround: 0x2a3a58, surface: 'metal',
     dust: '#c4ccd6', curb: '#dfe4e8',
     light: { sunDir: [62, 22, -30], fill: 0x40ffc8, fillIntensity: 1.3, hemi: 0.22 }, cells: 6,
   },
   inferno: {
-    skyHorizon: 0x6a1004, skyTop: 0x060102, fog: 0x220402, groundLevel: -8, ground: 0xb81800, groundStyle: 'lava',
+    // céu, névoa e ambiente mais escuros e quentes: o ambiente rosado refletia no piso metálico e
+    // deixava o cockpit lilás/lavado (rodada 10)
+    skyHorizon: 0x480a02, skyTop: 0x040101, fog: 0x160201, groundLevel: -8, ground: 0xb81800, groundStyle: 'lava',
     liquid: true, liquidEmissive: 0xff3a00,
     road: '#1a1414', roadGrid: '#7a1206', roadGlow: 0.25, roadPattern: 'scales', roadEdge: '#e02010', roadLine: '#e02010',
     skirt: 0x1a0606, walls: 'demonic', wallAccent: 0xff5a10,
     rail: ['#141416', '#e02010'], railStyle: 'spiked',
     props: [0x6a1a0a, 0x3a3a40, 0x8a8a90], glow: 0xff5010, flames: true,
-    sun: 0xffe8d8, sunIntensity: 2.8, ambientSky: 0xd8a8a0, ambientGround: 0x6a1004, surface: 'metal',
+    sun: 0xffcaa0, sunIntensity: 2.5, ambientSky: 0x8a4030, ambientGround: 0x6a1004, surface: 'metal',
     dust: '#3e302c', curb: '#cbbfae',
-    light: { sunDir: [52, 32, -46], fill: 0xff3a10, fillIntensity: 1.2, hemi: 0.24 }, cells: 10,
+    light: { sunDir: [52, 32, -46], fill: 0xff3a10, fillIntensity: 1.2, hemi: 0.2 }, cells: 10,
   },
 };
 

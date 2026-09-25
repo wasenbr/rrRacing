@@ -1,28 +1,43 @@
 import * as THREE from 'three';
-import { carFrame, chevronTread, cockpitRig, Kit, wheelTravel, type CarVisual } from './common';
+import { bodySink, carFrame, chevronTread, cockpitRig, Kit, Linkage, wheelDrop, wheelTravel, type CarVisual } from './common';
 
-const WR = 0.82; // pneus enormes, como no sprite do original
-const WX = 1.3; // meia-bitola (rodas por fora da bandeja larga)
-const WZ = 1.35; // meio entre-eixos
-const TRAY_Y = 1.02; // bandeja/chassi onde o casco assenta
-const BASE = TRAY_Y + 0.14; // fundo do casco (em cima da placa da bandeja)
-const TAIL = -2.1; // traseira do casco
-const NOSE = 2.3; // ponta do bico
+/*
+ * Medidas (modelo em metros "reais"; o jogo reduz com CAR_SCALE e VISUAL_SCALE). Alvo:
+ * referencias/modernizados/air-blade.png — pneus enormes de cravos em V, bandeja cinza larga POR
+ * CIMA dos pneus, casco vermelho de peça única em cunha que sobe numa barbatana de tubarão alta e
+ * curva, asas grossas saindo da base da barbatana, turbina cromada atrás.
+ */
+const TIRE_R = 0.9; // raio da carcaça do pneu
+const LUG = 0.16; // altura dos cravos em V
+const WR = TIRE_R * 0.985 + LUG - 0.045; // raio externo com os cravos (≈ 1,0: 20 % maior que antes)
+const TIRE_W = 0.72;
+const WX = 1.3; // meia-bitola
+const WZ = 1.5; // meio entre-eixos
+/** folga entre o topo do pneu e o fundo da bandeja */
+const ARCH_GAP = 0.11;
+/** posição da placa da bandeja (topo em PLATE_Y + 0,07; fundo em PLATE_Y − 0,17) */
+const PLATE_Y = 2 * WR + ARCH_GAP + 0.17;
+const TRAY_TOP = PLATE_Y + 0.07;
+const TRAY_HALF = 1.42; // a bandeja cobre ~3/4 da largura do pneu
+const TRAY_Z0 = -2.35;
+const TRAY_Z1 = 2.55;
+const BASE = TRAY_TOP + 0.01; // fundo do casco (dentro da "banheira" da bandeja)
+const NOSE = 2.45; // ponta do bico
+const TAILH = -2.2; // onde o casco termina e vira só barbatana
+const FIN_Z0 = -0.25; // raiz do bordo de ataque da barbatana (logo atrás da cabine)
+const FIN_TIP = -3.05; // ponta da barbatana, puxada para trás da cauda
+const FIN_H = 2.3; // altura da barbatana acima do dorso
 
 /* ------------------------------------------------------------------ */
 /* Loft: superfície lisa ligando anéis (seções) de mesmo tamanho        */
 /* ------------------------------------------------------------------ */
 
-/**
- * Liga anéis fechados de pontos numa malha lisa (indexada, normais suavizadas).
- * Anéis devem girar no sentido anti-horário visto da direção de avanço; `flip` inverte.
- */
-function loft(rings: THREE.Vector3[][], capStart = true, capEnd = true, flip = false): THREE.BufferGeometry {
+/** Liga anéis fechados de pontos numa malha lisa, com tampas; a orientação é corrigida pelo volume. */
+function loft(rings: THREE.Vector3[][], capStart = true, capEnd = true): THREE.BufferGeometry {
   const n = rings[0].length;
   const pos: number[] = [];
   const uv: number[] = [];
   const idx: number[] = [];
-  const tri = (a: number, b: number, c: number) => (flip ? idx.push(a, c, b) : idx.push(a, b, c));
   rings.forEach((r, i) =>
     r.forEach((p, j) => {
       pos.push(p.x, p.y, p.z);
@@ -33,10 +48,7 @@ function loft(rings: THREE.Vector3[][], capStart = true, capEnd = true, flip = f
     for (let j = 0; j < n; j++) {
       const a = i * n + j;
       const b = i * n + ((j + 1) % n);
-      const c = a + n;
-      const d = b + n;
-      tri(a, b, c);
-      tri(b, d, c);
+      idx.push(a, b, a + n, b, b + n, a + n);
     }
   const cap = (ri: number, end: boolean) => {
     const c = new THREE.Vector3();
@@ -48,12 +60,24 @@ function loft(rings: THREE.Vector3[][], capStart = true, capEnd = true, flip = f
     for (let j = 0; j < n; j++) {
       const a = ri * n + j;
       const b = ri * n + ((j + 1) % n);
-      if (end) tri(ci, a, b);
-      else tri(ci, b, a);
+      if (end) idx.push(ci, a, b);
+      else idx.push(ci, b, a);
     }
   };
   if (capStart) cap(0, false);
   if (capEnd) cap(rings.length - 1, true);
+  // volume com sinal: negativo = triângulos virados para dentro -> inverte todos
+  let vol = 0;
+  const A = new THREE.Vector3();
+  const B = new THREE.Vector3();
+  const C = new THREE.Vector3();
+  for (let t = 0; t < idx.length; t += 3) {
+    A.fromArray(pos, idx[t] * 3);
+    B.fromArray(pos, idx[t + 1] * 3);
+    C.fromArray(pos, idx[t + 2] * 3);
+    vol += A.dot(B.clone().cross(C));
+  }
+  if (vol < 0) for (let t = 0; t < idx.length; t += 3) [idx[t + 1], idx[t + 2]] = [idx[t + 2], idx[t + 1]];
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
@@ -66,191 +90,146 @@ const smooth = (t: number) => t * t * (3 - 2 * t);
 const clamp01 = (t: number) => Math.min(1, Math.max(0, t));
 
 /* ------------------------------------------------------------------ */
-/* Casco de peça única (tubarão/jato)                                   */
+/* Casco + barbatana: UMA peça (loft contínuo ao longo do carro)         */
 /* ------------------------------------------------------------------ */
 
-/** Meia-largura do casco em z: cheio no meio, afinando até o bico pontudo e até a cauda (rabo de tubarão). */
-function hullW(z: number): number {
+/** Altura do dorso acima de BASE: bico baixo em cunha, subindo até a cabine e reto até a cauda. */
+function dorsal(z: number): number {
+  if (z > 0.3) return 0.64 - 0.44 * Math.pow((z - 0.3) / (NOSE - 0.3), 1.35);
+  return 0.64 + 0.18 * smooth(clamp01((0.3 - z) / 1.2));
+}
+
+/** Meia-largura do casco: bico estreito arredondado, cheio no meio e atrás, fechando na cauda. */
+function hullHalf(z: number): number {
   let w: number;
-  if (z >= -0.2) {
-    const u = clamp01((z + 0.2) / (NOSE + 0.2));
-    w = 0.8 * Math.pow(1 - Math.pow(u, 2.5), 0.65);
-  } else {
-    const t = clamp01((z - TAIL) / (-0.2 - TAIL));
-    w = 0.8 * (0.3 + 0.7 * smooth(t));
-    const e = clamp01((z - TAIL) / 0.2); // fecha a cauda numa quilha estreita
-    w *= 0.4 + 0.6 * Math.sqrt(e * (2 - e));
+  if (z > -0.4) w = 0.8 - 0.5 * Math.pow((z + 0.4) / (NOSE + 0.4), 1.5);
+  else if (z > -1.45) w = 0.8;
+  else w = finHalf(TAILH) + (0.8 - finHalf(TAILH)) * smooth(clamp01((z - TAILH) / (-1.45 - TAILH)));
+  // ponta do bico boleada
+  if (z > NOSE - 0.22) w *= Math.sqrt(Math.max(0.02, 1 - ((z - (NOSE - 0.22)) / 0.22) ** 2));
+  return w;
+}
+
+/** Posição (0 na raiz, 1 na ponta) ao longo da barbatana. */
+const finU = (z: number) => clamp01((FIN_Z0 - z) / (FIN_Z0 - FIN_TIP));
+/** Bordo de ataque (altura absoluta): sobe firme e curva para trás, quase deitado na ponta. */
+function finLE(z: number): number {
+  const u = finU(z);
+  const root = BASE + dorsal(FIN_Z0);
+  return root + FIN_H * (1 - Math.pow(1 - u, 2.2)) * smooth(clamp01(u / 0.12));
+}
+/** Bordo de fuga atrás da cauda (altura absoluta): côncavo, em foice, até encontrar a ponta. */
+function finTE(z: number): number {
+  const v = clamp01((TAILH - z) / (TAILH - FIN_TIP));
+  const y0 = BASE + dorsal(TAILH);
+  return y0 + (finLE(FIN_TIP) - y0) * Math.pow(v, 0.55);
+}
+/** Meia-espessura da barbatana: grossa na base (continua o casco), lâmina na ponta. */
+const finHalf = (z: number) => 0.06 + 0.36 * Math.pow(1 - finU(z), 1.1);
+
+/** Seção do corpo em z: fundo, meia-largura, altura do casco e altura da barbatana acima dele. */
+function section(z: number): { yb: number; w: number; hh: number; fin: number; t: number } {
+  const t = finHalf(z);
+  if (z < TAILH) {
+    const yb = finTE(z);
+    return { yb, w: t, hh: 0, fin: Math.max(0, finLE(z) - yb), t };
   }
-  return Math.max(0.035, w);
+  // cauda: o fundo sobe até o dorso e o casco afina até a espessura da barbatana
+  const v = clamp01((-1.4 - z) / (-1.4 - TAILH));
+  const top = BASE + dorsal(z);
+  const yb = BASE + (top - BASE) * Math.pow(smooth(v), 1.3);
+  const fin = z < FIN_Z0 ? Math.max(0, finLE(z) - top) : 0;
+  return { yb, w: Math.max(t, hullHalf(z)), hh: top - yb, fin, t };
 }
 
-/** Altura do dorso em z: bico baixo, subindo até a cabine e virando a base da barbatana atrás. */
-function hullTop(z: number): number {
-  let y: number;
-  if (z > 0.9) y = 1.66 - (1.66 - 1.3) * Math.pow((z - 0.9) / (NOSE - 0.9), 1.3);
-  else y = 1.66 + 0.24 * smooth(clamp01((0.9 - z) / 1.8));
-  const t = clamp01((z - TAIL) / 0.3);
-  y = BASE + (y - BASE) * (0.7 + 0.3 * Math.sqrt(t * (2 - t)));
-  if (z > NOSE - 0.12) y = BASE + (y - BASE) * (0.55 + 0.45 * ((NOSE - z) / 0.12));
-  return y;
-}
-
-/** Fundo do casco: plano, levantando na cauda (rabo de tubarão). */
-const hullBot = (z: number) => BASE + 0.22 * Math.pow(clamp01((-1.2 - z) / (-1.2 - TAIL)), 1.6);
-
-function hullGeo(): THREE.BufferGeometry {
+function bodyGeo(): THREE.BufferGeometry {
   const rings: THREE.Vector3[][] = [];
-  const N = 30;
-  const S = 44;
+  const M = 37; // pontos do dorso (densos no meio, onde nasce a barbatana)
+  const K = 9; // pontos do fundo
+  const S = 90;
   for (let i = 0; i <= S; i++) {
-    const z = TAIL + (NOSE - TAIL) * (1 - Math.pow(1 - i / S, 1.15));
-    const w = hullW(z);
-    const yb = hullBot(z);
-    const h = hullTop(z) - yb;
+    const z = FIN_TIP + (NOSE - FIN_TIP) * (0.5 - 0.5 * Math.cos((Math.PI * i) / S));
+    const s = section(z);
     const ring: THREE.Vector3[] = [];
-    for (let j = 0; j < N; j++) {
-      const a = (j / N) * Math.PI * 2;
-      const c = Math.cos(a);
-      const s = Math.sin(a);
-      const x = w * Math.sign(c) * Math.pow(Math.abs(c), 0.7);
-      // lado de cima: superelipse (ombros cheios); de baixo: quase plano
-      const y = s >= 0 ? yb + h * Math.pow(s, 0.8) : yb - 0.05 * Math.pow(-s, 0.5);
-      ring.push(new THREE.Vector3(x, y, z));
+    for (let j = 0; j < M; j++) {
+      const q = 1 - (2 * j) / (M - 1); // 1 -> -1
+      const x = s.w * Math.sign(q) * Math.pow(Math.abs(q), 1.7);
+      const r = Math.abs(x) / s.w;
+      const shoulder = Math.pow(Math.max(0, 1 - Math.pow(r, 2.6)), 1 / 2.6);
+      const b = Math.abs(x) < s.t ? Math.pow(1 - (x / s.t) ** 2, 2) : 0;
+      ring.push(new THREE.Vector3(x, s.yb + s.hh * shoulder + s.fin * b, z));
+    }
+    for (let j = 1; j <= K; j++) {
+      const x = -s.w + (2 * s.w * j) / (K + 1);
+      ring.push(new THREE.Vector3(x, s.yb - 0.03 * (1 - (x / s.w) ** 2) * Math.min(1, s.hh / 0.3), z));
     }
     rings.push(ring);
   }
   return loft(rings);
 }
 
-/* ------------------------------------------------------------------ */
-/* Barbatana em foice e asas trapezoidais varridas                      */
-/* ------------------------------------------------------------------ */
-
-const FIN_Y0 = 1.45; // a raiz fica dentro do casco: a barbatana nasce dele
-const FIN_H = 2.3;
-/** bordo de ataque: convexo, subindo e curvando cada vez mais para trás */
-const finLE = (t: number) => -0.05 - 0.8 * t - 1.6 * t * t;
-/** bordo de fuga: côncavo (foice), da cauda até a ponta */
-const finTE = (t: number) => -2.02 - 0.43 * t + 1.0 * t * Math.pow(1 - t, 1.3);
-/**
- * meia-espessura: na raiz acompanha a largura do casco (continua com ele) e só vira lâmina bem acima
- * — base larga fundida ao casco, perfil contínuo de tubarão (não um "leme" espetado)
- */
-const finTh = (t: number, z: number) => {
-  const blade = 0.05 + 0.22 * Math.pow(1 - t, 1.05);
-  const k = smooth(clamp01(t / 0.55));
-  return hullW(z) * 0.9 * (1 - k) + blade * k;
-};
-
-/** onde a lâmina para de subir e começa a ponta arredondada (barbatana de tubarão, não chifre) */
-const FIN_T1 = 0.86;
-const FIN_CAP = 0.2;
-
-function finGeo(): THREE.BufferGeometry {
-  const rings: THREE.Vector3[][] = [];
-  const N = 26;
-  const S = 26;
-  const C = 8; // anéis da ponta arredondada
-  for (let i = 0; i <= S + C; i++) {
-    // até FIN_T1: a lâmina; depois, o último perfil encolhe num arco (ponta boleada, puxada para trás)
-    const t = i <= S ? FIN_T1 * (1 - Math.pow(1 - i / S, 1.3)) : FIN_T1;
-    const c01 = i <= S ? 0 : (i - S) / C;
-    const shrink = Math.sqrt(Math.max(0, 1 - c01 * c01));
-    const y = FIN_Y0 + FIN_H * t + FIN_CAP * Math.sin((c01 * Math.PI) / 2);
-    const le = finLE(t);
-    const te = finTE(t);
-    const mid = (le + te) / 2 - 0.12 * c01;
-    const hc = Math.max(0.02, ((le - te) / 2) * Math.max(0.04, shrink));
-    const ring: THREE.Vector3[] = [];
-    for (let j = 0; j < N; j++) {
-      const a = (j / N) * Math.PI * 2;
-      const c = Math.cos(a);
-      const z = mid + hc * c;
-      // perfil de aerofólio: mais grosso perto do bordo de ataque
-      const x = finTh(t, z) * Math.max(0.04, shrink) * Math.sin(a) * (0.72 + 0.28 * c);
-      ring.push(new THREE.Vector3(x, y, z));
-    }
-    rings.push(ring);
-  }
-  return loft(rings);
+/** Meia-espessura da barbatana na altura y, em z (para assentar as luzes na superfície). */
+function finSurfaceX(z: number, y: number): number {
+  const s = section(z);
+  const top = s.yb + s.hh;
+  if (s.fin <= 0 || y <= top) return s.w;
+  const k = clamp01((y - top) / s.fin);
+  return s.t * Math.sqrt(Math.max(0, 1 - Math.sqrt(k)));
 }
 
-/** altura da raiz das asas (no ombro do casco, saindo da base da barbatana) */
-const WING_Y = 1.76;
-const WING_SPAN = 1.5;
-const WING_X0 = 0.22;
-const wingLE = (s: number) => -0.35 - 1.35 * s;
-const wingTE = (s: number) => -2.02 - 0.28 * s;
-const wingY = (s: number) => WING_Y + 0.2 * s;
+/* ------------------------------------------------------------------ */
+/* Asas grossas saindo da base da barbatana                             */
+/* ------------------------------------------------------------------ */
 
-/** Asa trapezoidal larga, varrida para trás, corda afinando para a ponta (side = ±1). */
+const WING_Y = BASE + dorsal(-1.6) + 0.14;
+const WING_X0 = 0.08; // raiz enterrada na base da barbatana
+const WING_SPAN = 1.95; // pontas bem para fora da bandeja, como no modelo de referência
+const wingLE = (s: number) => -0.75 - 1.25 * s;
+const wingTE = (s: number) => -2.15 - 0.4 * s;
+const wingY = (s: number) => WING_Y + 0.5 * s * (0.6 + 0.4 * s);
+/** meia-espessura: grossa na raiz, afinando até a ponta */
+const wingTh = (s: number) => 0.11 + 0.2 * Math.pow(1 - s, 1.3);
+
 function wingGeo(side: number): THREE.BufferGeometry {
   const rings: THREE.Vector3[][] = [];
-  const N = 18;
+  const N = 20;
   const S = 16;
   for (let i = 0; i <= S; i++) {
     const s = i / S;
     const x = side * (WING_X0 + WING_SPAN * s);
-    const y = wingY(s);
-    const le = wingLE(s);
-    const te = wingTE(s);
-    // ponta cortada levemente arredondada: fecha nos últimos 6%
-    const k = s > 0.94 ? Math.sqrt(Math.max(0, 1 - Math.pow((s - 0.94) / 0.06, 2))) : 1;
-    const mid = (le + te) / 2;
-    const hc = ((le - te) / 2) * Math.max(0.6, k);
-    // grossa na raiz (nasce do ombro do casco) afinando até a ponta
-    const th = (0.07 + 0.15 * Math.pow(1 - s, 2.2)) * Math.max(0.15, k);
+    const k = s > 0.84 ? Math.sqrt(Math.max(0, 1 - ((s - 0.84) / 0.16) ** 2)) : 1; // ponta boleada
+    const mid = (wingLE(s) + wingTE(s)) / 2;
+    const hc = ((wingLE(s) - wingTE(s)) / 2) * Math.max(0.55, k);
+    const th = wingTh(s) * Math.max(0.12, k);
     const ring: THREE.Vector3[] = [];
     for (let j = 0; j < N; j++) {
       const a = (j / N) * Math.PI * 2;
       const c = Math.cos(a);
-      ring.push(new THREE.Vector3(x, y + th * Math.sin(a) * (0.7 + 0.3 * c), mid - hc * c));
+      // aerofólio: mais grosso perto do bordo de ataque
+      ring.push(new THREE.Vector3(x, wingY(s) + th * Math.sin(a) * (0.72 + 0.28 * c), mid + hc * c));
     }
     rings.push(ring);
   }
-  return loft(rings, true, true, side < 0);
+  return loft(rings);
 }
 
 /* ------------------------------------------------------------------ */
-/* Bandeja do chassi                                                    */
+/* Bandeja                                                              */
 /* ------------------------------------------------------------------ */
 
-/**
- * Contorno da bandeja: bem mais larga que o casco (a aba cinza aparece dos dois lados, como no
- * modelo de referência), cantos arredondados, cabendo entre as rodas.
- */
-/**
- * Meia-largura máxima da bandeja em z: recorte (caixa de roda) em volta de cada pneu para o pneu,
- * inclusive esterçado (STEER), não entrar na placa. `REACH` é quanto o pneu avança para dentro do
- * centro da roda, na altura da bandeja, a cada 0,1 de distância em z do eixo.
- */
-const REACH = [0.35, 0.39, 0.44, 0.48, 0.53, 0.57, 0.62, 0.59, 0.45, 0.19, 0];
-function trayNotch(z: number): number {
-  let w = 9;
-  for (const wz of [WZ, -WZ]) {
-    const d = Math.abs(z - wz) * 10;
-    if (d >= REACH.length - 1) continue;
-    const i = Math.floor(d);
-    const reach = REACH[i] + (REACH[i + 1] - REACH[i]) * (d - i);
-    w = Math.min(w, WX - reach - 0.14); // 0,09 do chanfro da placa + folga
-  }
-  return w;
-}
-
+/** Contorno da bandeja: retângulo de cantos bem arredondados, um pouco mais estreito na frente. */
 function trayOutline(margin: number, path: THREE.Path): THREE.Path {
-  const pts: THREE.Vector2[] = [];
-  const S = 90;
-  const z0 = TAIL - 0.06 - margin; // quase rente à cauda: pouca bandeja à mostra por trás
-  const z1 = NOSE + 0.04 + margin;
+  const z0 = TRAY_Z0 - margin;
+  const z1 = TRAY_Z1 + margin;
+  const S = 80;
   const half = (z: number) => {
-    // aba larga dos lados na frente e no meio; atrás estreita junto com a cauda
-    const extra = 0.2 - 0.14 * clamp01((-0.9 - z) / 1.1);
-    const w = Math.min(0.97, trayNotch(z), Math.max(hullW(Math.min(z, NOSE - 0.45)), 0.46 - 0.12 * clamp01((-1.2 - z) / 0.9)) + extra) + margin;
-    const r = 0.45 + margin;
+    const w = TRAY_HALF - 0.1 * smooth(clamp01((z - 1.2) / 1.3)) + margin;
+    const r = 0.55 + margin;
     const e0 = clamp01((z - z0) / r);
     const e1 = clamp01((z1 - z) / r);
-    return w * (0.12 + 0.88 * Math.sqrt(e0 * (2 - e0)) * Math.sqrt(e1 * (2 - e1)));
+    return w * (0.3 + 0.7 * Math.sqrt(e0 * (2 - e0)) * Math.sqrt(e1 * (2 - e1)));
   };
+  const pts: THREE.Vector2[] = [];
   for (let i = 0; i <= S; i++) {
     const z = z0 + ((z1 - z0) * i) / S;
     pts.push(new THREE.Vector2(half(z), z));
@@ -272,11 +251,10 @@ function trayGeos(): { plate: THREE.BufferGeometry; rim: THREE.BufferGeometry } 
     g.computeVertexNormals();
     return g;
   };
-  // placa grossa de bordas boleadas (arredondada por baixo)
-  const plate = flat(trayOutline(0, new THREE.Shape()) as THREE.Shape, 0.1, 0.09);
+  const plate = flat(trayOutline(0, new THREE.Shape()) as THREE.Shape, 0.1, 0.07);
   // moldura elevada em volta (a "banheira" onde o casco assenta)
   const ring = trayOutline(0.02, new THREE.Shape()) as THREE.Shape;
-  ring.holes.push(trayOutline(-0.12, new THREE.Path()));
+  ring.holes.push(trayOutline(-0.14, new THREE.Path()));
   const rim = flat(ring, 0.06, 0.04);
   return { plate, rim };
 }
@@ -285,19 +263,19 @@ function trayGeos(): { plate: THREE.BufferGeometry; rim: THREE.BufferGeometry } 
 /* Rodas                                                                */
 /* ------------------------------------------------------------------ */
 
-/** Roda grande: pneu largo cinza-grafite com cravos em V e aro cromado fundo. */
+/** Roda enorme: pneu cinza-grafite com cravos em V altos e aro cromado fundo. */
 function bigWheel(k: Kit, tireMat: THREE.Material, rimMat: THREE.Material, x: number, z: number): { pivot: THREE.Group; spin: THREE.Group } {
-  const r = WR;
-  const w = 0.6;
+  const r = TIRE_R;
+  const w = TIRE_W;
   const hw = w / 2;
   const pivot = new THREE.Group();
-  pivot.position.set(x, r, z);
+  pivot.position.set(x, WR, z);
   const spin = new THREE.Group();
   pivot.add(spin);
   const tire = new THREE.Mesh(
     new THREE.LatheGeometry(
       [
-        new THREE.Vector2(r * 0.58, -hw * 0.92),
+        new THREE.Vector2(r * 0.6, -hw * 0.92),
         new THREE.Vector2(r * 0.8, -hw),
         new THREE.Vector2(r * 0.92, -hw * 0.9),
         new THREE.Vector2(r * 0.965, -hw * 0.55),
@@ -305,23 +283,23 @@ function bigWheel(k: Kit, tireMat: THREE.Material, rimMat: THREE.Material, x: nu
         new THREE.Vector2(r * 0.965, hw * 0.55),
         new THREE.Vector2(r * 0.92, hw * 0.9),
         new THREE.Vector2(r * 0.8, hw),
-        new THREE.Vector2(r * 0.58, hw * 0.92),
+        new THREE.Vector2(r * 0.6, hw * 0.92),
       ],
-      26,
+      28,
     ).rotateZ(Math.PI / 2),
     tireMat,
   );
   tire.castShadow = k.shadows;
   spin.add(tire);
-  spin.add(new THREE.Mesh(chevronTread(r * 0.97, w), tireMat));
-  // aro cromado: miolo cheio, anel de borda e prato rebaixado
+  // cravos em V altos e espaçados (16 na volta), bem marcados como no modelo de referência
+  spin.add(new THREE.Mesh(chevronTread(r * 0.97, w, LUG, 16), tireMat));
   const side = Math.sign(x) || 1;
-  spin.add(new THREE.Mesh(new THREE.CylinderGeometry(r * 0.59, r * 0.59, w * 0.82, 22).rotateZ(Math.PI / 2), rimMat));
-  const lip = new THREE.Mesh(new THREE.TorusGeometry(r * 0.55, 0.045, 8, 24).rotateY(Math.PI / 2), rimMat);
+  spin.add(new THREE.Mesh(new THREE.CylinderGeometry(r * 0.6, r * 0.6, w * 0.82, 22).rotateZ(Math.PI / 2), rimMat));
+  const lip = new THREE.Mesh(new THREE.TorusGeometry(r * 0.56, 0.05, 8, 24).rotateY(Math.PI / 2), rimMat);
   lip.position.x = side * hw * 0.82;
   spin.add(lip);
-  const dish = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.46, r * 0.46, 0.04, 20).rotateZ(Math.PI / 2), k.steel);
-  dish.position.x = side * (hw * 0.82 - 0.0);
+  const dish = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.47, r * 0.47, 0.04, 20).rotateZ(Math.PI / 2), k.steel);
+  dish.position.x = side * hw * 0.8;
   spin.add(dish);
   const hub = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.14, r * 0.18, 0.1, 12).rotateZ(Math.PI / 2), k.chrome);
   hub.position.x = side * (hw * 0.82 + 0.03);
@@ -332,96 +310,90 @@ function bigWheel(k: Kit, tireMat: THREE.Material, rimMat: THREE.Material, x: nu
     b.position.set(side * (hw * 0.82 + 0.03), Math.cos(a) * r * 0.27, Math.sin(a) * r * 0.27);
     spin.add(b);
   }
-  k.body.add(pivot);
   return { pivot, spin };
 }
 
 /**
- * Air Blade: o "tubarão" do original, no acabamento de brinquedo premium — casco liso de peça
- * única com bico baixo e pontudo, barbatana dorsal curva integrada, asas largas varridas saindo
- * dela, cabine aberta oval, bandeja cinza em volta e quatro pneus enormes.
- * Rogue Missiles nas laterais do bico, Bear Claw Mines sob a cauda, turbina cromada
- * do Lightning Nitros atrás.
+ * Air Blade: o "tubarão" do original no acabamento de brinquedo premium do modelo de referência —
+ * casco vermelho de peça única que sai do bico em cunha e sobe, sem emenda, numa barbatana alta
+ * curvada para trás; asas grossas nascendo da base da barbatana; bandeja cinza larga por cima de
+ * quatro pneus enormes de cravos em V. Rogue Missiles em casulos grandes no topo das asas (ogiva
+ * vermelha), Bear Claw Mines sob a traseira, turbina cromada do Lightning Nitros atrás.
  */
 export function createAirBlade(color: number, shadows: boolean): CarVisual {
   const { root, body, ext, chassis } = carFrame();
   const k = new Kit(color, shadows, ext);
   const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
-  const trayMat = new THREE.MeshStandardMaterial({ color: 0x80858c, metalness: 0.4, roughness: 0.4 });
+  const trayMat = new THREE.MeshStandardMaterial({ color: 0x7c8188, metalness: 0.45, roughness: 0.38 });
   const tireMat = new THREE.MeshStandardMaterial({ color: 0x55585e, roughness: 0.8 });
   const rimMat = new THREE.MeshStandardMaterial({ color: 0xeef2f6, metalness: 0.55, roughness: 0.18, envMapIntensity: 1.8 });
   const cyan = new THREE.MeshStandardMaterial({ color: 0x40f0ff, emissive: 0x20e0ff, emissiveIntensity: 3 });
+  const warhead = new THREE.MeshStandardMaterial({ color: 0xd81e1e, emissive: 0x500000, roughness: 0.3, metalness: 0.25 });
 
-  // bandeja do chassi cinza: placa grossa arredondada, bem mais larga que o casco, com moldura elevada
+  // bandeja cinza: placa grossa arredondada por cima dos pneus, com moldura elevada
   const tray = trayGeos();
-  k.add(tray.plate, trayMat, 0, TRAY_Y + 0.06, 0);
-  k.add(tray.rim, trayMat, 0, TRAY_Y + 0.26, 0);
+  k.add(tray.plate, trayMat, 0, PLATE_Y, 0);
+  k.add(tray.rim, trayMat, 0, PLATE_Y + 0.14, 0);
+  // chassi escuro sob a bandeja (liga os braços da suspensão)
+  k.add(new THREE.BoxGeometry(0.9, 0.5, 3.6), k.gunMetal, 0, PLATE_Y - 0.4, 0);
+  k.add(new THREE.BoxGeometry(1.2, 0.12, 0.5), k.steel, 0, PLATE_Y - 0.22, WZ);
+  k.add(new THREE.BoxGeometry(1.2, 0.12, 0.5), k.steel, 0, PLATE_Y - 0.22, -WZ);
 
-  // casco liso de peça única
-  const hull = k.add(hullGeo(), k.paint, 0, 0, 0);
-
-  // barbatana em foice contínua com o casco e asas trapezoidais varridas saindo da base dela
-  k.add(finGeo(), k.paint, 0, 0, 0);
+  // casco + barbatana: uma peça só
+  const hull = k.add(bodyGeo(), k.paint, 0, 0, 0);
   const wings = [-1, 1].map((sx) => k.add(wingGeo(sx), k.paint, 0, 0, 0));
 
-  // luz ciano na barbatana, acima da raiz das asas (aro cromado + lente)
-  const EYE_Y = WING_Y + 0.42;
-  const eyeT = (EYE_Y - FIN_Y0) / FIN_H;
-  const eyeZ = finLE(eyeT) - 0.2;
-  const mid = (finLE(eyeT) + finTE(eyeT)) / 2;
-  const hc = (finLE(eyeT) - finTE(eyeT)) / 2;
-  const u = (eyeZ - mid) / hc;
-  const eyeX = finTh(eyeT, eyeZ) * Math.sqrt(1 - u * u) * (0.72 + 0.28 * u);
+  // luz ciano nos dois lados da barbatana (aro cromado + lente), acima das asas
+  const EYE_Y = WING_Y + 0.55;
+  let eyeZ = FIN_Z0;
+  while (eyeZ > FIN_TIP && finLE(eyeZ) < EYE_Y + 0.12) eyeZ -= 0.01;
+  eyeZ -= 0.22;
+  const eyeX = finSurfaceX(eyeZ, EYE_Y);
   for (const sx of [-1, 1]) {
-    k.add(new THREE.TorusGeometry(0.09, 0.035, 8, 16).rotateY(Math.PI / 2), k.chrome, sx * (eyeX + 0.01), EYE_Y, eyeZ);
-    const lens = k.add(new THREE.SphereGeometry(0.075, 12, 8), cyan, sx * eyeX, EYE_Y, eyeZ);
-    lens.scale.set(0.5, 1, 1);
+    k.add(new THREE.TorusGeometry(0.1, 0.035, 8, 16).rotateY(Math.PI / 2), k.chrome, sx * (eyeX + 0.01), EYE_Y, eyeZ);
+    k.add(new THREE.SphereGeometry(0.08, 12, 8), cyan, sx * eyeX, EYE_Y, eyeZ).scale.set(0.5, 1, 1);
   }
 
   // cabine aberta: abertura oval escura com borda cinza
-  const pitZ = 0.45;
-  const pitY = hullTop(pitZ);
-  const slope = Math.atan2(hullTop(pitZ - 0.4) - hullTop(pitZ + 0.4), 0.8);
+  const pitZ = 0.35;
+  const pitY = BASE + dorsal(pitZ);
+  const slope = Math.atan2(dorsal(pitZ - 0.4) - dorsal(pitZ + 0.4), 0.8);
   const pit = k.add(new THREE.SphereGeometry(1, 22, 12), k.dash, 0, pitY - 0.02, pitZ);
-  pit.scale.set(0.3, 0.08, 0.48);
+  pit.scale.set(0.32, 0.08, 0.52);
   pit.rotation.x = slope;
   const lip = k.add(new THREE.TorusGeometry(1, 0.055, 8, 32).rotateX(Math.PI / 2), trayMat, 0, pitY + 0.01, pitZ);
-  lip.scale.set(0.32, 1, 0.5);
+  lip.scale.set(0.34, 1, 0.54);
   lip.rotation.x = slope;
-  const seat = k.add(new THREE.SphereGeometry(0.14, 12, 8), k.trim, 0, pitY + 0.04, pitZ - 0.28);
-  seat.scale.set(1, 0.8, 0.8);
+  k.add(new THREE.SphereGeometry(0.15, 12, 8), k.trim, 0, pitY + 0.04, pitZ - 0.3).scale.set(1, 0.8, 0.8);
 
   // bico: luz ciano embutida na ponta
-  const tipZ = NOSE - 0.2;
-  const noseLight = k.add(new THREE.SphereGeometry(1, 14, 10), cyan, 0, hullTop(tipZ) - 0.02, tipZ);
-  noseLight.scale.set(0.08, 0.05, 0.2);
-  noseLight.rotation.x = 0.15;
+  const tipZ = NOSE - 0.25;
+  const noseLight = k.add(new THREE.SphereGeometry(1, 14, 10), cyan, 0, BASE + dorsal(tipZ) - 0.02, tipZ);
+  noseLight.scale.set(0.1, 0.05, 0.2);
+  noseLight.rotation.x = 0.2;
 
-  // Rogue Missiles: casulos cromados pendurados sob as asas (asa limpa por cima, como no modelo
-  // de referência), 2 mísseis cada
-  const PR = 0.17;
-  const podGeo = new THREE.CapsuleGeometry(PR, 0.78, 4, 14).rotateX(Math.PI / 2);
-  const missileGeo = new THREE.CylinderGeometry(0.07, 0.07, 0.36, 10).rotateX(Math.PI / 2);
-  const mouthGeo = new THREE.TorusGeometry(0.075, 0.022, 6, 14);
-  const tipGeo = new THREE.ConeGeometry(0.07, 0.2, 10).rotateX(Math.PI / 2);
-  const bandGeo = new THREE.CylinderGeometry(PR + 0.006, PR + 0.006, 0.1, 14).rotateX(Math.PI / 2);
-  const podS = (0.72 - WING_X0) / WING_SPAN;
+  // Rogue Missiles: casulos grandes NO TOPO das asas (bem visíveis de cima), ogiva vermelha na frente
+  const PR = 0.14;
+  const PL = 0.7;
+  const podGeo = new THREE.CylinderGeometry(PR, PR, PL, 16).rotateX(Math.PI / 2);
+  const noseGeo = new THREE.ConeGeometry(PR, 0.3, 16).rotateX(Math.PI / 2);
+  const capGeo = new THREE.CylinderGeometry(PR * 0.8, PR, 0.06, 16).rotateX(Math.PI / 2);
+  const bandGeo = new THREE.CylinderGeometry(PR + 0.008, PR + 0.008, 0.08, 16).rotateX(Math.PI / 2);
+  const podS = 0.47;
   for (const sx of [-1, 1]) {
-    const px = sx * 0.72; // entre o casco e o pneu traseiro
-    const py = wingY(podS) - 0.07 - PR - 0.04;
-    const pz = -1.45;
+    const px = sx * (WING_X0 + WING_SPAN * podS);
+    const py = wingY(podS) + wingTh(podS) * 0.9 + PR - 0.02;
+    const pz = wingLE(podS) - PL / 2 + 0.05;
     k.add(podGeo, k.chrome, px, py, pz);
-    k.add(bandGeo, k.warn, px, py, pz - 0.2);
-    k.add(new THREE.BoxGeometry(0.08, 0.1, 0.5), k.gunMetal, px, py + PR, pz);
-    for (const dx of [-0.09, 0.09]) {
-      k.add(mouthGeo, k.muzzle, px + dx, py + 0.02, pz + 0.58);
-      k.add(missileGeo, rimMat, px + dx, py + 0.02, pz + 0.6);
-      k.add(tipGeo, k.tail, px + dx, py + 0.02, pz + 0.86);
-    }
+    k.add(bandGeo, k.warn, px, py, pz - 0.12);
+    k.add(noseGeo, warhead, px, py, pz + PL / 2 + 0.15);
+    k.add(capGeo, k.gunMetal, px, py, pz - PL / 2 - 0.03);
+    k.add(new THREE.BoxGeometry(0.08, 0.1, PL * 0.8), k.gunMetal, px, py - PR, pz); // pilone
   }
 
-  // turbina cromada do nitro sob a quilha da cauda, grande e bem à mostra atrás (modelo de
-  // referência); bocal escuro, sem "olho" aceso
+  // turbina cromada do nitro atrás, sob a raiz da barbatana (bocal escuro)
+  const turbY = BASE + 0.3;
+  const turbZ = TRAY_Z0 - 0.05;
   const bell = new THREE.LatheGeometry(
     [
       new THREE.Vector2(0.13, 0.3),
@@ -435,48 +407,60 @@ export function createAirBlade(color: number, shadows: boolean): CarVisual {
     20,
   )
     .rotateX(Math.PI / 2)
-    .scale(1.45, 1.45, 1.3);
-  k.add(bell, k.chrome, 0, 1.4, TAIL - 0.05);
-  k.add(new THREE.CircleGeometry(0.22, 18).rotateY(Math.PI), k.dash, 0, 1.4, TAIL - 0.16);
-  // Bear Claw Mines sob a cauda
-  k.bearClawDropper(0, TRAY_Y + 0.0, -2.0);
+    .scale(1.5, 1.5, 1.5);
+  k.add(bell, k.chrome, 0, turbY, turbZ);
+  k.add(new THREE.CircleGeometry(0.24, 18).rotateY(Math.PI), k.dash, 0, turbY, turbZ - 0.2);
+  // Bear Claw Mines sob a traseira da bandeja
+  k.bearClawDropper(0, PLATE_Y - 0.36, TRAY_Z0 + 0.3);
 
-  // suspensão: braços cromados da bandeja até as rodas, eixo e amortecedor amarelo
+  // eixos e mangas no grupo das rodas (sobem e descem com elas)
+  const hubX = WX - TIRE_W / 2 - 0.06;
+  for (const sz of [-1, 1]) {
+    const z = sz * WZ;
+    k.tube(V(-hubX, WR, z), V(hubX, WR, z), 0.08, k.gunMetal, chassis);
+    for (const sx of [-1, 1]) k.add(new THREE.CylinderGeometry(0.13, 0.13, 0.16, 12).rotateZ(Math.PI / 2), k.steel, sx * hubX, WR, z, chassis);
+  }
+  // suspensão: braços e amortecedores recalculados a cada quadro entre o chassi e o cubo
+  const links = new Linkage(root, body, chassis, shadows);
+  const yellow = k.warn;
   for (const sz of [-1, 1]) {
     const z = sz * WZ;
     for (const sx of [-1, 1]) {
-      k.tube(V(sx * 0.55, TRAY_Y + 0.02, z + 0.25), V(sx * (WX - 0.25), WR, z), 0.06, k.chrome);
-      k.tube(V(sx * 0.55, TRAY_Y + 0.02, z - 0.25), V(sx * (WX - 0.25), WR, z), 0.05, k.steel);
-      k.tube(V(sx * 0.45, TRAY_Y + 0.08, z), V(sx * (WX - 0.3), WR + 0.1, z), 0.07, k.warn);
+      const hx = sx * (hubX - 0.04);
+      links.add(V(sx * 0.42, PLATE_Y - 0.22, z + 0.32), V(hx, WR + 0.1, z), 0.055, k.chrome);
+      links.add(V(sx * 0.42, PLATE_Y - 0.22, z - 0.32), V(hx, WR + 0.1, z), 0.055, k.chrome);
+      links.add(V(sx * 0.42, PLATE_Y - 0.62, z + 0.3), V(hx, WR - 0.1, z), 0.05, k.steel);
+      links.add(V(sx * 0.42, PLATE_Y - 0.62, z - 0.3), V(hx, WR - 0.1, z), 0.05, k.steel);
+      links.add(V(sx * 0.62, PLATE_Y - 0.18, z - sz * 0.42), V(sx * (hubX - 0.1), WR + 0.14, z - sz * 0.12), 0.075, yellow);
     }
-    k.tube(V(-0.6, WR, z), V(0.6, WR, z), 0.08, k.gunMetal, chassis);
   }
 
-  // número nas asas (lê de cima), no bico e nas laterais do casco
-  for (const sx of [-1, 1]) k.decalOn(wings[sx < 0 ? 0 : 1], 0.46, 0.46, sx * 1.45, -1.86, 'number');
-  k.decalOn(hull, 0.34, 0.5, 0, 1.45, 'stripes');
-  for (const sx of [-1, 1]) k.decalSide(hull, 0.5, 0.36, sx, 1.45, -0.55, 'number');
-  const flames = k.flames([[0, 1.4, TAIL - 1.0]], 1.1);
+  // número nas asas (lê de cima), faixas no bico e número nas laterais do casco
+  for (const sx of [-1, 1]) k.decalOn(wings[sx < 0 ? 0 : 1], 0.44, 0.44, sx * (WING_X0 + WING_SPAN * 0.78), (wingLE(0.78) + wingTE(0.78)) / 2, 'number');
+  k.decalOn(hull, 0.34, 0.6, 0, 1.55, 'stripes');
+  for (const sx of [-1, 1]) k.decalSide(hull, 0.5, 0.34, sx, BASE + 0.3, -0.75, 'number');
+  const flames = k.flames([[0, turbY, turbZ - 1.0]], 1.2);
 
   const wheels = [-1, 1].flatMap((sx) => [-1, 1].map((sz) => ({ sz, ...bigWheel(k, tireMat, rimMat, sx * WX, sz * WZ) })));
   // rodas e eixos no chassi: a carroceria balança por cima deles
   for (const w of wheels) chassis.add(w.pivot);
-  const travel = wheelTravel(0.22);
+  const travel = wheelTravel(0.26);
 
-  const eye = new THREE.Vector3(0, 1.9, 0.2);
-  const { cockpit, steeringWheel } = cockpitRig(k, { eye, halfWidth: 0.6, weapon: 'missiles' }, body);
+  const eye = new THREE.Vector3(0, BASE + 1.0, 0.25);
+  const { cockpit, steeringWheel } = cockpitRig(k, { eye, halfWidth: 0.62, weapon: 'missiles' }, body);
   k.merge();
 
   return {
     root,
     body,
-    cabin: [ext, chassis],
+    cabin: [ext, chassis, links.group],
     cockpit,
     steeringWheel,
     flames,
     eye,
     animate(a) {
-      chassis.position.y = travel(a);
+      // a bandeja fica sempre acima do pneu: se a carroceria afundar mais que a folga, as rodas descem junto
+      chassis.position.y = wheelDrop(travel(a), bodySink(body, WX, WZ), ARCH_GAP - 0.02);
       for (const w of wheels) {
         w.spin.rotation.x = a.spin;
         if (w.sz > 0) w.pivot.rotation.y = -a.steer * 0.42;

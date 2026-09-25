@@ -116,8 +116,9 @@ export function computeAiInput(world: World, r: Racer, dt: number): ControlInput
     const T = track.totalLength;
     const lapFrac = clamp((raceDistance(world, r) - (r.progress.lap - 1) * T) / T, 0, 1);
     const slack = r.progress.lap >= world.laps ? 0.35 : 0.1;
-    const canUse = (charges: number, max: number) => max - charges < Math.ceil(max * (lapFrac * 0.9 + slack));
-    const frontOk = canUse(r.frontCharges, r.spec.frontCharges);
+    const canUse = (charges: number, max: number, extra = 0) => max - charges < Math.ceil(max * (lapFrac * 0.9 + slack + extra));
+    // o plasma tem cargas de sobra (5, e recarrega na volta): gasta sem economizar tanto
+    const frontOk = canUse(r.frontCharges, r.spec.frontCharges, r.spec.front === 'laser' ? 0.3 : 0);
     const rearOk = canUse(r.rearCharges, r.spec.rearCharges);
     let lane = ai.lane;
     st.wantFire = false;
@@ -126,7 +127,7 @@ export function computeAiInput(world: World, r: Racer, dt: number): ControlInput
     let blocked = false;
     let hop = false;
     const front = r.spec.front;
-    const range = front === 'missile' ? 45 : front === 'sundog' ? 40 : 30;
+    const range = front === 'missile' ? 45 : front === 'sundog' ? 40 : 42;
 
     for (const o of world.racers) {
       // quem já terminou está parado e fantasma: não é alvo nem obstáculo
@@ -157,7 +158,8 @@ export function computeAiInput(world: World, r: Racer, dt: number): ControlInput
       if (frontOk && r.frontCharges > 0 && ahead > 3 && ahead < range) {
         const ang = Math.abs(wrapAngle(Math.atan2(o.car.x - car.x, o.car.z - car.z) - car.heading));
         // como no original, a CPU só atira no que está em linha reta à frente (o sundog persegue sozinho)
-        const cone = front === 'missile' ? 0.22 : front === 'sundog' ? 1.2 : 0.12;
+        // (plasma: de perto, mira o carro inteiro — cerca de 2 m para cada lado)
+        const cone = front === 'missile' ? 0.5 : front === 'sundog' ? 1.2 : Math.max(0.17, Math.atan2(2, ahead));
         // o sundog só sai com o alvo perto (senão vira "spam" de bolas de fogo)
         const near = front !== 'sundog' || ahead < 25;
         if (near && ang < cone && world.rng() < 0.35 + ai.aggression * 0.6) st.wantFire = true;
@@ -246,7 +248,7 @@ export function computeAiInput(world: World, r: Racer, dt: number): ControlInput
   if (r.prevDrop) input.drop = false;
   if (car.prevNitro) input.nitro = false;
   // apontar a direção evita atirar na mureta durante curvas fechadas
-  if (bend > 0.6 && r.spec.front === 'laser') input.fire = false;
+  if (bend > 0.8 && r.spec.front === 'laser') input.fire = false;
   // cada decisão vale um disparo só
   if (input.fire) {
     st.wantFire = false;

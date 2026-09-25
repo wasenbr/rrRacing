@@ -1,21 +1,20 @@
-import { QUALITY_LABELS, type QualityLevel, type QualityPref } from '../render/quality';
+import { BATTERY_LABELS, QUALITY_LABELS, type BatteryPref, type QualityLevel, type QualityPref } from '../render/quality';
 import type { CameraMode } from '../render/cameras';
 import { carThumbnail, itemThumbnail, SHOWROOM_COLOR, type CarThumbStyle, type ShopItem } from '../render/thumbnails';
 import { planetThumbnail } from '../render/planetThumbs';
 import type { ThemeId } from '../sim/track';
 import {
   bossBonus, CAMPAIGN_RULES, canAdvanceEarly, carComingSoon, carsForSale, forfeitCosts, DIVISIONS, planetCount, planetForLevel, PLANETS, POINTS, raceKind, rulesOf, seasonInfo, shopLevel, START_MONEY,
-  type CampaignState, type OpponentSetup, type PlanetDef, type RaceKind, type RaceOutcome, RIVALS, CHAMPION_BONUS, seasonSchedule,
+  type CampaignState, type OpponentSetup, type PlanetDef, type PlanetNews, type RaceKind, type RaceOutcome, RIVALS, CHAMPION_BONUS, seasonSchedule,
 } from '../sim/campaign';
 import {
-  armamentText, ATTRIBUTE_LABEL, buildSpec, CAR_PRICES, carAttributes, CHARACTERS, CHARGE_KINDS, chargePrice, chargeWeapon, MAX_UPGRADE, maxExtraCharges,
-  carSwapCost, tradeInValue, UPGRADE_KINDS, upgradeAvailable, upgradeHelp, upgradeLabel, upgradeName, upgradePrice, upgradesSpent, type CarAttributes, type CarSetup, type Character,
+  armamentText, attributeTags, ATTRIBUTE_LABEL, buildSpec, CAR_PRICES, carAttributes, CHARACTERS, CHARGE_KINDS, chargePrice, chargeWeapon, MAX_UPGRADE, maxExtraCharges,
+  carSwapCost, TRADE_CAP, tradeInValue, UPGRADE_KINDS, upgradeAvailable, upgradeHelp, upgradeLabel, upgradeName, upgradePrice, upgradesSpent, type CarAttributes, type CarSetup, type Character,
   type ChargeKind, type UpgradeKind,
 } from '../sim/garage';
 import type { Track, TrackDef } from '../sim/track';
 import { trackById } from '../data/tracks';
 import { WEAPON_NAMES, type VehicleSpec } from '../sim/vehicle';
-import { VEHICLES } from '../data/vehicles';
 import { DIFFICULTIES, DIFFICULTY_LABEL, type Difficulty } from '../sim/world';
 import type { SlotInfo } from '../core/storage';
 import { formatTime } from './hud';
@@ -38,6 +37,8 @@ const DIFF_HELP: Record<Difficulty, string> = {
   normal: 'Como no original',
   hard: 'Rivais implacáveis e bem armados',
 };
+/** No cartão da campanha o Normal diz até onde vai (o Veteran do original parava em Nho). */
+const CAMPAIGN_DIFF_HELP: Partial<Record<Difficulty, string>> = { normal: 'Até Nho, como o Veteran do original' };
 
 const money = (n: number) => `$${n.toLocaleString('pt-BR')}`;
 
@@ -49,6 +50,8 @@ export interface PlanetWarp {
   planets: number;
   vehicleId: string;
   color: number;
+  /** novidades do planeta novo (carro à venda, peças, rivais, prêmio), listadas no quadro final */
+  news?: PlanetNews;
 }
 
 /** Falas do locutor na chegada a um planeta ({planet}, {boss}). */
@@ -100,7 +103,8 @@ export interface LobbyView {
   code: string;
   link: string;
   host: boolean;
-  players: { name: string; color: number; vehicleId: string; me: boolean }[];
+  /** `ping`: ms (null = ainda sem medida; ausente = não se aplica); `away`: caiu e pode voltar */
+  players: { name: string; color: number; vehicleId: string; me: boolean; ping?: number | null; away?: boolean }[];
   max: number;
   /** a corrida está rolando (quem entrou agora espera a próxima) */
   racing: boolean;
@@ -142,7 +146,7 @@ export interface MenuActions {
   skipTrack(): void;
   setAutoThrottle(on: boolean): void;
   setQuality(q: QualityPref): void;
-  setBatterySaver(on: boolean): void;
+  setBatterySaver(mode: BatteryPref): void;
   toggleFullscreen(): void;
   install(): void;
   quitGame(): void;
@@ -175,8 +179,10 @@ export interface AudioSettings {
   /** preferência de qualidade e o nível em uso agora */
   quality: QualityPref;
   qualityNow: QualityLevel;
-  /** economia de bateria: corrida a 30 qps */
-  battery: boolean;
+  /** economia de bateria: Automática (fora da tomada) / Sempre / Nunca */
+  battery: BatteryPref;
+  /** a economia está em uso agora */
+  batteryNow: boolean;
 }
 
 export interface ResultRow {
@@ -191,6 +197,23 @@ export interface ResultRow {
   /** id/nome do piloto para o retrato (padrão: name) */
   pilot?: string;
   vehicleId?: string;
+}
+
+/** Resultados online: nota (host caiu etc.), placar final ou parcial, pergunta antes de encerrar. */
+export interface OnlineResults {
+  note?: string;
+  final?: boolean;
+  /** host: voltar à sala encerra a corrida de quem ainda corre (pede confirmação) */
+  confirm?: boolean;
+  /** a sala acabou: o botão leva ao menu */
+  gone?: boolean;
+}
+
+/** Ping de um piloto na sala (bolinha colorida + ms). */
+function pingBadge(ms: number | null | undefined): string {
+  if (ms === undefined) return '';
+  const color = ms === null ? '#888' : ms < 90 ? '#3cff4a' : ms < 180 ? '#ffd21a' : '#ff3a1a';
+  return `<small class="ping-badge" style="margin-left:auto;display:flex;align-items:center;gap:4px;white-space:nowrap"><i style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color}"></i>${ms === null ? '—' : Math.round(ms)} ms</small>`;
 }
 
 export interface HubData {
@@ -227,42 +250,27 @@ export interface CampaignReport {
 
 const ATTRS = Object.keys(ATTRIBUTE_LABEL) as (keyof CarAttributes)[];
 
-/**
- * Faixa de cada atributo entre os 5 carros de fábrica (escala de `carAttributes`). As barras vão do
- * pior (2 segmentos) ao melhor carro (10): as diferenças entre eles aparecem de verdade (item 13).
- */
-const STOCK_RANGE = Object.fromEntries(
-  ATTRS.map((k) => {
-    const vals = Object.values(VEHICLES).map((v) => carAttributes(v)[k]);
-    return [k, [Math.min(...vals), Math.max(...vals)]];
-  }),
-) as Record<keyof CarAttributes, [number, number]>;
+/** Piso das barras: nenhum carro aparece com menos de 3 de 10 segmentos em nada (item 18). */
+const BAR_FLOOR = 0.3;
 
 /**
- * Atributo na escala das barras (0..1 = 0..10 segmentos): pior carro de fábrica em 0,2, melhor em 1.
- * Melhorias e piloto podem passar de 1 (a barra fica cheia). Diferença desprezível entre os carros
- * (< 4% da escala absoluta) fica no meio para todos.
+ * Atributo na escala das barras (0..1 = 0..10 segmentos). Usa a escala ABSOLUTA de `carAttributes`
+ * (faixa real de cada atributo, igual para todos os carros, poder de fogo pelo dano esperado das
+ * armas): nada de esticar o pior carro de fábrica para 2 segmentos e o melhor para 10 — diferença
+ * pequena fica pequena. Piso de 3 segmentos. Melhorias e piloto podem encher a barra.
  */
-function barScale(k: keyof CarAttributes, a: number): number {
-  const [lo, hi] = STOCK_RANGE[k];
-  const t = hi - lo < 0.04 ? 0.6 + (a - hi) * 2.5 : 0.2 + (0.8 * (a - lo)) / (hi - lo);
-  return Math.max(0.05, t);
+function barScale(_k: keyof CarAttributes, a: number): number {
+  return Math.max(BAR_FLOOR, Math.min(1, a));
 }
 
 /**
- * Barras segmentadas dos atributos, normalizadas entre os carros de fábrica (2–10 segmentos), com o
- * maior atributo do carro marcado FORTE e o menor FRACO.
+ * Barras segmentadas dos atributos (escala absoluta, piso 3/10). FORTE/FRACO só quando o carro se
+ * destaca de fato dos outros carros de fábrica (`attributeTags`), no máximo um de cada.
  */
 function statBars(v: VehicleSpec, withPilot?: VehicleSpec): string {
   const a = carAttributes(v);
   const vals = ATTRS.map((k) => barScale(k, a[k]));
-  // forte/fraco: sempre o maior e o menor atributo deste carro, na escala das barras
-  let good = 0;
-  let bad = 0;
-  vals.forEach((x, i) => {
-    if (x > vals[good]) good = i;
-    if (x < vals[bad]) bad = i;
-  });
+  const tags = attributeTags(v);
   // bônus do piloto: segmentos a mais (ou a menos) em azul, por cima da base igual à da loja
   const p = withPilot ? carAttributes(withPilot) : a;
   let anyBonus = false;
@@ -270,8 +278,8 @@ function statBars(v: VehicleSpec, withPilot?: VehicleSpec): string {
     const n = Math.max(1, Math.min(10, Math.round(vals[i] * 10)));
     const t = Math.max(1, Math.min(10, Math.round(barScale(k, p[k]) * 10)));
     if (t !== n) anyBonus = true;
-    const tag = good === bad ? '' : i === good ? '<em class="st-good">forte</em>' : i === bad ? '<em class="st-bad">fraco</em>' : '';
-    const cls = (i === good && good !== bad) || n >= 8 ? 'hi' : (i === bad && good !== bad) || n <= 3 ? 'lo' : 'mid';
+    const tag = tags[k] === 'good' ? '<em class="st-good">forte</em>' : tags[k] === 'bad' ? '<em class="st-bad">fraco</em>' : '';
+    const cls = tags[k] === 'good' || n >= 8 ? 'hi' : tags[k] === 'bad' || n <= 3 ? 'lo' : 'mid';
     const seg = (j: number) =>
       j < Math.min(n, t) ? '<b class="on"></b>' : j < t ? `<b class="on" style="${PILOT_UP}"></b>` : j < n ? `<b style="${PILOT_DOWN}"></b>` : '<b></b>';
     return `<div class="stat ${cls}"><span>${ATTRIBUTE_LABEL[k]}</span><i>${Array.from({ length: 10 }, (_, j) => seg(j)).join('')}</i>${tag}</div>`;
@@ -344,10 +352,10 @@ function itemImg(item: string, size = 96): string {
  * Miniatura 3D de um carro. `card` (padrão) é o card de veículo com fundo e piso; `transparent`
  * serve para as listas pequenas (rivais, slots, resultados), sobre o painel.
  */
-function carImg(id: string, color: number, size = 200, style: CarThumbStyle = 'card'): string {
+function carImg(id: string, color: number, size = 200, style: CarThumbStyle = 'card', prio = false): string {
   const key = `${id}|${color}|${size}|${style}`;
   const url = thumbReady.get(key);
-  return `<img class="car-img${style === 'card' ? ' card-img' : ''}${url ? '' : ' loading'}" data-thumb="${esc(key)}" src="${url ?? BLANK}" alt="" draggable="false"/>`;
+  return `<img class="car-img${style === 'card' ? ' card-img' : ''}${url ? '' : ' loading'}" data-thumb="${esc(key)}"${prio ? ' data-prio="1"' : ''} src="${url ?? BLANK}" alt="" draggable="false"/>`;
 }
 
 /** Tema (planeta) de cada nome de planeta usado nas pistas e na campanha. */
@@ -440,9 +448,14 @@ function warmThumbs(keys: string[]): void {
   for (const key of keys) if (!thumbReady.has(key)) idleJob(`thumb:${key}`, () => makeThumb(key));
 }
 
-/** Põe na frente da fila as miniaturas que faltam na tela aberta, na ordem em que aparecem. */
+/**
+ * Põe na frente da fila as miniaturas que faltam na tela aberta, na ordem em que aparecem — as
+ * marcadas com `data-prio` (o carro do jogador na garagem e na loja) antes de todas.
+ */
 function fillThumbs(root: HTMLElement): void {
-  const keys = [...new Set(Array.from(root.querySelectorAll<HTMLImageElement>('img[data-thumb].loading'), (el) => el.dataset.thumb!))];
+  const imgs = Array.from(root.querySelectorAll<HTMLImageElement>('img[data-thumb].loading'));
+  imgs.sort((a, b) => Number(!!b.dataset.prio) - Number(!!a.dataset.prio));
+  const keys = [...new Set(imgs.map((el) => el.dataset.thumb!))];
   idleJobsUrgent(keys.filter((k) => !thumbReady.has(k)).map((key) => ({ key: `thumb:${key}`, run: () => makeThumb(key) })));
 }
 
@@ -581,7 +594,7 @@ export class Menus {
   }
 
   private difficultyPicker(group: string): string {
-    const help = (d: Difficulty) => (group === 'new' ? `${DIFF_HELP[d]}<br>${campaignRulesText(d)}` : DIFF_HELP[d]);
+    const help = (d: Difficulty) => (group === 'new' ? `${CAMPAIGN_DIFF_HELP[d] ?? DIFF_HELP[d]}<br>${campaignRulesText(d)}` : DIFF_HELP[d]);
     return `<div class="diffs">${DIFFICULTIES.map((d) => `<button class="diff d-${d}" data-diff="${d}" data-group="${group}"><b>${DIFFICULTY_LABEL[d]}</b><small>${help(d)}</small></button>`).join('')}</div>`;
   }
 
@@ -669,7 +682,7 @@ export class Menus {
   private helpBlock(): string {
     return `<details class="help">
       <summary>Controles</summary>
-      <p><b>Teclado:</b> ↑/W acelera · ↓/S freia/ré · ←→/A D vira · Q/E/Alt derrapar (freio de mão) · Ctrl esq./Espaço atira · \ ou X arma traseira · Shift assistência (nitro/pulo) · C câmera · Esc pausa · M som</p>
+      <p><b>Teclado:</b> ↑/W acelera · ↓/S freia/ré · ←→/A D vira · Q/E derrapar (freio de mão) · Ctrl esq./Espaço atira · \ ou X arma traseira · Shift assistência (nitro/pulo) · C câmera · Esc pausa · M som</p>
       <p><b>Controle:</b> RT acelera · LT freia · analógico vira · LB derrapar · X/RB atira · B arma traseira · L3/R3 assistência · Y câmera · Start pausa</p>
       <p><b>Celular:</b> polegar esquerdo no volante: toque à esquerda ou à direita da faixa para virar, como as setas do teclado (arrastando para cima, atira sem soltar a direção) e tem TIRO, a arma traseira (mina/óleo) e a assistência (nitro/pulo) logo acima, cada botão com o ícone da arma atual; polegar direito acelera, freia e tem o botão DERRAPAR. Em “Som e opções”: aceleração automática (o polegar direito ganha um TIRO) e direção por inclinação.</p>
       <p>Armas e nitro recarregam a cada volta. Dinheiro e blindagem aparecem pela pista.</p>
@@ -918,14 +931,14 @@ export class Menus {
             <h3>${kind === 'normal' ? 'Rivais' : 'Chefe do planeta'}</h3>
             <ul class="rivals">${d.opponents
               .map(
-                (o) => `<li>${portraitSvg(o.name, 56)}<div><b>${esc(o.name)}</b><small style="color:${hex(o.color)}">${esc(o.spec.name)}</small></div>${carImg(o.spec.id, o.color, 96, 'transparent')}</li>`,
+                (o) => `<li>${portraitSvg(o.name, 56)}<div><b>${esc(o.name)}</b><small class="rv-car"><i style="background:${hex(o.color)}"></i>${esc(o.spec.name)}</small></div>${carImg(o.spec.id, o.color, 96, 'transparent')}</li>`,
               )
               .join('')}</ul>
           </div>
           <div class="panel hub-me">
             <h3>Você</h3>
             <div class="me-row">${portraitSvg(d.character.id, 56)}<div><b>${esc(d.character.name)}</b><div class="skills">${this.bonusText(d.character)}</div></div></div>
-            <div class="hub-car">${carImg(s.car.vehicleId, s.color, 160, 'transparent')}<b>${esc(car?.name ?? d.spec.name)}</b></div>
+            <div class="hub-car">${carImg(s.car.vehicleId, s.color, 160, 'transparent', true)}<b>${esc(car?.name ?? d.spec.name)}</b></div>
             <ul class="upg-list">
               ${UPGRADE_KINDS.filter((k) => upgradeAvailable(s.car.vehicleId, k)).map((k) => `<li><span>${upgradeLabel(s.car.vehicleId, k)}</span> ${pips(u[k], MAX_UPGRADE)}</li>`).join('')}
             </ul>
@@ -952,19 +965,37 @@ export class Menus {
   showPlanetWarp(w: PlanetWarp): void {
     const n = PLANETS.indexOf(w.to);
     const line = WARP_LINES[n % WARP_LINES.length].replace('{planet}', w.to.name).replace('{boss}', w.to.local);
+    const nw = w.news;
+    const carName = (id: string) => esc(this.vehicles[id]?.name ?? id);
+    // quadro final: o que mudou no planeta novo (cada item entra em sequência, ver .wn-item)
+    const items: string[] = [];
+    if (nw) {
+      for (const c of nw.newCars)
+        items.push(`<div class="wn-item wn-car">${carImg(c.id, SHOWROOM_COLOR[c.id] ?? w.color, 120, 'transparent')}<div><small>CARRO NOVO</small><b>${carName(c.id)}</b><span>${esc(c.when)}</span></div></div>`);
+      items.push(`<div class="wn-item"><div><small>PEÇAS NA LOJA</small><b>${nw.levelUp ? `Nível ${nw.shopLevel} liberado` : `Até o nível ${nw.shopLevel}`}</b><span>${nw.levelUp ? 'peças mais fortes à venda' : 'mesmo nível do planeta anterior'}</span></div></div>`);
+      const rivals = nw.rivals
+        .map((r) => `<div class="wn-rival">${carImg(r.vehicleId, r.color, 96, 'transparent')}<b>${esc(r.name)}</b><span>${carName(r.vehicleId)}</span></div>`)
+        .join('');
+      items.push(`<div class="wn-item wn-rivals"><small>RIVAIS</small><div>${rivals}</div></div>`);
+      items.push(`<div class="wn-item"><div><small>1º LUGAR PAGA</small><b class="gold">${money(nw.firstPrize)}</b></div></div>`);
+    }
+    const news = items.length ? `<div class="warp-news">${items.map((h, i) => h.replace('class="wn-item', `style="--k:${i}" class="wn-item`)).join('')}</div>` : '';
     this.show(`
-      <div class="warp">
-        <div class="warp-stars"></div><div class="warp-stars far"></div><div class="warp-streaks"></div><div class="warp-flash"></div>
+      <div class="warp${news ? ' has-news' : ''}">
+        <div class="warp-stars"></div><div class="warp-stars far"></div>
         <div class="warp-stage">
+          <div class="warp-streaks"></div>
+          <div class="warp-to">${planetImg(w.to.theme, 440)}</div>
           <div class="warp-from">${planetImg(w.from.theme, 176)}<span class="warp-check">✓</span><small>${esc(w.from.name)}</small></div>
-          <div class="warp-path"><i class="warp-trail"></i><span class="warp-ship">${carImg(w.vehicleId, w.color, 96, 'transparent')}</span></div>
-          <div class="warp-to">${planetImg(w.to.theme, 176)}</div>
+          <div class="warp-ship"><i class="warp-fire"></i>${carImg(w.vehicleId, w.color, 256, 'transparent')}</div>
         </div>
+        <div class="warp-flash"></div>
         <div class="warp-title">
           <small>PLANETA ${n + 1} DE ${w.planets}</small>
           <h2>${esc(w.to.name.toUpperCase())}</h2>
           <p>Divisão B · Chefe local: <b>${esc(w.to.local)}</b></p>
         </div>
+        ${news}
         <p class="warp-larry"><b>Loudmouth Larry:</b> “${esc(line)}”</p>
         <button class="go warp-go" data-act="warp-done">Continuar ${icon('arrowRight')}</button>
       </div>`);
@@ -1028,7 +1059,7 @@ export class Menus {
     let body = '';
     if (this.shopTab === 'upgrades') {
       const vbase = this.vehicles[s.car.vehicleId];
-      body = `<div class="shop-car"><div class="shop-car-img">${carImg(s.car.vehicleId, s.color, 320)}<b>${esc(d.spec.name)}</b></div><div class="shop-car-stats"><h4>Atributos atuais</h4>${vbase ? statBars(buildSpec(vbase, s.car), d.spec) : statBars(d.spec)}<p class="upg-legend"><i></i>prévia do ganho da próxima melhoria (em cada item abaixo)</p></div></div>` +
+      body = `<div class="shop-car"><div class="shop-car-img">${carImg(s.car.vehicleId, s.color, 320, 'card', true)}<b>${esc(d.spec.name)}</b></div><div class="shop-car-stats"><h4>Atributos atuais</h4>${vbase ? statBars(buildSpec(vbase, s.car), d.spec) : statBars(d.spec)}<p class="upg-legend"><i></i>prévia do ganho da próxima melhoria (em cada item abaixo)</p></div></div>` +
         UPGRADE_KINDS.map((k) => {
           const lvl = s.car.upgrades[k];
           if (!upgradeAvailable(s.car.vehicleId, k)) {
@@ -1059,7 +1090,7 @@ export class Menus {
       const myName = d.vehicles[s.car.vehicleId]?.name ?? s.car.vehicleId;
       body =
         `<p class="small-note">Na troca, a loja fica com o seu ${esc(myName)} e paga <b>${money(trade)}</b> de revenda ` +
-        `(30% do preço do carro${spent ? ` + 1/4 dos ${money(spent)} gastos em peças` : ''}). As peças e as cargas extras vão junto com ele: o carro novo sai de fábrica.</p>` +
+        `(30% do preço do carro${spent ? ` + 1/4 dos ${money(spent)} gastos em peças` : ''}; no máximo ${Math.round(TRADE_CAP * 100)}% do preço do carro novo). As peças e as cargas extras vão junto com ele: o carro novo sai de fábrica.</p>` +
         `<div class="shop-cars">${this.allCars
           .map((v) => {
             const mine = v.id === s.car.vehicleId;
@@ -1071,7 +1102,7 @@ export class Menus {
               : !forSale
                 ? `<span class="maxed">${icon('lock')} ${carComingSoon(s, v.id) ? esc(carComingSoon(s, v.id).toUpperCase()) : 'NÃO VENDIDO NESTE PLANETA'}</span>`
                 : `<button class="buy" data-buycar="${v.id}" data-buyinfo="${esc(`${netText}?`)}" ${net > s.money ? 'disabled' : ''}>${net > 0 ? money(net) : net < 0 ? `+${money(-net)}` : 'TROCAR'}</button>`;
-            const priceLine = mine || !forSale ? `Preço: ${money(CAR_PRICES[v.id].price)}` : `Preço ${money(CAR_PRICES[v.id].price)} − revenda ${money(trade)} · ${netText}`;
+            const priceLine = mine || !forSale ? `Preço: ${money(CAR_PRICES[v.id].price)}` : `Preço ${money(CAR_PRICES[v.id].price)} − revenda ${money(CAR_PRICES[v.id].price - net)} · ${netText}`;
             return `<div class="shop-carcard ${mine ? 'mine' : ''} ${forSale || mine ? '' : 'locked'}"><div class="car">${this.carCard(v, mine ? s.color : SHOWROOM_COLOR[v.id] ?? s.color, `<small>${priceLine}</small>`)}</div>${action}</div>`;
           })
           .join('')}</div>`;
@@ -1126,7 +1157,7 @@ export class Menus {
         ${toggle('sfx', 'Efeitos sonoros', a.sfx)}
         ${toggle('announcer', 'Locutor', a.announcer)}
         <div class="shop-row"><div class="grow"><b>Qualidade gráfica</b><small>Em uso: ${QUALITY_LABELS[a.qualityNow]}. Baixa deixa o jogo liso em aparelhos simples.</small></div><button class="toggle on" data-quality="${a.quality}">${QUALITY_LABELS[a.quality].toUpperCase()}</button></div>
-        ${toggle('battery', 'Economia de bateria', a.battery, 'Corrida a 30 quadros por segundo: gasta menos bateria e esquenta menos')}
+        <div class="shop-row"><div class="grow"><b>Economia de bateria</b><small>${a.batteryNow ? 'Ligada agora' : 'Desligada agora'}. Automática liga fora da tomada: 30 quadros por segundo e menos resolução, sombras e fumaça.</small></div><button class="toggle ${a.battery === 'off' ? '' : 'on'}" data-battery="${a.battery}">${BATTERY_LABELS[a.battery].toUpperCase()}</button></div>
         ${a.touch ? toggle('autothrottle', 'Aceleração automática', a.autoThrottle, 'O carro acelera sozinho; o polegar direito freia e atira') : ''}
         ${a.touch && tiltSupported() ? toggle('tilt', 'Direção por inclinação', tiltSteeringEnabled(), 'Vire o celular como um volante; o polegar esquerdo fica só com as armas') : ''}
         ${a.touch ? this.fsButtonHtml() : ''}
@@ -1210,7 +1241,7 @@ export class Menus {
     const slots = Array.from({ length: v.max }, (_, i) => {
       const p = v.players[i];
       return p
-        ? `<li>${carImg(p.vehicleId, p.color, 96, 'transparent')}<div><b style="color:${esc(hex(p.color))}">${esc(p.name)}</b><small>${esc(this.vehicles[p.vehicleId]?.name ?? '')}${i === 0 ? ' · host' : ''}${p.me ? ' · você' : ''}</small></div></li>`
+        ? `<li>${carImg(p.vehicleId, p.color, 96, 'transparent')}<div><b style="color:${esc(hex(p.color))}">${esc(p.name)}</b><small>${esc(this.vehicles[p.vehicleId]?.name ?? '')}${i === 0 ? ' · host' : ''}${p.me ? ' · você' : ''}${p.away ? ' · reconectando…' : ''}</small></div>${pingBadge(p.ping)}</li>`
         : `<li class="empty"><div><small>${v.host && this.fillCpu ? 'CPU' : 'vago'}</small></div></li>`;
     }).join('');
     const canShare = typeof navigator.share === 'function';
@@ -1237,24 +1268,48 @@ export class Menus {
       </div>`);
   }
 
+  /** Só o ping dos pilotos mudou: atualiza as bolinhas sem redesenhar a sala (lista aberta etc.). */
+  updateLobbyPings(v: LobbyView): void {
+    this.lastLobby = v;
+    this.el.querySelectorAll<HTMLElement>('.rivals.lobby > li').forEach((li, i) => {
+      const html = pingBadge(v.players[i]?.ping);
+      const old = li.querySelector('.ping-badge');
+      if (old) old.outerHTML = html;
+      else if (html) li.insertAdjacentHTML('beforeend', html);
+    });
+  }
+
   /* ---------------- pausa e resultado ---------------- */
 
-  showPause(online = false): void {
-    // campanha (fora do Fácil): sair ou reiniciar no meio conta como último lugar (e gasta o duelo)
+  /**
+   * Pausa. `started`: a corrida já largou (na contagem sair não custa nada); `glLost`: o vídeo caiu (sair
+   * ou reiniciar também não custa).
+   */
+  showPause(online = false, started = true, glLost = false): void {
+    // campanha (fora do Fácil): sair ou reiniciar depois da largada conta como último lugar (e gasta o duelo)
     const st = this.inCampaign ? this.lastHub?.state : undefined;
-    const costs = !online && !!st && forfeitCosts(st);
+    const canCost = !online && !!st && forfeitCosts(st);
+    const costs = canCost && started && !glLost;
     const duel = costs && raceKind(st!) !== 'normal';
-    const quitLabel = online ? 'Sair da sala' : costs ? 'Desistir (conta como último)' : this.inCampaign ? 'Sair da corrida (não conta)' : 'Sair da corrida';
+    const quitLabel = online
+      ? 'Sair da sala'
+      : costs
+        ? 'Desistir (conta como último)'
+        : this.inCampaign
+          ? 'Sair da corrida (não conta)'
+          : 'Sair da corrida';
+    const freeNote = !canCost ? '' : glLost ? 'O vídeo caiu: sair ou reiniciar agora não conta para a temporada.' : !started ? 'A corrida ainda não largou: sair ou reiniciar agora não conta.' : '';
     this.show(`
       <div class="card small pause">
         <h2>${online ? 'MENU' : 'PAUSADO'}</h2>
         ${online ? '<p class="small-note center">No online a corrida não para.</p>' : ''}
         <button class="go" data-act="resume">Continuar</button>
-        ${online ? '' : `<button data-act="restart"${costs ? ' data-forfeit="1"' : ''}>${costs ? 'Reiniciar (conta como último)' : 'Reiniciar corrida'}</button>`}
+        ${online ? '' : `<button data-act="restart"${costs ? ' data-forfeit="1"' : ''}>${costs ? 'Desistir e ir para a próxima' : 'Reiniciar corrida'}</button>`}
         <button data-act="settings">${icon('gear')} Som e opções</button>
         ${this.fsButtonHtml()}
         <button class="quit" data-act="${online ? 'online-leave' : 'quit'}"${costs ? ' data-forfeit="1"' : ''}>${icon('eject')} ${quitLabel}</button>
-        ${costs ? `<p class="small-note center">Desistir vale como último lugar: 0 pontos e sem o dinheiro da corrida${duel ? ', e gasta esta tentativa do duelo' : ''}.</p>` : ''}
+        ${costs ? `<p class="small-note center">Desistir vale como último lugar: 0 pontos e sem o dinheiro da corrida${duel ? ', e gasta esta tentativa do duelo' : ''}. Não dá para repetir a corrida.</p>` : ''}
+        ${freeNote ? `<p class="small-note center">${freeNote}</p>` : ''}
       </div>`);
   }
 
@@ -1288,6 +1343,8 @@ export class Menus {
       `<i style="--x:${(rnd(i, 3) * 100).toFixed(1)}%;--d:${(0.8 + rnd(i, 4) * 4).toFixed(2)}s;--t:${(3.2 + rnd(i, 5) * 2.4).toFixed(2)}s;--r:${Math.round(rnd(i, 6) * 720 - 360)}deg;--c:${FW_COLORS[i % FW_COLORS.length]}"></i>`,
     ).join('');
     const bosses = PLANETS.slice(0, count).map((p) => p.local);
+    // pódio: o chefe final (2º) e Rip e Shred (3º) com os carros do último planeta
+    const last = PLANETS[count - 1];
     const credits = [
       ['CAMPEÃO DA GALÁXIA', esc(d.character.name)],
       ['CARRO', esc(d.vehicles[s.car.vehicleId]?.name ?? s.car.vehicleId)],
@@ -1306,14 +1363,20 @@ export class Menus {
         <div class="fin-beams"><i></i><i></i></div>
         <div class="fin-fireworks">${fireworks}</div>
         <div class="fin-confetti">${confetti}</div>
-        <div class="fin-title"><small>${esc(DIFFICULTY_LABEL[diff].toUpperCase())} · ${count} PLANETAS</small><h2>CAMPEÃO DA GALÁXIA!</h2></div>
+        <div class="fin-title"><div class="fin-trophy">${trophySvg('fin')}</div><div><small>${esc(DIFFICULTY_LABEL[diff].toUpperCase())} · ${count} PLANETAS</small><h2>CAMPEÃO DA GALÁXIA!</h2></div></div>
         <div class="fin-stage">
-          <div class="fin-trophy">${trophySvg('fin')}</div>
-          <div class="fin-podium">
-            <div class="fin-car">${carImg(s.car.vehicleId, s.color, 320, 'transparent')}</div>
-            <div class="fin-block"><span>1</span></div>
+          <div class="fin-podium p2">
+            <div class="fin-car">${carImg(last.cars[2], RIVALS[last.local]?.color ?? 0x5a1f8a, 200, 'transparent')}</div>
+            <div class="fin-block"><span>2</span><b>${esc(last.local)}</b></div>
           </div>
-          <div class="fin-pilot">${portraitSvg(d.character.id, 96)}<b>${esc(d.character.name)}</b><small>${esc(d.character.homeworld)}</small></div>
+          <div class="fin-podium p1">
+            <div class="fin-car">${carImg(s.car.vehicleId, s.color, 320, 'transparent')}</div>
+            <div class="fin-block"><span>1</span><b>${portraitSvg(d.character.id, 40)}${esc(d.character.name)}</b></div>
+          </div>
+          <div class="fin-podium p3">
+            <div class="fin-car duo">${carImg(last.cars[2], RIVALS.Rip.color, 200, 'transparent')}${carImg(last.cars[1], RIVALS.Shred.color, 200, 'transparent')}</div>
+            <div class="fin-block"><span>3</span><b>Rip e Shred</b></div>
+          </div>
         </div>
         <div class="fin-route">${route}</div>
         <p class="fin-larry"><b>Loudmouth Larry:</b> “${esc(d.character.name)} passou por ${esc(planetList(count))} e não sobrou ninguém de pé! Temos um novo campeão — e que venha o rock!”</p>
@@ -1341,14 +1404,14 @@ export class Menus {
       <div class="card wide champion-card">
         <div class="champ-head">${trophySvg('sum')}<div><h2>CAMPEÃO DA GALÁXIA!</h2><small>${esc(DIFFICULTY_LABEL[diff])} · ${planetCount(s)} planetas</small></div></div>
         ${planetRoute(planetCount(s), true, planetCount(s))}
-        <div class="me-row">${portraitSvg(d.character.id, 96)}<div><b>${esc(d.character.name)}</b><small>${esc(d.character.homeworld)} · ${esc(DIFFICULTY_LABEL[diff])}</small></div>${carImg(s.car.vehicleId, s.color, 160, 'transparent')}</div>
+        <div class="me-row champ-me">${portraitSvg(d.character.id, 96)}<div class="champ-who"><b>${esc(d.character.name)}</b><small>de ${esc(d.character.homeworld)}</small><small>${esc(DIFFICULTY_LABEL[diff])}</small></div>${carImg(s.car.vehicleId, s.color, 160, 'transparent')}</div>
         <div class="hub-head">
           ${stat('CORRIDAS', String(st.races))}
           ${stat('VITÓRIAS', `${st.wins} (${winPct}%)`)}
           ${stat('ABATES', String(st.kills))}
           ${stat('GANHOS', money(st.earnings))}
         </div>
-        <div class="notice promoted">Recompensa: troféu da galáxia e <b class="gold">${money(CHAMPION_BONUS)}</b> de prêmio (saldo: ${money(s.money)}). A garagem continua aberta: corra em ${esc(PLANETS[planetCount(s) - 1].name)} para gastar o prêmio.</div>
+        <div class="notice promoted">Recompensa: troféu da galáxia e <b class="gold">${money(CHAMPION_BONUS)}</b> de prêmio, já somado ao seu saldo de <b>${money(s.money)}</b>. A garagem continua aberta: corra em ${esc(PLANETS[planetCount(s) - 1].name)} para gastar o prêmio.</div>
         <button class="go" data-act="champion-next" data-diff-next="${next}">${diff === next ? 'Nova campanha no' : 'Próximo desafio: campanha no'} ${esc(DIFFICULTY_LABEL[next])} ${icon('arrowRight')}</button>
         <div class="row-buttons">
           <button data-act="hub">Voltar à garagem</button>
@@ -1358,7 +1421,8 @@ export class Menus {
       </div>`);
   }
 
-  showResults(rows: ResultRow[], lapTimes: number[], report: CampaignReport | null, online = false): void {
+  showResults(rows: ResultRow[], lapTimes: number[], report: CampaignReport | null, online: boolean | OnlineResults = false): void {
+    const net = typeof online === 'object' ? online : null;
     const best = lapTimes.length ? Math.min(...lapTimes) : 0;
     const me = rows.find((r) => r.me);
     const title =
@@ -1395,8 +1459,8 @@ export class Menus {
       .sort((a, b) => a.place - b.place)
       .map(
         (r) => `<div class="res-row ${r.me ? 'me' : ''} p${r.place}"><span class="res-place">${r.place}º</span>${portraitSvg(r.pilot ?? r.name, 48)}
-          <div class="res-name"><b style="color:${esc(r.color)}">${esc(r.name)}</b><small>${r.time !== null ? formatTime(r.time) : '—'} · ${r.kills} abate(s)</small></div>
-          ${r.vehicleId ? carImg(r.vehicleId, parseInt(r.color.slice(1), 16), 96, 'transparent') : ''}<span class="gold">${money(r.prize)}</span></div>`,
+          <div class="res-name"><b style="color:${esc(r.color)}">${esc(r.name)}</b><small>${r.time !== null ? formatTime(r.time) : online && !net?.final ? 'correndo…' : '—'} · ${r.kills} abate(s)</small></div>
+          ${r.vehicleId ? carImg(r.vehicleId, parseInt(r.color.slice(1), 16), 96, 'transparent') : ''}${online ? '' : `<span class="gold">${money(r.prize)}</span>`}</div>`,
       )
       .join('');
     this.show(`
@@ -1405,10 +1469,14 @@ export class Menus {
         ${campaignBlock}
         <div class="res-list">${podium}</div>
         ${lapTimes.length ? `<table>${lapTimes.map((t, i) => `<tr class="${t === best ? 'best' : ''}"><td>Volta ${i + 1}</td><td>${formatTime(t)}</td></tr>`).join('')}</table>` : ''}
-        ${me ? `<p class="money">Ganho nesta corrida (prêmio + pista): <b>${money(me.money)}</b></p>` : ''}
+        ${me && !online ? `<p class="money">Ganho nesta corrida (prêmio + pista): <b>${money(me.money)}</b></p>` : ''}
+        ${net?.note ? `<div class="notice retry">${esc(net.note)}</div>` : ''}
+        ${net && !net.final ? '<p class="small-note center">Placar parcial: atualiza conforme os pilotos cruzam a linha.</p>' : ''}
         ${
           online
-            ? '<button class="go" data-act="online-lobby">Voltar à sala</button>'
+            ? net?.gone
+              ? '<button class="go" data-act="main">Menu principal</button>'
+              : `<button class="go" data-act="online-lobby"${net?.confirm ? ' data-confirm="1"' : ''}>Voltar à sala</button>`
             : report
               ? '<button class="go" data-act="results-continue">Continuar</button>'
               : '<button class="go" data-act="restart">Correr de novo</button><button data-act="main">Menu principal</button>'
@@ -1526,6 +1594,11 @@ export class Menus {
       this.showShop(this.lastHub);
       return;
     }
+    if (d.battery) {
+      const order: BatteryPref[] = ['auto', 'on', 'off'];
+      this.actions.setBatterySaver(order[(order.indexOf(d.battery as BatteryPref) + 1) % order.length]);
+      return;
+    }
     if (d.quality) {
       const order: QualityPref[] = ['auto', 'baixo', 'medio', 'alto'];
       this.actions.setQuality(order[(order.indexOf(d.quality as QualityPref) + 1) % order.length]);
@@ -1536,8 +1609,7 @@ export class Menus {
         void setTiltSteering(d.on !== '1').then(() => this.lastAudio && this.showSettings(this.lastAudio));
         return;
       }
-      if (d.toggle === 'battery') this.actions.setBatterySaver(d.on !== '1');
-      else if (d.toggle === 'autothrottle') this.actions.setAutoThrottle(d.on !== '1');
+      if (d.toggle === 'autothrottle') this.actions.setAutoThrottle(d.on !== '1');
       else this.actions.setAudio(d.toggle as 'music' | 'sfx' | 'announcer', d.on !== '1');
     }
     if (d.upgrade) this.actions.buyUpgrade(d.upgrade as UpgradeKind);
@@ -1616,7 +1688,7 @@ export class Menus {
       case 'resume':
         return this.actions.resume();
       case 'restart':
-        if (d.forfeit && !this.confirmClick(t, 'Conta como último. Reiniciar?')) return;
+        if (d.forfeit && !this.confirmClick(t, 'Conta como último. Ir para a próxima?')) return;
         return this.actions.restart();
       case 'quit':
         if (d.forfeit && !this.confirmClick(t, 'Conta como último. Desistir?')) return;
@@ -1668,6 +1740,8 @@ export class Menus {
       case 'online-leave':
         return this.actions.onlineLeave();
       case 'online-lobby':
+        // host com gente ainda correndo: o segundo toque confirma (encerra a corrida para todos)
+        if (d.confirm && !this.confirmClick(t, 'Ainda há pilotos correndo. Encerrar para todos?')) return;
         return this.actions.onlineLobby();
       case 'cpu-toggle':
         this.fillCpu = !this.fillCpu;

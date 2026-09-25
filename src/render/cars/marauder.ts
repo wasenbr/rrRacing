@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { carFrame, cockpitRig, Kit, sideProfile, wheel, wheelTravel, type CarVisual } from './common';
+import { bodySink, carFrame, cockpitRig, Kit, Linkage, sideProfile, wheel, wheelDrop, wheelTravel, type CarVisual } from './common';
 
 const WR = 0.86; // rodas de monster truck, como nos sprites do original
 const WX = 0.98; // centro das rodas
@@ -214,7 +214,7 @@ const lowBase = curve([
  * esterço — antes o arco (topo 1,66) ficava abaixo do topo do pneu (1,75) e o pneu furava o para-lama.
  */
 const ARCH_Y = WR - 0.12;
-const ARCH_R = 1.12;
+const ARCH_R = 1.2; // folga de ~0,19 sobre o topo do pneu (item 51)
 const SKIN = 0.1;
 /** esterço máximo das rodas da frente (rad): o pneu esterçado fica dentro da caixa de roda */
 const STEER = 0.32; // espessura do para-lama por cima do arco
@@ -413,19 +413,21 @@ export function createMarauder(color: number, shadows: boolean): CarVisual {
   const trayS = (z: number): Sec => ({ w: 0.62 - 0.24 * (1 - smooth(0.75, 1.1, Math.abs(z - WZF))), wt: 0.95, yb: CH - 0.2, yt: CH + 0.38, n: 6, crown: 0 });
   k.add(loft(-2.05, 2.15, trayS, 40, 24, 0.18), k.gunMetal, 0, 0, 0);
   for (const sx of [-1, 1]) k.tube(V(sx * 0.3, CH - 0.1, 2.2), V(sx * 0.3, CH - 0.1, -2.1), 0.06, k.trim);
-  // suspensão de monster truck (à mostra entre a carroceria e as rodas)
+  // suspensão de monster truck (à mostra entre a carroceria e as rodas): braços e amortecedores
+  // recalculados a cada quadro entre a carroceria e o eixo (não descolam no ar nem no pouso)
+  const links = new Linkage(root, body, chassis, shadows);
   for (const z of [WZF, WZR]) {
     k.add(new THREE.SphereGeometry(0.24, 14, 10).scale(1.1, 0.9, 1), k.gunMetal, 0, WR, z, chassis); // diferencial
     k.tube(V(-WX + 0.18, WR, z), V(WX - 0.18, WR, z), 0.07, k.gunMetal, chassis); // eixo
     for (const sx of [-1, 1]) {
       const ax = z === WZF ? 0.3 : 0.45; // na frente a bandeja é mais estreita
-      k.tube(V(sx * ax, CH - 0.12, z + 0.34), V(sx * (WX - 0.26), WR, z), 0.045, k.steel);
-      k.tube(V(sx * ax, CH - 0.12, z - 0.34), V(sx * (WX - 0.26), WR, z), 0.045, k.steel);
+      links.add(V(sx * ax, CH - 0.12, z + 0.34), V(sx * (WX - 0.26), WR, z), 0.045, k.steel);
+      links.add(V(sx * ax, CH - 0.12, z - 0.34), V(sx * (WX - 0.26), WR, z), 0.045, k.steel);
       // dois amortecedores com mola amarela por roda
       for (const dz of [-0.18, 0.18]) {
         // topo preso no assoalho baixo do meio (por fora dele fica a caixa de roda)
-        k.tube(V(sx * 0.34, ROCK - 0.02, z + dz), V(sx * (WX - 0.32), WR + 0.05, z + dz), 0.05, k.chrome);
-        k.tube(V(sx * 0.37, ROCK - 0.14, z + dz), V(sx * (WX - 0.38), WR + 0.22, z + dz), 0.085, k.warn);
+        links.add(V(sx * 0.34, ROCK - 0.02, z + dz), V(sx * (WX - 0.32), WR + 0.05, z + dz), 0.05, k.chrome);
+        links.add(V(sx * 0.37, ROCK - 0.14, z + dz), V(sx * (WX - 0.38), WR + 0.22, z + dz), 0.085, k.warn);
       }
     }
   }
@@ -465,13 +467,14 @@ export function createMarauder(color: number, shadows: boolean): CarVisual {
   return {
     root,
     body,
-    cabin: [ext, chassis],
+    cabin: [ext, chassis, links.group],
     cockpit,
     steeringWheel,
     flames,
     eye,
     animate(a) {
-      chassis.position.y = travel(a);
+      // se a carroceria afundar (pouso, inclinação) mais que a folga do arco, as rodas descem junto
+      chassis.position.y = wheelDrop(travel(a), bodySink(body, WX, WZF), 0.12);
       for (const w of wheels) {
         w.spin.rotation.x = a.spin;
         if (w.sz > 0) w.pivot.rotation.y = -a.steer * STEER;

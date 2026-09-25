@@ -149,7 +149,7 @@ export class Controls {
     // "\": Backslash no teclado americano, IntlBackslash (ao lado do Z) no ABNT2
     input.drop = this.key('Backslash', 'IntlBackslash', 'KeyX', 'KeyK') || this.t('drop');
     input.nitro = this.key('ShiftLeft', 'ShiftRight', 'KeyL') || this.t('nitro');
-    input.sharp = this.key('KeyQ', 'KeyE', 'KeyU', 'AltLeft') || this.t('sharp') || this.touchSharp;
+    input.sharp = this.key('KeyQ', 'KeyE', 'KeyU') || this.t('sharp') || this.touchSharp;
     this.readGamepad(input);
     return input;
   }
@@ -189,8 +189,9 @@ export function isTouchDevice(): boolean {
  * Cria os controles de toque para celular/tablet.
  * Polegar esquerdo: volante (arrastar para os lados) e, logo acima, TIRO / ARMA TRASEIRA / NITRO.
  * Arrastando o volante para cima, o mesmo polegar atira sem soltar a direção. Com a direção por
- * inclinação, o volante some; com a aceleração automática, aparece um TIRO também à direita.
- * Polegar direito: ACELERAR (grande) e FREIO/RÉ — assim nunca é preciso soltar o acelerador para atirar.
+ * inclinação, o volante some. Polegar direito: ACELERAR (grande), TIRO logo acima dele (em todos os
+ * modos; com aceleração automática o TIRO cresce no lugar do ACEL) e FREIO/RÉ — assim nunca é
+ * preciso soltar o acelerador nem o volante para atirar.
  */
 export function createTouchControls(root: HTMLElement, controls: Controls): HTMLElement {
   const el = document.createElement('div');
@@ -211,8 +212,10 @@ export function createTouchControls(root: HTMLElement, controls: Controls): HTML
         <button data-a="sharp" class="sharp" aria-label="Derrapar (freio de mão)"><i class="t-ic">${icon('drift')}</i><span>DERRAPAR</span></button>
         <button data-a="brake" class="brake" aria-label="Freio e ré"><i class="t-ic">${icon('brake')}</i><span>FREIO</span></button>
       </div>
-      <button data-a="gas" class="gas" aria-label="Acelerar">ACEL</button>
-      <button data-a="fire" class="fire2" aria-label="Atirar"><i class="t-ic"></i><span>TIRO</span></button>
+      <div class="touch-gcol">
+        <button data-a="fire" class="fire2" aria-label="Atirar"><i class="t-ic"></i><span>TIRO</span></button>
+        <button data-a="gas" class="gas" aria-label="Acelerar">ACEL</button>
+      </div>
     </div>
     <div class="rotate-hint" aria-live="polite"><div><span class="rot-phone">${icon('phone')}</span><b>Gire o celular</b><small>O jogo é na horizontal. A corrida fica pausada.</small></div></div>
     <div class="touch-top">

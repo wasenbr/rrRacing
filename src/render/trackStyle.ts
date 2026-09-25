@@ -136,6 +136,80 @@ function grime(color: HTMLCanvasElement, height: HTMLCanvasElement, theme: Theme
   return out;
 }
 
+/**
+ * Base comum de metal do visual alvo, por baixo do padrão de cada planeta: chapa xadrez (relevo
+ * oblíquo miúdo) e, quando `joints` > 0, placas quadradas com juntas escuras em baixo relevo e
+ * parafusos. Tudo em tons neutros com pouca opacidade: a cor/identidade do planeta continua mandando.
+ * Repete sem emenda (período = divisor de S).
+ */
+function plateBase(c: CanvasRenderingContext2D, h: CanvasRenderingContext2D, S: number, cells: number, joints: number): void {
+  const cell = S / cells;
+  // chapa xadrez: barrinhas alternadas "/" e "\"
+  const step = cell / 4;
+  const n = Math.round(S / step);
+  const bar = step * 0.26;
+  for (const [ctx, style, w, dx] of [
+    [c, 'rgba(0,0,0,0.16)', 2, 0.8],
+    [c, 'rgba(255,255,255,0.07)', 1.4, 0],
+    [h, '#c8c8c8', 2.4, 0],
+  ] as const) {
+    ctx.save();
+    ctx.strokeStyle = style;
+    ctx.lineWidth = w;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    for (let y = 0; y < n; y++)
+      for (let x = 0; x < n; x++) {
+        const cx = (x + 0.5) * step + dx;
+        const cy = (y + 0.5) * step + dx;
+        const s = (x + y) % 2 ? 1 : -1;
+        ctx.moveTo(cx - bar, cy - bar * s);
+        ctx.lineTo(cx + bar, cy + bar * s);
+      }
+    ctx.stroke();
+    ctx.restore();
+  }
+  if (joints <= 0) return;
+  // placas: período de 2 células quando cabe inteiro (placas maiores), senão 1
+  const per = cells % 2 === 0 ? cell * 2 : cell;
+  const m = Math.round(S / per);
+  const lines = (ctx: CanvasRenderingContext2D, off: number) => {
+    ctx.beginPath();
+    for (let i = 0; i <= m; i++) {
+      ctx.moveTo(i * per + off, 0);
+      ctx.lineTo(i * per + off, S);
+      ctx.moveTo(0, i * per + off);
+      ctx.lineTo(S, i * per + off);
+    }
+    ctx.stroke();
+  };
+  c.save();
+  c.lineWidth = 1.5;
+  c.strokeStyle = `rgba(255,255,255,${0.07 * joints})`;
+  lines(c, 2);
+  c.lineWidth = 2.5;
+  c.strokeStyle = `rgba(0,0,0,${0.5 * joints})`;
+  lines(c, 0);
+  for (let y = 0; y < m; y++)
+    for (let x = 0; x < m; x++)
+      for (const [bx, by] of [[6, 6], [per - 6, 6], [6, per - 6], [per - 6, per - 6]]) {
+        c.fillStyle = `rgba(0,0,0,${0.4 * joints})`;
+        c.beginPath();
+        c.arc(x * per + bx + 0.6, y * per + by + 0.6, 2, 0, Math.PI * 2);
+        c.fill();
+        c.fillStyle = `rgba(255,255,255,${0.22 * joints})`;
+        c.beginPath();
+        c.arc(x * per + bx, y * per + by, 1.4, 0, Math.PI * 2);
+        c.fill();
+      }
+  c.restore();
+  h.save();
+  h.lineWidth = 5;
+  h.strokeStyle = '#6a6a6a';
+  lines(h, 0);
+  h.restore();
+}
+
 function grayCanvasTexture(values: Float32Array, size: number, map: (v: number) => number): THREE.CanvasTexture {
   const c = canvas(size, size, (ctx) => {
     const img = ctx.createImageData(size, size);
@@ -221,6 +295,11 @@ export function roadMaps(theme: Theme): RoadMaps {
   const h = height.getContext('2d')!;
   h.save();
   h.scale(0.5 * K, 0.5 * K);
+  // base de placas metálicas comum a todos os planetas (menos a terra batida de Bogmire): a grade
+  // já tem placas, ganha só a chapa xadrez; hexágonos, escamas e gelo ganham também as juntas
+  if (theme.roadPattern !== 'dirt') {
+    plateBase(c, h, S, CELLS, theme.roadPattern === 'grid' ? 0 : theme.roadPattern === 'ice' ? 0.45 : 0.7);
+  }
 
   if (theme.roadPattern === 'grid') {
     // placas metálicas (alvo visual do usuário): cada placa quadrada é dividida em dois triângulos

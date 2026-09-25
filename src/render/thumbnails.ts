@@ -140,7 +140,8 @@ function visiblePoints(obj: THREE.Object3D): THREE.Vector3[] {
   const pts: THREE.Vector3[] = [];
   obj.traverseVisible((o) => {
     const m = o as THREE.Mesh;
-    if (!m.isMesh || (m.material as THREE.Material).transparent) return;
+    // chamas e brilhos marcados com userData.frame entram no enquadramento (não podem ser cortados)
+    if (!m.isMesh || ((m.material as THREE.Material).transparent && !m.userData.frame)) return;
     const pos = m.geometry.getAttribute('position');
     const step = Math.max(1, Math.floor(pos.count / 400));
     for (let i = 0; i < pos.count; i += step) pts.push(new THREE.Vector3().fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld));
@@ -370,7 +371,7 @@ function drawItemBackdrop(g: CanvasRenderingContext2D, s: number): void {
 
 /** Cor do brilho, do neon e das luzes de recorte de cada arma na vitrine (card como o dos carros). */
 const ITEM_COLOR: Partial<Record<string, number>> = {
-  laser: 0x5ac8ff, missile: 0xff7828, sundog: 0xffd23c, oil: 0x7896ff,
+  laser: 0x50ff80, missile: 0xff7828, sundog: 0xffd23c, oil: 0x7896ff,
   mine: 0xff3c28, scatter: 0xff9628, nitro: 0x5ac8ff, jump: 0xffa032,
 };
 
@@ -483,6 +484,122 @@ export type ShopItem =
   | 'laser' | 'missile' | 'sundog' | 'oil' | 'mine' | 'scatter' | 'nitro' | 'jump'
   | 'engine' | 'tires' | 'shocks' | 'armor';
 
+/** Texturas desenhadas em canvas para as peças da loja (rótulo, chamas); criadas uma vez. */
+const fxTex = new Map<string, THREE.Texture>();
+
+function canvasTex(key: string, w: number, h: number, draw: (g: CanvasRenderingContext2D, w: number, h: number) => void): THREE.Texture {
+  const hit = fxTex.get(key);
+  if (hit) return hit;
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  draw(c.getContext('2d')!, w, h);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 4;
+  fxTex.set(key, t);
+  return t;
+}
+
+type FlameKind = 'fire' | 'blue' | 'plasma';
+
+/** Degradê da chama: ponta transparente (topo do canvas = ponta do cone) até a boca branca-quente. */
+const FLAME_STOPS: Record<FlameKind, [string, string, string, string]> = {
+  fire: ['rgba(255,40,0,0)', 'rgba(255,90,10,0.8)', 'rgba(255,200,60,0.95)', 'rgba(255,252,225,1)'],
+  blue: ['rgba(40,60,255,0)', 'rgba(60,140,255,0.8)', 'rgba(140,220,255,0.95)', 'rgba(240,252,255,1)'],
+  plasma: ['rgba(20,255,90,0)', 'rgba(40,255,120,0.75)', 'rgba(150,255,190,0.95)', 'rgba(240,255,245,1)'],
+};
+
+function flameTex(kind: FlameKind): THREE.Texture {
+  const st = FLAME_STOPS[kind];
+  return canvasTex(`flame-${kind}`, 8, 128, (g, w, h) => {
+    const lg = g.createLinearGradient(0, 0, 0, h);
+    lg.addColorStop(0, st[0]);
+    lg.addColorStop(0.45, st[1]);
+    lg.addColorStop(0.82, st[2]);
+    lg.addColorStop(1, st[3]);
+    g.fillStyle = lg;
+    g.fillRect(0, 0, w, h);
+  });
+}
+
+/**
+ * Chama em degradê saindo de `from` na direção `dir`: envelope largo + núcleo quente mais curto.
+ * Entra no enquadramento da miniatura (userData.frame), então nunca sai cortada.
+ */
+function flame(k: Kit, kind: FlameKind, from: THREE.Vector3, dir: THREE.Vector3, len: number, r: number, parent?: THREE.Object3D): void {
+  const d = dir.clone().normalize();
+  const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), d);
+  for (const [rs, ls, op] of [[1, 1, 0.85], [0.55, 0.62, 1]] as const) {
+    const mat = new THREE.MeshBasicMaterial({ map: flameTex(kind), transparent: true, opacity: op, depthWrite: false, toneMapped: false, side: THREE.DoubleSide });
+    const l = len * ls;
+    const c = from.clone().addScaledVector(d, l / 2);
+    const m = k.add(new THREE.ConeGeometry(r * rs, l, 20, 1, true), mat, c.x, c.y, c.z, parent);
+    m.quaternion.copy(q);
+    m.userData.frame = true;
+    m.renderOrder = 3;
+  }
+}
+
+/** Rótulo da lata de BF's Slipsauce: faixa amarela com bordas pretas, gota e o nome. */
+function slipsauceLabel(): THREE.Texture {
+  return canvasTex('label-oil', 512, 88, (g, w, h) => {
+    const bg = g.createLinearGradient(0, 0, 0, h);
+    bg.addColorStop(0, '#ffd23a');
+    bg.addColorStop(1, '#f08a00');
+    g.fillStyle = bg;
+    g.fillRect(0, 0, w, h);
+    g.fillStyle = '#140a02';
+    g.fillRect(0, 0, w, 9);
+    g.fillRect(0, h - 9, w, 9);
+    // faixas de perigo nas pontas (atrás da lata)
+    for (let x = -h; x < w; x += 28) {
+      if (x > w * 0.2 && x < w * 0.8) continue;
+      g.beginPath();
+      g.moveTo(x, h - 9);
+      g.lineTo(x + 14, h - 9);
+      g.lineTo(x + 14 + (h - 18), 9);
+      g.lineTo(x + (h - 18), 9);
+      g.fill();
+    }
+    // gota de óleo com brilho
+    const cx = w * 0.5 - 92;
+    const cy = h * 0.5;
+    g.beginPath();
+    g.moveTo(cx, cy - 24);
+    g.bezierCurveTo(cx + 6, cy - 10, cx + 15, cy, cx + 15, cy + 8);
+    g.arc(cx, cy + 8, 15, 0, Math.PI);
+    g.bezierCurveTo(cx - 15, cy, cx - 6, cy - 10, cx, cy - 24);
+    g.fill();
+    g.fillStyle = 'rgba(255,255,255,0.75)';
+    g.beginPath();
+    g.arc(cx - 5, cy + 7, 4, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = '#140a02';
+    g.textAlign = 'left';
+    g.textBaseline = 'middle';
+    g.font = '900 34px "Arial Black", Impact, sans-serif';
+    g.fillText('SLIPSAUCE', cx + 24, h * 0.42);
+    g.font = '700 13px Arial, sans-serif';
+    g.fillText("BF'S · EXTRA ESCORREGADIO", cx + 26, h * 0.76);
+  });
+}
+
+/** Mancha irregular e achatada (poça de óleo) deitada no plano XZ, com borda arredondada que brilha. */
+function puddleGeometry(rx: number, rz: number, seed: number): THREE.BufferGeometry {
+  const sh = new THREE.Shape();
+  const n = 40;
+  for (let i = 0; i <= n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    const r = 1 + 0.14 * Math.sin(3 * a + seed) + 0.08 * Math.sin(5 * a + seed * 2.3) + 0.04 * Math.sin(11 * a + seed);
+    const x = Math.cos(a) * r * rx;
+    const y = Math.sin(a) * r * rz;
+    if (i === 0) sh.moveTo(x, y);
+    else sh.lineTo(x, y);
+  }
+  return new THREE.ExtrudeGeometry(sh, { depth: 0.005, bevelEnabled: true, bevelThickness: 0.022, bevelSize: 0.035, bevelSegments: 4, curveSegments: 4 }).rotateX(-Math.PI / 2);
+}
+
 /** Monta a peça da loja com as mesmas peças que aparecem nos carros (Kit). */
 function buildItem(item: ShopItem): THREE.Group {
   const g = new THREE.Group();
@@ -497,60 +614,160 @@ function buildItem(item: ShopItem): THREE.Group {
   const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
   const glow = (c: number) => new THREE.MeshBasicMaterial({ color: c });
   switch (item) {
-    case 'laser':
-      k.plasmaRifle(-0.2, 0, 0, 1.3);
-      k.plasmaRifle(0.2, 0, 0, 1.3);
-      k.add(new THREE.BoxGeometry(0.7, 0.1, 0.5), k.trim, 0, -0.12, -0.2);
-      // disparos de plasma saindo dos canos
+    case 'laser': {
+      // VK Plasma Rifles: dois canos sobre um berço, disparando raios verdes (a cor do plasma no jogo)
+      k.add(new THREE.BoxGeometry(0.78, 0.12, 0.62), k.trim, 0, -0.14, -0.2);
+      k.add(new THREE.BoxGeometry(0.8, 0.04, 0.64), k.warn, 0, -0.07, -0.2);
+      k.add(new THREE.CylinderGeometry(0.1, 0.14, 0.14, 16), k.gunMetal, 0, -0.26, -0.2);
+      k.plasmaRifle(-0.2, 0, 0, 1.3, g, 1.15);
+      k.plasmaRifle(0.2, 0, 0, 1.3, g, 1.15);
       for (const x of [-0.2, 0.2]) {
-        k.add(new THREE.CapsuleGeometry(0.06, 0.34, 4, 10).rotateX(Math.PI / 2), glow(0xbff4ff), x, 0.02, 1.35 + (x > 0 ? 0.25 : 0));
-        k.add(new THREE.CapsuleGeometry(0.1, 0.4, 4, 10).rotateX(Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0x3ab8ff, transparent: true, opacity: 0.45, depthWrite: false }), x, 0.02, 1.35 + (x > 0 ? 0.25 : 0));
-      }
-      break;
-    case 'missile':
-      k.missilePod(0, 0, 0, 1.2);
-      // um míssil saindo do casulo
-      k.add(new THREE.CylinderGeometry(0.07, 0.07, 0.7, 12).rotateX(Math.PI / 2), k.steel, 0.35, 0.25, 0.6);
-      k.add(new THREE.ConeGeometry(0.07, 0.2, 12).rotateX(Math.PI / 2), k.tail, 0.35, 0.25, 1.05);
-      for (const r of [0, Math.PI / 2]) k.add(new THREE.BoxGeometry(0.28, 0.02, 0.14), k.warn, 0.35, 0.25, 0.3).rotation.z = r;
-      break;
-    case 'sundog':
-      k.sundogEmitter(0, 0, 0, 0.45);
-      break;
-    case 'oil':
-      k.slipsauceTank(0, 0.3, 0, 1.0);
-      k.add(new THREE.CylinderGeometry(0.7, 0.8, 0.02, 24), new THREE.MeshStandardMaterial({ color: 0x0a0a10, roughness: 0.05, metalness: 0.4 }), 0, -0.05, -0.5);
-      break;
-    case 'mine': {
-      k.add(new THREE.CylinderGeometry(0.4, 0.45, 0.2, 16), k.gunMetal, 0, 0, 0);
-      k.add(new THREE.CylinderGeometry(0.12, 0.12, 0.08, 12), k.tail, 0, 0.13, 0);
-      const claw = new THREE.ConeGeometry(0.06, 0.3, 6);
-      for (let i = 0; i < 8; i++) {
-        const r = (i / 8) * Math.PI * 2;
-        const m = k.add(claw, k.chrome, Math.cos(r) * 0.5, 0.02, Math.sin(r) * 0.5);
-        m.quaternion.setFromUnitVectors(V(0, 1, 0), V(Math.cos(r), 0.3, Math.sin(r)).normalize());
+        const z = 1.55 + (x > 0 ? 0.35 : 0);
+        k.add(new THREE.CapsuleGeometry(0.045, 0.32, 4, 12).rotateX(Math.PI / 2), glow(0xeaffef), x, 0.02, z);
+        flame(k, 'plasma', V(x, 0.02, z + 0.22), V(0, 0, -1), 0.75, 0.1);
       }
       break;
     }
-    case 'scatter':
-      k.scatterpack(0, 0, 0);
-      for (let i = 0; i < 3; i++) k.add(new THREE.SphereGeometry(0.1, 10, 8), k.tail, -0.4 + i * 0.4, -0.05, -0.7 - (i % 2) * 0.2);
-      break;
-    case 'nitro':
-      for (const x of [-0.18, 0.18]) {
-        k.add(new THREE.CylinderGeometry(0.16, 0.16, 1.0, 16).rotateX(Math.PI / 2), k.accent, x, 0, 0);
-        k.add(new THREE.CylinderGeometry(0.17, 0.17, 0.08, 16).rotateX(Math.PI / 2), k.warn, x, 0, 0.2);
-        k.add(new THREE.CylinderGeometry(0.08, 0.12, 0.2, 12).rotateX(Math.PI / 2), k.chrome, x, 0, -0.58);
+    case 'missile': {
+      // Rogue Missiles: casulo e um míssil já disparado, com rastro de fogo
+      k.missilePod(0, 0, 0, 1.2);
+      const white = new THREE.MeshPhysicalMaterial({ color: 0xf2f2f4, metalness: 0.2, roughness: 0.3, clearcoat: 1, clearcoatRoughness: 0.08 });
+      const my = 0.46;
+      const mz = 0.95;
+      k.add(new THREE.CylinderGeometry(0.1, 0.1, 0.78, 20).rotateX(Math.PI / 2), white, 0, my, mz);
+      k.add(new THREE.ConeGeometry(0.1, 0.26, 20).rotateX(Math.PI / 2), k.tail, 0, my, mz + 0.52);
+      k.add(new THREE.CylinderGeometry(0.103, 0.103, 0.06, 20).rotateX(Math.PI / 2), k.warn, 0, my, mz + 0.26);
+      k.add(new THREE.CylinderGeometry(0.08, 0.1, 0.08, 16).rotateX(Math.PI / 2), k.gunMetal, 0, my, mz - 0.43);
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+        const fin = k.add(new THREE.BoxGeometry(0.02, 0.2, 0.22), k.tail, Math.cos(a) * 0.14, my + Math.sin(a) * 0.14, mz - 0.28);
+        fin.rotation.z = a - Math.PI / 2;
       }
-      k.add(new THREE.ConeGeometry(0.16, 0.9, 12).rotateX(-Math.PI / 2), glow(0x7ad8ff), 0, 0, -1.1);
+      flame(k, 'fire', V(0, my, mz - 0.47), V(0, 0, -1), 0.8, 0.11);
       break;
-    case 'jump':
-      for (const x of [-0.3, 0.3]) {
-        k.jumpJet(x, 0, 0);
-        k.add(new THREE.ConeGeometry(0.14, 0.6, 12).rotateX(Math.PI), glow(0xffa040), x, -0.5, 0);
+    }
+    case 'sundog': {
+      // emissor Sundog e dois sóis teleguiados a caminho, com rastro
+      k.sundogEmitter(0, 0, 0, 0.45);
+      const halo = new THREE.MeshBasicMaterial({ color: 0xffa030, transparent: true, opacity: 0.32, depthWrite: false, toneMapped: false });
+      const balls: [number, number, number][] = [[0.15, 0.55, 0.75], [-0.25, 0.4, 1.2]];
+      for (const [x, y, z] of balls) {
+        k.add(new THREE.SphereGeometry(0.12, 18, 12), k.sundogGlow, x, y, z);
+        k.add(new THREE.SphereGeometry(0.2, 18, 12), halo, x, y, z).userData.frame = true;
+        const trail = new THREE.CatmullRomCurve3([V(0, 0.15, 0), V(x * 0.3, y * 0.9, z * 0.35), V(x, y, z - 0.12)]);
+        k.add(new THREE.TubeGeometry(trail, 24, 0.035, 8, false), halo, 0, 0, 0);
       }
-      k.add(new THREE.BoxGeometry(1.0, 0.08, 0.5), k.trim, 0, 0.18, 0);
       break;
+    }
+    case 'oil': {
+      // BF's Slipsauce: lata azul com rótulo, óleo escorrendo e poça preta espelhada (reflexo furta-cor)
+      const R = 0.34;
+      const H = 0.95;
+      const can = new THREE.MeshPhysicalMaterial({ color: 0x1d3c9a, metalness: 0.55, roughness: 0.28, clearcoat: 1, clearcoatRoughness: 0.08, envMapIntensity: 1.3 });
+      const oil = new THREE.MeshPhysicalMaterial({
+        color: 0x040408, metalness: 0.15, roughness: 0.03, clearcoat: 1, clearcoatRoughness: 0.02,
+        iridescence: 1, iridescenceIOR: 1.7, iridescenceThicknessRange: [180, 560], envMapIntensity: 2.4,
+      });
+      k.add(new THREE.CylinderGeometry(R, R, H, 40), can, 0, H / 2, 0);
+      for (const y of [0.03, H * 0.24, H * 0.76, H - 0.03]) k.add(new THREE.TorusGeometry(R + 0.01, 0.022, 8, 48).rotateX(Math.PI / 2), k.chrome, 0, y, 0);
+      // rótulo virado para a câmera da vitrine: o meio da textura fica em -z (ângulo π) e gira até o
+      // ângulo 1,32 rad, que é o lado da câmera com a peça girada em -0,6 rad (ver itemThumbnail)
+      const FRONT = 1.32;
+      const label = k.add(new THREE.CylinderGeometry(R + 0.008, R + 0.008, 0.36, 64, 1, true), new THREE.MeshStandardMaterial({ map: slipsauceLabel(), roughness: 0.4, metalness: 0.05 }), 0, H * 0.5, 0);
+      label.rotation.y = FRONT - Math.PI;
+      k.add(new THREE.CylinderGeometry(R - 0.03, R, 0.03, 40), k.steel, 0, H + 0.015, 0);
+      // bico cromado na frente e tampa vermelha atrás
+      const fx = Math.sin(FRONT) * (R - 0.12);
+      const fz = Math.cos(FRONT) * (R - 0.12);
+      k.add(new THREE.CylinderGeometry(0.055, 0.07, 0.12, 16), k.chrome, fx, H + 0.08, fz);
+      k.add(new THREE.CylinderGeometry(0.075, 0.075, 0.03, 16), k.tail, -fx, H + 0.05, -fz);
+      // óleo escorrendo pela lata (ao lado do rótulo) até a poça
+      const a0 = FRONT + 0.62;
+      const at = (a: number, r: number, y: number) => V(Math.sin(a) * r, y, Math.cos(a) * r);
+      const drip = new THREE.CatmullRomCurve3([at(a0, R - 0.02, H + 0.02), at(a0, R + 0.02, H * 0.8), at(a0 - 0.05, R + 0.025, H * 0.45), at(a0 - 0.1, R + 0.03, 0.04)]);
+      k.add(new THREE.TubeGeometry(drip, 32, 0.03, 10, false), oil, 0, 0, 0);
+      const drop = at(a0, R + 0.03, H * 0.62);
+      k.add(new THREE.SphereGeometry(0.045, 12, 10), oil, drop.x, drop.y, drop.z).scale.set(1, 1.5, 1);
+      // poça espalhada para a frente da lata, mais gotas soltas
+      k.add(puddleGeometry(0.62, 0.48, 1.3), oil, 0.42, -0.012, 0.12);
+      for (const [x, z, r] of [[1.12, 0.5, 0.07], [0.95, -0.42, 0.05], [1.2, -0.05, 0.04]] as const) k.add(puddleGeometry(r, r * 0.8, x * 7), oil, x, -0.012, z);
+      break;
+    }
+    case 'mine': {
+      // Bear Claw Mine: disco blindado, faixa de perigo, domo de sensor aceso e garras de aço
+      k.add(new THREE.CylinderGeometry(0.4, 0.46, 0.2, 32), k.gunMetal, 0, 0, 0);
+      k.add(new THREE.CylinderGeometry(0.465, 0.465, 0.05, 32), k.warn, 0, -0.03, 0);
+      k.add(new THREE.CylinderGeometry(0.3, 0.38, 0.06, 32), k.steel, 0, 0.12, 0);
+      k.add(new THREE.SphereGeometry(0.13, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2), k.tail, 0, 0.15, 0);
+      k.add(new THREE.TorusGeometry(0.14, 0.025, 8, 24).rotateX(Math.PI / 2), k.chrome, 0, 0.15, 0);
+      for (let i = 0; i < 6; i++) {
+        const r = (i / 6) * Math.PI * 2;
+        k.add(new THREE.SphereGeometry(0.03, 8, 6), k.chrome, Math.cos(r) * 0.25, 0.155, Math.sin(r) * 0.25);
+      }
+      const claw = new THREE.ConeGeometry(0.06, 0.34, 8);
+      for (let i = 0; i < 8; i++) {
+        const r = (i / 8) * Math.PI * 2;
+        const m = k.add(claw, k.chrome, Math.cos(r) * 0.55, 0.02, Math.sin(r) * 0.55);
+        m.quaternion.setFromUnitVectors(V(0, 1, 0), V(Math.cos(r), 0.35, Math.sin(r)).normalize());
+      }
+      break;
+    }
+    case 'scatter': {
+      // KO Scatterpack: a caixa de tubos e quatro minas pequenas espalhadas atrás, de luz vermelha acesa
+      k.scatterpack(0, 0.1, 0);
+      const mini = (x: number, y: number, z: number, tilt: number) => {
+        const m = new THREE.Group();
+        m.position.set(x, y, z);
+        m.rotation.set(tilt, 0, tilt * 0.6);
+        g.add(m);
+        k.add(new THREE.CylinderGeometry(0.11, 0.13, 0.07, 18), k.gunMetal, 0, 0, 0, m);
+        k.add(new THREE.CylinderGeometry(0.135, 0.135, 0.025, 18), k.warn, 0, -0.01, 0, m);
+        k.add(new THREE.SphereGeometry(0.04, 10, 8), k.tail, 0, 0.04, 0, m);
+      };
+      mini(-0.4, -0.12, -0.62, 0.3);
+      mini(0.05, 0.05, -0.85, -0.5);
+      mini(0.42, -0.14, -0.58, 0.15);
+      mini(0.15, -0.16, -1.15, 0.05);
+      break;
+    }
+    case 'nitro': {
+      // turbo: duas garrafas azuis envernizadas, válvula com manômetro e bocal com chama azul em degradê
+      const bottle = new THREE.MeshPhysicalMaterial({ color: 0x1c5fd0, metalness: 0.45, roughness: 0.26, clearcoat: 1, clearcoatRoughness: 0.06, envMapIntensity: 1.3 });
+      const dial = new THREE.MeshStandardMaterial({ color: 0xf4f4ee, roughness: 0.4 });
+      for (const x of [-0.2, 0.2]) {
+        k.add(new THREE.CapsuleGeometry(0.17, 0.72, 8, 24).rotateX(Math.PI / 2), bottle, x, 0, 0.1);
+        for (const z of [-0.08, 0.3]) k.add(new THREE.CylinderGeometry(0.176, 0.176, 0.05, 24).rotateX(Math.PI / 2), z > 0 ? k.warn : k.chrome, x, 0, z);
+        k.add(new THREE.CylinderGeometry(0.05, 0.05, 0.12, 12), k.chrome, x, 0.2, 0.42);
+        k.add(new THREE.CylinderGeometry(0.07, 0.07, 0.03, 16).rotateX(Math.PI / 2), k.chrome, x, 0.27, 0.46);
+        k.add(new THREE.CircleGeometry(0.058, 16), dial, x, 0.27, 0.476);
+        k.tube(V(x, 0, -0.42), V(0, 0, -0.58), 0.045, k.chrome);
+      }
+      k.add(new THREE.CylinderGeometry(0.09, 0.16, 0.22, 16).rotateX(-Math.PI / 2), k.gunMetal, 0, 0, -0.66);
+      k.add(new THREE.CircleGeometry(0.13, 16).rotateY(Math.PI), glow(0xbfe8ff), 0, 0, -0.775);
+      flame(k, 'blue', V(0, 0, -0.78), V(0, 0, -1), 1.0, 0.15);
+      break;
+    }
+    case 'jump': {
+      // Locust Jump Jets: par de motores com bocal cromado em sino, inclinados, e chamas em degradê
+      const pair = new THREE.Group();
+      g.add(pair);
+      const bell = k.chrome.clone();
+      bell.side = THREE.DoubleSide;
+      k.add(new THREE.BoxGeometry(0.4, 0.1, 1.02), k.trim, 0, 0.44, 0, pair);
+      k.add(new THREE.BoxGeometry(0.42, 0.04, 1.04), k.warn, 0, 0.5, 0, pair);
+      for (const z of [-0.28, 0.28]) {
+        k.add(new THREE.CylinderGeometry(0.17, 0.17, 0.34, 24), k.accent, 0, 0.22, z, pair);
+        k.add(new THREE.CylinderGeometry(0.178, 0.178, 0.05, 24), k.warn, 0, 0.32, z, pair);
+        k.add(new THREE.TorusGeometry(0.172, 0.022, 8, 28).rotateX(Math.PI / 2), k.chrome, 0, 0.06, z, pair);
+        const prof = [new THREE.Vector2(0.11, 0.05), new THREE.Vector2(0.125, -0.04), new THREE.Vector2(0.16, -0.13), new THREE.Vector2(0.215, -0.24)];
+        k.add(new THREE.LatheGeometry(prof, 28), bell, 0, 0, z, pair);
+        k.add(new THREE.CircleGeometry(0.12, 20).rotateX(Math.PI / 2), k.jetGlow, 0, -0.05, z, pair);
+        flame(k, 'fire', V(0, -0.2, z), V(0, -1, 0), 0.95, 0.18, pair);
+      }
+      // bocais inclinados para a câmera: mostram o sino por dentro e a chama inteira
+      pair.rotation.z = 0.42;
+      break;
+    }
     case 'engine':
       k.add(new THREE.BoxGeometry(0.8, 0.5, 1.0), k.gunMetal, 0, 0, 0);
       for (const x of [-0.26, 0.26]) {
@@ -664,4 +881,6 @@ export function releaseThumbRenderer(): void {
   floorAlpha?.dispose();
   shadowTex?.dispose();
   floorAlpha = shadowTex = null;
+  for (const t of fxTex.values()) t.dispose();
+  fxTex.clear();
 }

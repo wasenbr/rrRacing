@@ -23,6 +23,9 @@ mono, com silêncio aparado e volume normalizado.
 - Kenney: https://kenney.nl/assets/sci-fi-sounds e https://kenney.nl/assets/impact-sounds
 - CC0: https://creativecommons.org/publicdomain/zero/1.0/
 
+Fogos e multidão do final da campanha (assobio, estouro, crepitar, aplauso, torcida) são 100%
+sintetizados em `src/audio/sfx.ts` (só reaproveitam as explosões Kenney CC0 acima por baixo do estouro).
+
 ## Motor (`motor/`)
 
 | Arquivo | Origem | Autor | Licença |

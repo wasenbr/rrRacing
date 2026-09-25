@@ -121,7 +121,22 @@ function dirt(ctx: BaseAudioContext, out: AudioNode, amount = 2.5): WaveShaperNo
   return w;
 }
 
-type SampleOpts = { vol?: number; rate?: number; offset?: number; duration?: number; t?: number; fadeOut?: number };
+/**
+ * Soco sub-grave (50–70 Hz, ~150 ms): o "peso" de batidas, impactos e pousos, que as amostras
+ * (gravadas com microfone perto de chapa) não têm. Senoide caindo levemente, saturada de leve para
+ * o harmônico de 2ª ordem aparecer em caixas pequenas (celular).
+ */
+function subThump(ctx: BaseAudioContext, out: AudioNode, peak: number, t = ctx.currentTime, f = 64): void {
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(peak, t + 0.004);
+  g.gain.setValueAtTime(peak, t + 0.05);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+  g.connect(dirt(ctx, out, 1.6));
+  osc(ctx, 'sine', f * vary(0.06), f * 0.78, 0.16, g, t);
+}
+
+type SampleOpts ={ vol?: number; rate?: number; offset?: number; duration?: number; t?: number; fadeOut?: number };
 
 /** Toca uma amostra (sorteia se vier uma lista). Retorna false se ainda não estiver carregada. */
 function sample(a: AudioOut, out: AudioNode, name: SfxName | SfxName[], o: SampleOpts = {}): boolean {
@@ -364,6 +379,7 @@ export function sfxHit(vol = 1, pan = 0): void {
   sample(a, out, 'batida_grave', { vol: 0.7, rate: 0.8 * p }); // corpo grave do impacto
   if (!has) metalRing(ctx, out, 430 * p, 0.55, 0.35);
   synthLayer(ctx, out, 'impacto', 0.2, hitSynth, p);
+  subThump(ctx, out, 0.2);
 }
 
 function hitSynth(ctx: BaseAudioContext, out: AudioNode, t: number, p = 1): void {
@@ -376,9 +392,10 @@ export function sfxDrop(vol = 1, kind: string = 'mine', pan = 0): void {
   const a = audio();
   if (!a || vol < 0.02) return;
   const { ctx } = a;
-  const out = voice(a, vol * 2.4, pan, vol);
+  // subido na rodada 10 (mina RMS -27 dB): carga caindo tem que se ouvir no meio da corrida
+  const out = voice(a, vol * (kind === 'oil' ? 3.4 : 4), pan, vol);
   const t = ctx.currentTime;
-  punch(vol, 0.35, 0.35);
+  punch(vol, 0.4, 0.35);
   sample(a, out, 'batida_grave', { vol: 0.5, rate: 0.8 * vary(0.1) }); // baque da carga caindo
   if (kind === 'oil') {
     if (!sample(a, out, 'oleo', { vol: 1, rate: 0.75 * vary(0.1) })) {
@@ -400,6 +417,7 @@ export function sfxDrop(vol = 1, kind: string = 'mine', pan = 0): void {
     const r = vary(0.1) * (scatter ? 1.15 : 1);
     if (!sample(a, out, 'mina_clunk', { vol: 0.95, rate: r, t: t + dt })) metalRing(ctx, out, 620 * r, 0.3, 0.18, t + dt);
     osc(ctx, 'sine', 150 * r, 50, 0.14, env(ctx, out, 0.8, 0.002, 0.15, t + dt), t + dt);
+    subThump(ctx, out, 0.3, t + dt, 62);
   }
   // bipes de armar (sinal de perigo)
   const base = scatter ? 0.3 : 0.25;
@@ -486,6 +504,7 @@ export function sfxBump(vol = 1, pan = 0): void {
     metalRing(ctx, out, 240 * p, 0.45, 0.28);
   }
   osc(ctx, 'sine', 100 * p, 42, 0.12, env(ctx, out, 0.8, 0.002, 0.13));
+  subThump(ctx, out, 0.75, ctx.currentTime, 58);
 }
 
 /** Batida na mureta (raspão metálico). */
@@ -515,6 +534,7 @@ export function sfxLand(vol = 1, pan = 0): void {
   osc(ctx, 'sine', 95 * vary(0.1), 38, 0.2, env(ctx, out, 1, 0.003, 0.22));
   noiseSrc(ctx, filter(ctx, 'lowpass', 500, 0.7, env(ctx, out, 0.6, 0.003, 0.12)), 0.15);
   osc(ctx, 'sawtooth', 260, 180, 0.18, filter(ctx, 'bandpass', 700, 6, env(ctx, out, 0.12, 0.02, 0.16)));
+  subThump(ctx, out, 0.6, ctx.currentTime, 55);
 }
 
 /** Carro caindo da pista: assobio descendo e baque distante. */
@@ -522,10 +542,14 @@ export function sfxFall(vol = 1, pan = 0): void {
   const a = audio();
   if (!a || vol < 0.05) return;
   const { ctx } = a;
-  const out = voice(a, vol, pan, vol);
+  // subido na rodada 10 (pico -10,6 dB): assobio encorpado e baque grave no fim
+  const out = voice(a, vol * 2.4, pan, vol);
   const t = ctx.currentTime;
   osc(ctx, 'sine', 1400, 250, 1.1, env(ctx, out, 0.25, 0.05, 1.05));
-  sample(a, out, 'explosao_curta_b', { vol: 0.5, rate: 0.7, t: t + 1.1 });
+  osc(ctx, 'triangle', 700, 125, 1.1, filter(ctx, 'lowpass', 1800, 0.7, env(ctx, out, 0.1, 0.05, 1.05)));
+  sample(a, out, 'explosao_curta_b', { vol: 0.6, rate: 0.7, t: t + 1.1 });
+  sample(a, out, 'batida_grave', { vol: 0.5, rate: 0.6, t: t + 1.1 });
+  subThump(ctx, out, 0.5, t + 1.1, 52);
 }
 
 /**
@@ -538,11 +562,12 @@ export function sfxSkid(vol = 1, pan = 0): void {
   if (!a || vol < 0.05) return;
   const { ctx } = a;
   // subido na avaliação de som (estava -38 dB RMS, sumia na mixagem)
-  const out = voice(a, vol * 0.45, pan, vol);
+  // rodada 10: pico -12,4 dB → ~-3 dB (x3) e chiado mais longo (~1,3 s, o carro rodando inteiro)
+  const out = voice(a, vol * 1.35, pan, vol);
   const t = ctx.currentTime;
   const p = vary(0.06);
-  const hold = 0.55;
-  const tail = 0.28;
+  const hold = 0.9;
+  const tail = 0.4;
   // envelope com sustentação: sobe rápido, segura ~0,45 s e cai
   const sus = ctx.createGain();
   sus.gain.setValueAtTime(0.0001, t);
@@ -696,4 +721,250 @@ export function sfxBurn(vol = 1, pan = 0): void {
     const tt = t + Math.random() * 0.4;
     noiseSrc(ctx, filter(ctx, 'bandpass', 600 + Math.random() * 2200, 3, env(ctx, out, 0.5, 0.001, 0.015, tt)), 0.03, tt);
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* Final da campanha: fogos, multidão                                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Crepitar dos fogos (~0,8 s, estéreo): centenas de cliques de ruído agudo (0,3–2 ms) espalhados
+ * em volta do `pan`, cada vez mais esparsos e fracos. Um buffer só por estouro (barato no celular).
+ */
+function crackleBuffer(ctx: BaseAudioContext, pan: number, len = 0.85): AudioBuffer {
+  const sr = ctx.sampleRate;
+  const n = Math.ceil(sr * len);
+  const buf = ctx.createBuffer(2, n, sr);
+  const L = buf.getChannelData(0);
+  const R = buf.getChannelData(1);
+  const clicks = 260 + Math.floor(Math.random() * 120);
+  for (let i = 0; i < clicks; i++) {
+    // mais cliques no começo (a estrela se abre e vai apagando)
+    const u = Math.pow(Math.random(), 1.6);
+    const start = Math.floor(u * (n - sr * 0.004));
+    const w = Math.floor(sr * (0.0003 + Math.random() * 0.0017));
+    const amp = (1 - u * 0.85) * (0.3 + Math.random() * 0.7);
+    const p = Math.max(-1, Math.min(1, pan + (Math.random() * 2 - 1) * 0.6));
+    const gl = Math.cos(((p + 1) * Math.PI) / 4);
+    const gr = Math.sin(((p + 1) * Math.PI) / 4);
+    let prev = 0;
+    for (let k = 0; k < w; k++) {
+      // ruído "diferenciado" (agudo) com queda exponencial
+      const r = Math.random() * 2 - 1;
+      const v = (r - prev) * 0.5 * amp * Math.exp((-4 * k) / w);
+      prev = r;
+      L[start + k] += v * gl;
+      R[start + k] += v * gr;
+    }
+  }
+  return buf;
+}
+
+function panned(ctx: BaseAudioContext, out: AudioNode, pan: number, vol: number): GainNode {
+  const g = ctx.createGain();
+  g.gain.value = vol;
+  const p = ctx.createStereoPanner();
+  p.pan.value = Math.max(-1, Math.min(1, pan));
+  g.connect(p);
+  p.connect(out);
+  return g;
+}
+
+/**
+ * Foguete de fogos subindo: assobio (tom subindo com vibrato) + chiado do propelente.
+ * Devolve quanto tempo (s) até o estouro.
+ */
+export function sfxFireworkLaunch(vol = 1, pan = 0, out?: AudioNode): number {
+  const a = audio();
+  if (!a) return 0.8;
+  const { ctx } = a;
+  const t = ctx.currentTime;
+  const rise = 0.7 + Math.random() * 0.45;
+  const dest = panned(ctx, out ?? a.out, pan * 0.6, vol);
+  const f0 = 700 + Math.random() * 300;
+  const whistle = ctx.createGain();
+  whistle.gain.setValueAtTime(0.0001, t);
+  whistle.gain.exponentialRampToValueAtTime(0.16, t + 0.08);
+  whistle.gain.setValueAtTime(0.16, t + rise - 0.15);
+  whistle.gain.exponentialRampToValueAtTime(0.0001, t + rise);
+  whistle.connect(dest);
+  const o = osc(ctx, 'sine', f0, f0 * (2.6 + Math.random() * 0.6), rise, whistle, t);
+  const vib = ctx.createOscillator();
+  vib.frequency.value = 9 + Math.random() * 4;
+  const depth = ctx.createGain();
+  depth.gain.value = f0 * 0.03;
+  vib.connect(depth);
+  depth.connect(o.frequency);
+  vib.start(t);
+  vib.stop(t + rise);
+  // chiado do foguete: ruído em banda subindo
+  const hiss = ctx.createBiquadFilter();
+  hiss.type = 'bandpass';
+  hiss.Q.value = 1.4;
+  hiss.frequency.setValueAtTime(1800, t);
+  hiss.frequency.exponentialRampToValueAtTime(5200, t + rise);
+  hiss.connect(env(ctx, dest, 0.22, 0.05, rise, t));
+  noiseSrc(ctx, hiss, rise, t);
+  return rise;
+}
+
+/**
+ * Estouro de fogos: baque grave (soco 45–70 Hz + ruído abafado), estalo, a amostra de explosão
+ * curta por baixo e o crepitar agudo (~0,8 s) espalhado no estéreo. Abaixa a música a cada estouro.
+ */
+export function sfxFireworkBurst(vol = 1, pan = 0, out?: AudioNode): void {
+  const a = audio();
+  if (!a) return;
+  const { ctx } = a;
+  const t = ctx.currentTime;
+  const dest = panned(ctx, out ?? a.out, pan, vol);
+  duck(0.7 * Math.min(1, vol), 0.9, 3 * Math.min(1, vol));
+  // baque grave
+  subThump(ctx, dest, 1.1, t, 68);
+  osc(ctx, 'sine', 110 * vary(0.08), 38, 0.5, env(ctx, dest, 0.9, 0.003, 0.55, t), t);
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.Q.value = 0.7;
+  lp.frequency.setValueAtTime(2600, t);
+  lp.frequency.exponentialRampToValueAtTime(160, t + 0.6);
+  lp.connect(env(ctx, dirt(ctx, dest, 2.5), 0.9, 0.002, 0.7, t));
+  noiseSrc(ctx, lp, 0.75, t, 0.6);
+  // estalo seco do estouro
+  noiseSrc(ctx, filter(ctx, 'highpass', 1800, 0.7, env(ctx, dirt(ctx, dest, 3), 0.8, 0.0005, 0.03, t)), 0.05, t);
+  sample(a, dest, ['explosao_curta_a', 'explosao_curta_b'], { vol: 0.55, rate: 0.8 * vary(0.1) });
+  // crepitar: começa logo depois do estouro
+  const src = ctx.createBufferSource();
+  src.buffer = crackleBuffer(ctx, pan);
+  const cg = ctx.createGain();
+  cg.gain.value = 0.9 * vol;
+  const hp = ctx.createBiquadFilter();
+  hp.type = 'highpass';
+  hp.frequency.value = 2500;
+  src.connect(hp);
+  hp.connect(cg);
+  cg.connect(out ?? a.out);
+  src.start(t + 0.08 + Math.random() * 0.05);
+}
+
+/**
+ * Multidão: aplauso (cliques de palmas densos, 1–3 kHz, estéreo largo) + rugido de torcida (ruído
+ * em formantes de "ahh" ~720/1150 Hz com ondas lentas de volume) + assobios. Sobe em ~1 s, fica
+ * `seconds` e some em ~2 s. Tudo em buffers e poucos nós (leve no celular).
+ */
+export function sfxCrowd(seconds = 9, vol = 1, out?: AudioNode): void {
+  const a = audio();
+  if (!a) return;
+  const { ctx } = a;
+  const t = ctx.currentTime;
+  const sr = ctx.sampleRate;
+  const end = t + seconds + 2;
+  const dest = ctx.createGain();
+  dest.gain.setValueAtTime(0.0001, t);
+  dest.gain.exponentialRampToValueAtTime(vol, t + 1);
+  dest.gain.setValueAtTime(vol, t + seconds);
+  dest.gain.exponentialRampToValueAtTime(0.0001, end);
+  dest.connect(out ?? a.out);
+  // palmas: loop de 2,5 s estéreo
+  const n = Math.ceil(sr * 2.5);
+  const clap = ctx.createBuffer(2, n, sr);
+  for (let ch = 0; ch < 2; ch++) {
+    const d = clap.getChannelData(ch);
+    for (let i = 0; i < 1400; i++) {
+      const s = Math.floor(Math.random() * n);
+      const w = Math.floor(sr * (0.004 + Math.random() * 0.008));
+      const amp = 0.2 + Math.random() * 0.5;
+      for (let k = 0; k < w; k++) d[(s + k) % n] += (Math.random() * 2 - 1) * amp * Math.exp((-5 * k) / w);
+    }
+  }
+  const cs = ctx.createBufferSource();
+  cs.buffer = clap;
+  cs.loop = true;
+  const cgain = ctx.createGain();
+  cgain.gain.value = 0.5;
+  cgain.connect(dest);
+  cs.connect(filter(ctx, 'bandpass', 1800, 0.6, cgain));
+  cs.start(t);
+  cs.stop(end + 0.1);
+  // rugido: formantes sobre ruído, com ondas lentas (a torcida "puxando" o grito)
+  const roar = ctx.createGain();
+  roar.gain.value = 0.55;
+  roar.connect(dest);
+  const swell = ctx.createOscillator();
+  swell.frequency.value = 0.35;
+  const sd = ctx.createGain();
+  sd.gain.value = 0.2;
+  swell.connect(sd);
+  sd.connect(roar.gain);
+  swell.start(t);
+  swell.stop(end + 0.1);
+  for (const [f, q, g] of [[720, 3, 1], [1150, 4, 0.7], [320, 1.5, 0.5]] as const) {
+    const s = ctx.createBufferSource();
+    s.buffer = noise(ctx);
+    s.loop = true;
+    s.playbackRate.value = 0.9 + Math.random() * 0.2;
+    const gg = ctx.createGain();
+    gg.gain.value = g;
+    gg.connect(roar);
+    s.connect(filter(ctx, 'bandpass', f, q, gg));
+    s.start(t, Math.random());
+    s.stop(end + 0.1);
+  }
+  // assobios de torcida espalhados
+  for (let i = 0; i < 5; i++) {
+    const tt = t + 0.6 + Math.random() * seconds * 0.8;
+    const f = 1700 + Math.random() * 900;
+    const w = panned(ctx, dest, Math.random() * 1.6 - 0.8, 1);
+    osc(ctx, 'sine', f, f * (Math.random() < 0.5 ? 1.35 : 0.8), 0.45, env(ctx, w, 0.06, 0.05, 0.45, tt), tt);
+  }
+}
+
+/** Fogos do final: roteiro [segundos, ação] (o jogo agenda em tempo real; a evidência, no relógio offline). */
+export interface FinaleShow {
+  cues: [number, () => void][];
+  /** cala o que ainda estiver tocando (saiu da tela) */
+  stop: () => void;
+}
+
+/**
+ * Final da campanha (item 58): 10 salvas de fogos com volume alto (a última tripla, algumas
+ * duplas), pan aleatório e a multidão por baixo. Cada estouro abaixa a música (duck) e realça os
+ * efeitos para saltar na mixagem. `later(s, fn)` agenda o estouro depois da subida do foguete
+ * (padrão: setTimeout; a gravação offline passa o próprio agendador).
+ */
+export function finaleShow(later: (seconds: number, fn: () => void) => void = (s, fn) => window.setTimeout(fn, s * 1000)): FinaleShow {
+  const a = audio();
+  if (!a) return { cues: [], stop: () => {} };
+  const bus = a.ctx.createGain();
+  bus.connect(a.out);
+  let live = true;
+  const cues: [number, () => void][] = [[0, () => sfxCrowd(10, 0.55, bus)]];
+  let at = 0.2;
+  for (let i = 0; i < 10; i++) {
+    const shots = i === 9 ? 3 : i % 3 === 2 ? 2 : 1;
+    for (let k = 0; k < shots; k++) {
+      const pan = Math.random() * 1.6 - 0.8;
+      const vol = 0.8 + Math.random() * 0.2;
+      cues.push([
+        at + k * 0.22,
+        () => {
+          if (!live) return;
+          const rise = sfxFireworkLaunch(vol * 0.8, pan, bus);
+          later(rise, () => {
+            if (live) sfxFireworkBurst(vol, pan, bus);
+          });
+        },
+      ]);
+    }
+    at += 0.75 + Math.random() * 0.35;
+  }
+  return {
+    cues,
+    stop: () => {
+      live = false;
+      const t = a.ctx.currentTime;
+      bus.gain.cancelScheduledValues(t);
+      bus.gain.setValueAtTime(bus.gain.value, t);
+      bus.gain.linearRampToValueAtTime(0, t + 0.3);
+    },
+  };
 }

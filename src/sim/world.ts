@@ -7,19 +7,21 @@ import { CAR_SCALE, createVehicleState, forwardSpeed, stepVehicle, type Assist, 
 
 /** Parâmetros das armas (dano em pontos de blindagem). */
 export const WEAPONS = {
-  /** VK Plasma Rifles: bola de plasma rápida, reta, dano médio */
-  laser: { speed: 85, life: 0.8, damage: 17, knock: 3, hop: 0, turnRate: 0 },
-  /** Rogue Missiles: a arma mais forte — teleguiado suave para a frente, joga o alvo para cima */
-  missile: { speed: 58, life: 2.4, damage: 30, knock: 9, hop: 7, turnRate: 2.2 },
-  /** Sundog Beams: lento, persegue o alvo em qualquer direção (até para trás), pouco dano; some na mureta */
-  sundog: { speed: 42, life: 2.2, damage: 14, knock: 2, hop: 0, turnRate: 2.5 },
+  /** VK Plasma Rifles: bola de plasma rápida, reta, dano médio (arma inicial: precisa render tanto quanto as outras) */
+  laser: { speed: 85, life: 1.05, damage: 25, knock: 3.5, hop: 0, turnRate: 0 },
+  /** Rogue Missiles: a arma mais forte — teleguiado suave para a frente, joga o alvo para cima.
+   *  `maxTurn`: a curva total fica num cone em torno da direção do disparo (dá para desviar) */
+  missile: { speed: 58, life: 2.4, damage: 30, knock: 9, hop: 7, turnRate: 1.4, maxTurn: 0.12 },
+  /** Sundog Beams: lento, persegue o alvo em qualquer direção (até para trás), pouco dano; some na mureta.
+   *  `chase`: só persegue nos primeiros segundos, depois segue reto (dá para fugir dele) */
+  sundog: { speed: 42, life: 2.2, damage: 14, knock: 2, hop: 0, turnRate: 1.7, chase: 1.2 },
   /** Bear Claw Mines */
   mine: { damage: 32, hop: 9, radius: 1.6, armTime: 0.6, life: 40 },
   /** KO Scatterpack: leque de minas pequenas atrás do carro */
   scatter: { count: 4, spread: 3.2, damage: 12, hop: 6, radius: 1.1, armTime: 0.35, life: 25 },
-  // óleo (BF's Slipsauce): mancha pequena e desviável; dura 45 s (dá para cair no próprio óleo na
-  // volta seguinte) e cada carro tem no máximo OIL_PER_CAR manchas. Esteiras e aerodeslizador giram metade.
-  oil: { radius: 1.35, life: 45, spinTime: 0.8, minSpeed: 12 },
+  // óleo (BF's Slipsauce): mancha pequena e desviável; dura 25 s ou some depois de `spins` giros, e
+  // cada carro tem no máximo OIL_PER_CAR manchas. Esteiras e aerodeslizador giram metade.
+  oil: { radius: 1.35, life: 25, spinTime: 0.8, minSpeed: 12, spins: 2 },
   /** poças fixas por planeta (original): gosma verde freia muito (Drakonis), poça azul/óleo preto
    *  fazem derrapar (Bogmire/New Mojave), neve freia (Nho), lava queima a blindagem (Inferno) */
   slime: { radius: 2.3, drag: 2.6 },
@@ -123,6 +125,8 @@ export interface Projectile {
   speed: number;
   life: number;
   pieceIndex: number;
+  /** direção do disparo (o míssil só curva num cone em torno dela) */
+  aim?: number;
 }
 
 export interface Hazard {
@@ -137,6 +141,8 @@ export interface Hazard {
   group?: number;
   /** máscara de bits (1 << id) dos carros que já levaram uma mina deste leque (as irmãs os ignoram) */
   spared?: number;
+  /** óleo: quantos carros já rodaram nesta mancha */
+  spins?: number;
 }
 
 export interface Pickup {
@@ -362,7 +368,7 @@ function fire(world: World, r: Racer): void {
   const y = car.y + 1.0;
   // o sundog não herda a velocidade do carro (é lento e persegue)
   const speed = w.speed + (kind === 'sundog' ? base * 0.3 : base);
-  world.projectiles.push({ id: world.nextId++, kind, owner: r.id, x, y, z, heading: car.heading, speed, life: w.life, pieceIndex: car.pieceIndex });
+  world.projectiles.push({ id: world.nextId++, kind, owner: r.id, x, y, z, heading: car.heading, speed, life: w.life, pieceIndex: car.pieceIndex, aim: car.heading });
   world.events.push({ type: 'fire', racer: r.id, kind, x, y, z });
 }
 
@@ -403,7 +409,8 @@ function stepProjectiles(world: World, dt: number): void {
   const alive: Projectile[] = [];
   for (const p of world.projectiles) {
     p.life -= dt;
-    if (p.kind === 'missile' || p.kind === 'sundog') {
+    // o sundog persegue só no começo; depois segue reto
+    if (p.kind === 'missile' || (p.kind === 'sundog' && WEAPONS.sundog.life - p.life < WEAPONS.sundog.chase)) {
       // míssil: teleguiado suave num cone à frente; sundog: persegue o mais próximo em qualquer direção
       const cone = p.kind === 'missile' ? 0.6 : Math.PI;
       let best: Racer | null = null;
@@ -424,6 +431,8 @@ function stepProjectiles(world: World, dt: number): void {
         const want = Math.atan2(best.car.x - p.x, best.car.z - p.z);
         const diff = wrapAngle(want - p.heading);
         p.heading += clamp(diff, -turn * dt, turn * dt);
+        // o míssil não faz curva maior que o cone em torno do disparo
+        if (p.kind === 'missile' && p.aim !== undefined) p.heading = p.aim + clamp(wrapAngle(p.heading - p.aim), -WEAPONS.missile.maxTurn, WEAPONS.missile.maxTurn);
       }
     }
     p.x += forwardX(p.heading) * p.speed * dt;
@@ -521,6 +530,11 @@ function stepHazards(world: World, dt: number): void {
             r.spinTotal = r.spinTime;
             r.oilGrace = r.spinTime + 1.2;
             world.events.push({ type: 'spin', racer: r.id });
+            h.spins = (h.spins ?? 0) + 1;
+            if (h.spins >= WEAPONS.oil.spins) {
+              dead = true;
+              break;
+            }
           }
         }
       }
@@ -551,6 +565,44 @@ function stepPickups(world: World, dt: number): void {
   }
 }
 
+/**
+ * Contato entre dois carros (a regra das batidas): empurra para fora e troca velocidade na direção
+ * do contato, com um giro leve. Devolve a velocidade de impacto (> 0) ou 0 se não houve batida com
+ * aproximação, -1 se não se tocam. Exportada para a previsão do convidado online (mesma regra).
+ */
+export function carContact(a: VehicleState, massA: number, b: VehicleState, massB: number): number {
+  const dx = b.x - a.x;
+  const dz = b.z - a.z;
+  const d = Math.hypot(dx, dz);
+  const min = CAR_RADIUS * 2;
+  if (d >= min || d < 1e-6 || Math.abs(a.y - b.y) > 1.5) return -1;
+  const nx = dx / d;
+  const nz = dz / d;
+  // razão de massas limitada: o carro pesado empurra, mas não atropela os leves no tráfego
+  const ma = massA;
+  const mb = clamp(massB, ma / 1.25, ma * 1.25);
+  const pen = min - d;
+  a.x -= nx * pen * (mb / (ma + mb));
+  a.z -= nz * pen * (mb / (ma + mb));
+  b.x += nx * pen * (ma / (ma + mb));
+  b.z += nz * pen * (ma / (ma + mb));
+  const rel = (b.vx - a.vx) * nx + (b.vz - a.vz) * nz;
+  if (rel >= 0) return 0;
+  const j = (-(1 + 0.5) * rel) / (1 / ma + 1 / mb);
+  a.vx -= (j / ma) * nx;
+  a.vz -= (j / ma) * nz;
+  b.vx += (j / mb) * nx;
+  b.vz += (j / mb) * nz;
+  // pancada lateral faz o carro girar um pouco (quanto mais leve, mais gira)
+  const yaw = (c: VehicleState, sign: number, m: number) => {
+    const side = (forwardX(c.heading) * nz - forwardZ(c.heading) * nx) * sign;
+    c.heading += clamp((side * j) / m, -6, 6) * 0.012;
+  };
+  yaw(a, 1, ma);
+  yaw(b, -1, mb);
+  return -rel;
+}
+
 /** Batidas entre carros: empurra para fora e troca velocidade na direção do contato. */
 function collideCars(world: World): void {
   const rs = world.racers;
@@ -559,54 +611,35 @@ function collideCars(world: World): void {
       const a = rs[i];
       const b = rs[j];
       if (!a.alive || !b.alive || a.finishPlace || b.finishPlace) continue;
-      const dx = b.car.x - a.car.x;
-      const dz = b.car.z - a.car.z;
-      const d = Math.hypot(dx, dz);
-      const min = CAR_RADIUS * 2;
-      if (d >= min || d < 1e-6 || Math.abs(a.car.y - b.car.y) > 1.5) continue;
-      const nx = dx / d;
-      const nz = dz / d;
-      // razão de massas limitada: o carro pesado empurra, mas não atropela os leves no tráfego
-      const ma = a.spec.mass;
-      const mb = clamp(b.spec.mass, ma / 1.25, ma * 1.25);
-      const pen = min - d;
-      a.car.x -= nx * pen * (mb / (ma + mb));
-      a.car.z -= nz * pen * (mb / (ma + mb));
-      b.car.x += nx * pen * (ma / (ma + mb));
-      b.car.z += nz * pen * (ma / (ma + mb));
-      const rel = (b.car.vx - a.car.vx) * nx + (b.car.vz - a.car.vz) * nz;
-      if (rel < 0) {
-        const j = (-(1 + 0.5) * rel) / (1 / ma + 1 / mb);
-        a.car.vx -= (j / ma) * nx;
-        a.car.vz -= (j / ma) * nz;
-        b.car.vx += (j / mb) * nx;
-        b.car.vz += (j / mb) * nz;
-        // pancada lateral faz o carro girar um pouco (quanto mais leve, mais gira)
-        const yaw = (c: VehicleState, sign: number, m: number) => {
-          const side = (forwardX(c.heading) * nz - forwardZ(c.heading) * nx) * sign;
-          c.heading += clamp((side * j) / m, -6, 6) * 0.012;
-        };
-        yaw(a.car, 1, ma);
-        yaw(b.car, -1, mb);
-        if (-rel > 3) world.events.push({ type: 'bump', a: a.id, b: b.id, strength: -rel });
-        // batida forte fere os dois carros (original); o mais pesado sofre menos
-        if (-rel > BUMP_DAMAGE_START && world.started) {
-          const dmg = (-rel - BUMP_DAMAGE_START) * BUMP_DAMAGE_PER_MS;
-          damage(world, a, b.id, dmg * (mb / (ma + mb)) * 2, false);
-          damage(world, b, a.id, dmg * (ma / (ma + mb)) * 2, false);
-        }
+      const hit = carContact(a.car, a.spec.mass, b.car, b.spec.mass);
+      if (hit <= 0) continue;
+      if (hit > 3) world.events.push({ type: 'bump', a: a.id, b: b.id, strength: hit });
+      // batida forte fere os dois carros (original); o mais pesado sofre menos
+      if (hit > BUMP_DAMAGE_START && world.started) {
+        const ma = a.spec.mass;
+        const mb = clamp(b.spec.mass, ma / 1.25, ma * 1.25);
+        const dmg = (hit - BUMP_DAMAGE_START) * BUMP_DAMAGE_PER_MS;
+        damage(world, a, b.id, dmg * (mb / (ma + mb)) * 2, false);
+        damage(world, b, a.id, dmg * (ma / (ma + mb)) * 2, false);
       }
     }
 }
 
-/** Depois da chegada: para a 30 m da linha (+8 m por colocação), na beira da pista, lados alternados. */
-const PARK_BASE = 30;
-const PARK_GAP = 8;
-const PARK_EDGE = 1.6;
+/**
+ * Depois da chegada: para a 42 m da linha (+9 m por colocação), na beira da pista, lados alternados.
+ * O 1º chega mais rápido e precisa de mais chão para frear e ainda encostar na beira.
+ */
+const PARK_BASE = 42;
+const PARK_GAP = 9;
+const PARK_EDGE = 1.4;
+/** Passou do ponto sem chegar à beira: segue devagar até encostar (no máximo este tanto além do ponto). */
+const PARK_CRAWL = 4;
+const PARK_OVERRUN = 35;
 
 /**
- * Quem cruzou a chegada sai do traçado: esterça para a beira (1º à esquerda, 2º à direita, ...) e
- * freia para parar a uma distância que cresce com a colocação, sem amontoar logo depois da linha.
+ * Quem cruzou a chegada sai do traçado: esterça para a beira desde a linha (1º à esquerda, 2º à direita,
+ * ...) e freia para parar a uma distância que cresce com a colocação, sem amontoar logo depois da linha.
+ * Só trava (`hold`) já encostado na beira; se chegou ao ponto ainda no meio, segue devagar rumo à beira.
  * Nunca engata ré; `hold` = já parou (o chamador segura o carro no lugar, até em rampa).
  */
 function parkInput(world: World, r: Racer): { input: ControlInput; hold: boolean } {
@@ -615,22 +648,33 @@ function parkInput(world: World, r: Racer): { input: ControlInput; hold: boolean
   const speed = forwardSpeed(car);
   const q = track.query(car.x, car.z, car.pieceIndex);
   const T = track.totalLength;
-  const d = q.dist > T / 2 ? q.dist - T : q.dist;
-  const rem = PARK_BASE + (r.finishPlace - 1) * PARK_GAP - d;
+  const signed = (dist: number) => (dist > T / 2 ? dist - T : dist);
+  const d = signed(q.dist);
+  const side = r.finishPlace % 2 === 1 ? 1 : -1;
+  // quem chegou antes do mesmo lado e parou além do previsto empurra a minha vaga para depois dele
+  let spot = PARK_BASE + (r.finishPlace - 1) * PARK_GAP;
+  for (const o of world.racers)
+    if (o.finishPlace && o.finishPlace < r.finishPlace && o.finishPlace % 2 === r.finishPlace % 2)
+      spot = Math.max(spot, signed(track.query(o.car.x, o.car.z, o.car.pieceIndex).dist) + PARK_GAP);
+  const rem = spot - d;
+  const lane = side * (track.halfWidth - PARK_EDGE);
+  const atEdge = q.lateral * side >= track.halfWidth - PARK_EDGE - 0.6;
   const input = emptyInput();
-  if (rem <= 0.5 || (speed < 1 && rem < 3)) {
+  if ((rem <= 0.5 || (speed < 1 && rem < 3)) && (atEdge || rem < -PARK_OVERRUN)) {
     if (speed > 1) input.brake = 1;
     return { input, hold: speed <= 1 };
   }
-  const lane = (r.finishPlace % 2 === 1 ? 1 : -1) * (track.halfWidth - PARK_EDGE);
-  const look = 7 + Math.max(0, speed) * 0.35;
-  const p = track.pointAtDist(q.dist + look);
-  const want = Math.atan2(p.x + Math.cos(p.heading) * lane - car.x, p.z - Math.sin(p.heading) * lane - car.z);
-  input.steer = clamp(-wrapAngle(want - car.heading) * 2.6, -1, 1);
-  // velocidade que ainda dá para parar no ponto com uma freada firme (20 m/s²)
-  const desired = Math.sqrt(2 * 20 * rem);
+  // rumo = direção da pista logo à frente + ângulo de aproximação da faixa da beira (mais fechado
+  // quanto mais devagar: em marcha lenta o carro ainda encosta, até em curva)
+  const tangent = track.pointAtDist(q.dist + Math.max(0, speed) * 0.15).heading;
+  const reach = 2 + Math.max(0, speed) * 0.3;
+  const want = tangent + clamp(Math.atan2(lane - q.lateral, reach), -0.8, 0.8);
+  input.steer = clamp(-wrapAngle(want - car.heading) * 3, -1, 1);
+  // velocidade que ainda dá para parar no ponto com uma freada firme (20 m/s²); fora da beira, nunca
+  // abaixo do passo lento que leva o carro até ela
+  const desired = Math.max(atEdge ? 0 : PARK_CRAWL, Math.sqrt(2 * 20 * Math.max(0, rem)));
   if (speed > desired) input.brake = clamp((speed - desired) / 4, 0.3, 1);
-  else if (speed < Math.min(desired, 12) - 2) input.throttle = 0.5;
+  else if (speed < Math.min(desired, 16) - 1) input.throttle = 0.6;
   return { input, hold: false };
 }
 

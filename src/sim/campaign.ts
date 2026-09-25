@@ -1,6 +1,6 @@
 import { TRACKS } from '../data/tracks';
 import type { AiProfile } from './ai';
-import { buildSpec, CHARACTERS, CHARGE_KINDS, MAX_UPGRADE, maxExtraCharges, newCarSetup, UPGRADE_KINDS, type CarSetup } from './garage';
+import { buildSpec, CAR_PRICES, carSwapCost, CHARACTERS, CHARGE_KINDS, MAX_UPGRADE, maxExtraCharges, newCarSetup, UPGRADE_KINDS, upgradePrice, type CarSetup } from './garage';
 import { VEHICLES } from '../data/vehicles';
 import { MAX_CHARGES } from './vehicle';
 import { clamp } from './math';
@@ -66,8 +66,20 @@ export const CAMPAIGN_RULES: Record<Difficulty, CampaignRules> = {
   hard: { planets: 6, races: [8, 8, 9, 9, 10, 10], goal: 0.6, playoffTries: 1, money: 0.65 },
 };
 
-/** O dinheiro rende mais a cada planeta: no começo cada compra pesa, no fim o prêmio é grande. */
-export const PLANET_MONEY = [0.7, 1, 1.4, 1.8, 2.1, 2.3];
+/**
+ * O dinheiro rende mais a cada planeta até Nho (onde chega o Havac): no começo cada compra pesa, no fim
+ * o prêmio é grande. No Inferno a loja é a mesma de Nho, então o prêmio não sobe mais (com 2,3 o
+ * jogador forte chegava ao Inferno A com ~$225 mil sem nada para comprar).
+ */
+export const PLANET_MONEY = [0.7, 1, 1.4, 1.9, 2.1, 1.8];
+
+/**
+ * Teto relativo à loja: com mais dinheiro no bolso do que tudo o que a loja ainda pode vender (ver
+ * shopHeadroom), prêmios, dinheiro da pista e bônus rendem só esta fração. Sem isso quem repetia
+ * divisões juntava $1–3 milhões sem ter onde gastar.
+ */
+export const HOARD_MONEY = 0.25;
+export const HOARD_CAP = 0.05;
 
 /** Nível máximo das peças à venda em cada planeta (acompanha o nível dos rivais). */
 export const SHOP_LEVEL = [1, 2, 3, 3, 3, 3];
@@ -160,6 +172,11 @@ export interface CampaignState {
   warpFrom?: number;
   /** final da campanha ainda não mostrado (fechou o jogo na tela de resultados) */
   finalePending?: boolean;
+  /**
+   * corrida em andamento (largou e desistir custa): se o jogo for fechado ou recarregado no meio dela,
+   * ao voltar conta como desistência (resolveAbandonedRace)
+   */
+  raceInProgress?: boolean;
 }
 
 export function newCampaign(characterId: string, color: number, difficulty: Difficulty = 'normal'): CampaignState {
@@ -241,9 +258,61 @@ export function currentTrackId(s: CampaignState): string {
   return trackOfRace(s, s.race, raceKind(s));
 }
 
-/** Multiplicador do dinheiro no ponto atual da campanha (planeta × dificuldade). */
+/** Custo para levar um carro do setup dado às peças no nível `level` (as que ele aceita). */
+function upgradesTo(setup: CarSetup, level: number): number {
+  const probe = structuredClone(setup);
+  let sum = 0;
+  for (const k of UPGRADE_KINDS) {
+    for (let p = upgradePrice(probe, k); p !== null && probe.upgrades[k] < level; p = upgradePrice(probe, k)) {
+      sum += p;
+      probe.upgrades[k]++;
+    }
+  }
+  return sum;
+}
+
+/**
+ * Tudo o que a loja ainda pode vender de útil, neste planeta e, na Divisão A, também no próximo (para
+ * quem guarda dinheiro para o próximo carro): o carro mais caro com as peças no nível da loja, já descontada a
+ * revenda do atual; ou as peças que faltam no carro atual.
+ */
+export function shopHeadroom(s: CampaignState): number {
+  const last = Math.min(s.planet + s.division, planetCount(s) - 1);
+  let level = 0;
+  const ids = new Set<string>();
+  for (let p = s.planet; p <= last; p++) {
+    level = Math.max(level, SHOP_LEVEL[p] ?? MAX_UPGRADE);
+    for (const id of FOR_SALE[PLANETS[p].id] ?? []) ids.add(id);
+  }
+  // só carros acima do atual na escada (CAR_PRICES segue a ordem do original)
+  const order = Object.keys(CAR_PRICES);
+  const mine = order.indexOf(s.car.vehicleId);
+  let most = upgradesTo(s.car, level);
+  for (const id of ids) if (order.indexOf(id) > mine) most = Math.max(most, carSwapCost(s.car, id) + upgradesTo(newCarSetup(id), level));
+  return most;
+}
+
+/**
+ * Multiplicador do dinheiro no ponto atual da campanha (planeta × dificuldade); com mais no bolso do
+ * que a loja tem para vender, só HOARD_MONEY disso.
+ */
 export function moneyScale(s: CampaignState): number {
-  return PLANET_MONEY[s.planet] * rulesOf(s).money;
+  return PLANET_MONEY[s.planet] * rulesOf(s).money * hoardFactor(s);
+}
+
+/**
+ * Fração do dinheiro que ainda rende: 1 enquanto houver o que comprar; HOARD_MONEY acima de tudo o
+ * que a loja vende; HOARD_CAP bem acima disso (o dobro mais $100 mil), um teto na prática.
+ */
+export function hoardFactor(s: CampaignState): number {
+  const room = shopHeadroom(s);
+  if (s.money <= room) return 1;
+  return s.money <= room * 2 + 100000 ? HOARD_MONEY : HOARD_CAP;
+}
+
+/** Dinheiro acima de tudo o que a loja ainda vende: os prêmios rendem menos (hoardFactor). */
+export function moneyCapped(s: CampaignState): boolean {
+  return hoardFactor(s) < 1;
 }
 
 const roundMoney = (n: number) => Math.round(n / 500) * 500;
@@ -290,8 +359,8 @@ export const LOCAL_ENGINE = [0, 0, 1, 1, 0, 2, 2, 3, 2, 2, 3, 3];
  */
 export const LOCAL_PACE: Record<Difficulty, number[]> = {
   easy: [1.018, 1.031, 1.03, 1.031, 1.062, 1.035],
-  normal: [1.023, 1.037, 0.989, 0.996, 1.019, 0.981, 1.032, 0.984, 1.015, 1.032],
-  hard: [1.023, 1.036, 0.992, 0.994, 1.026, 0.974, 0.976, 0.978, 0.95, 0.957, 0.959, 1.012],
+  normal: [1.023, 1.037, 0.989, 0.996, 1.035, 0.981, 1.032, 0.984, 1.015, 1.032],
+  hard: [1.012, 1.036, 0.992, 0.994, 1.026, 0.974, 0.976, 0.978, 0.95, 0.957, 0.959, 1.012],
 };
 /** Na Divisão A do Inferno todos vêm com a preparação máxima (peças no 3 não bastam para evoluir). */
 const INFERNO_PACE = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1.01, 1.025];
@@ -417,6 +486,7 @@ export function applyRaceResult(s: CampaignState, place: number, moneyEarned: nu
   const pointsEarned = kind === 'playoff' ? 0 : kind === 'boss' ? (won ? POINTS[0] : 0) : (POINTS[place - 1] ?? 0);
   const bonus = kind !== 'normal' && won ? bossBonus(s) : 0;
   const earned = moneyEarned + bonus;
+  delete s.raceInProgress; // a corrida foi contada
   s.money += earned;
   s.stats.races++;
   s.stats.kills += kills;
@@ -502,6 +572,27 @@ export function forfeitRace(s: CampaignState): RaceReport | null {
 }
 
 /**
+ * Largou (world.started): se desistir custa, marca a corrida em andamento no save. Fechar ou recarregar
+ * o jogo no meio dela não escapa da desistência (ver resolveAbandonedRace). Devolve se marcou.
+ */
+export function markRaceStarted(s: CampaignState): boolean {
+  if (!forfeitCosts(s)) return false;
+  s.raceInProgress = true;
+  return true;
+}
+
+/**
+ * Save com corrida em andamento (o jogo foi fechado ou recarregado no meio dela): aplica a desistência
+ * (último lugar) e limpa a marca. Devolve o relatório, ou null quando não havia corrida pendente ou
+ * ela sai de graça.
+ */
+export function resolveAbandonedRace(s: CampaignState): RaceReport | null {
+  if (!s.raceInProgress) return null;
+  delete s.raceInProgress;
+  return forfeitRace(s);
+}
+
+/**
  * Promoção antecipada (o "Captain Braddock" do original): já tem os pontos, pode subir agora.
  * Na Divisão A o atalho leva direto ao duelo contra o chefe.
  */
@@ -526,6 +617,33 @@ export function seasonSchedule(s: CampaignState): { trackId: string; done: boole
     const boss = !s.champion && s.division === 1 && i === n - 1;
     return { trackId: trackOfRace(s, i, boss ? 'boss' : 'normal'), done: i < s.race, current: i === s.race && !s.playoff, boss };
   });
+}
+
+/** Novidades do planeta novo (quadro final da viagem): carros à venda, nível das peças, rivais e prêmio. */
+export interface PlanetNews {
+  /** carros que passam a ser vendidos (agora ou na Divisão A deste planeta) */
+  newCars: { id: string; when: string }[];
+  /** nível máximo das peças na loja e se subiu na chegada */
+  shopLevel: number;
+  levelUp: boolean;
+  /** Rip, Shred e o piloto local, com os carros deste planeta */
+  rivals: { name: string; vehicleId: string; color: number }[];
+  /** prêmio do 1º lugar aqui */
+  firstPrize: number;
+}
+
+export function planetNews(s: CampaignState, vehicles: Record<string, VehicleSpec>): PlanetNews {
+  const prev: CampaignState = { ...s, planet: Math.max(0, s.planet - 1), division: 1, playoff: undefined };
+  const before = new Set(carsForSale(prev));
+  const here = FOR_SALE[currentPlanet(s).id] ?? [];
+  const newCars = here.filter((id) => !before.has(id)).map((id) => ({ id, when: carComingSoon(s, id) || 'À venda já' }));
+  return {
+    newCars,
+    shopLevel: shopLevel(s),
+    levelUp: s.planet > 0 && shopLevel(s) > shopLevel(prev),
+    rivals: opponentsFor({ ...s, race: 0, playoff: undefined }, vehicles).map((o) => ({ name: o.name, vehicleId: o.spec.id, color: o.color })),
+    firstPrize: prizesFor({ ...s, race: 0, playoff: undefined })[0],
+  };
 }
 
 /* ---------- senha (save exportável), como as senhas do original ---------- */
@@ -563,6 +681,7 @@ export function validSave(s: CampaignState): boolean {
   if (s.champion && (s.division !== 1 || s.planet < CAMPAIGN_RULES[s.difficulty ?? 'normal'].planets - 1)) return false;
   if (s.warpFrom !== undefined && !isInt(s.warpFrom, 0, s.planet - 1)) return false;
   if (s.finalePending !== undefined && (typeof s.finalePending !== 'boolean' || (s.finalePending && !s.champion))) return false;
+  if (s.raceInProgress !== undefined && typeof s.raceInProgress !== 'boolean') return false;
   // estatísticas faltando (save antigo) não invalidam: decodeSave completa com zeros
   const st = s.stats;
   return st === undefined || (!!st && typeof st === 'object' && ['races', 'wins', 'kills', 'earnings'].every((k) => Number.isFinite((st as Record<string, unknown>)[k])));

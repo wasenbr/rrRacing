@@ -154,7 +154,8 @@ describe('veículo', () => {
   });
 
   it('vão (G): sem chão invisível; quem chega rápido pousa no sólido, o lento cai', () => {
-    for (const layout of ['F S S J G S S S R S S S S S S S R S S S S S S S R S S S S S S S R', 'F S S J G J G S S R S S S S S S R S S S S S S S R S S S S S S R']) {
+    // (a última: vão com queda, o pouso fica um nível abaixo da decolagem)
+    for (const layout of ['F S S J G S S S R S S S S S S S R S S S S S S S R S S S S S S S R', 'F S S J G J G S S R S S S S S S R S S S S S S S R S S S S S S R', 'F S S J Gv S S S R S S S S S S S R S S S S S S S R S S S S S S S R']) {
       const tr = new Track({ id: 'vao', name: 'vao', planet: 'x', theme: 'chem6', laps: 1, layout });
       for (const sp of [17, 25, 30, 35, 40, 45, 50, 58]) {
         const sSpec = { ...spec, maxSpeed: 70, accel: 0, drag: 0 };

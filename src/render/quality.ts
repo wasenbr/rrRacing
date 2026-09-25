@@ -134,3 +134,44 @@ export class DynamicResolution {
     return true;
   }
 }
+
+/**
+ * Economia de bateria (item 52): "Automática" liga sozinha fora da tomada (navigator.getBattery, onde
+ * existe: Chrome/Edge; Safari e Firefox não informam e a automática fica desligada), "Sempre" e "Nunca".
+ * Na economia: corrida a 30 qps, teto de resolução ×0,75, sombra a cada 3 quadros e metade das
+ * partículas — nada que mude os shaders (troca no meio da corrida sem recompilar).
+ */
+export type BatteryPref = 'auto' | 'on' | 'off';
+export const BATTERY_LABELS: Record<BatteryPref, string> = { auto: 'Automática', on: 'Sempre', off: 'Nunca' };
+/** fração do teto de resolução na economia */
+export const ECO_RES = 0.75;
+/** fração das partículas na economia */
+export const ECO_PARTICLES = 0.5;
+/** a sombra é redesenhada a cada N quadros desenhados na economia */
+export const ECO_SHADOW_EVERY = 3;
+
+/** Preferência salva (a antiga era booleana: ligada = "Sempre"; desligada vira a automática). */
+export function normalizeBatteryPref(v: unknown): BatteryPref {
+  if (v === 'auto' || v === 'on' || v === 'off') return v;
+  return v === true ? 'on' : 'auto';
+}
+
+interface BatteryLike extends EventTarget {
+  charging: boolean;
+}
+
+/**
+ * Observa a bateria: chama `cb(true)` quando o aparelho está fora da tomada e `cb(false)` ligado nela
+ * (ou quando não dá para saber). Sem getBattery, não chama nada (fica "na tomada").
+ */
+export function watchBattery(cb: (discharging: boolean) => void): void {
+  const nav = navigator as Navigator & { getBattery?: () => Promise<BatteryLike> };
+  if (typeof nav.getBattery !== 'function') return;
+  nav.getBattery().then(
+    (b) => {
+      cb(!b.charging);
+      b.addEventListener('chargingchange', () => cb(!b.charging));
+    },
+    () => undefined,
+  );
+}

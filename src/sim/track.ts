@@ -8,7 +8,8 @@ import { clamp, forwardX, forwardZ, leftX, leftZ, smoothstep, wrapAngle } from '
  *  L  curva de 90° à esquerda      R  curva de 90° à direita
  *  U  rampa subindo                D  rampa descendo
  *  J  salto (rampa de lançamento)  B  lombadas
- *  G  vão sem chão (voa-se por cima; quem cai é resgatado)
+ *  G  vão sem chão (voa-se por cima; quem cai é resgatado). `Gv`: o pouso fica um nível
+ *     (RAMP_HEIGHT) abaixo da decolagem, como nos saltos do original que caem num patamar inferior
  *  X  cruzamento: reta que cruza outro trecho da mesma pista no mesmo nível
  *
  * Modificadores logo após a letra: `>` seta de warp (impulso para a frente),
@@ -141,14 +142,14 @@ export function parseLayout(layout: string): PieceCode[] {
   return parsePieces(layout).map((p) => p.code);
 }
 
-/** Lê as peças com seus modificadores (`>` warp, `<` warp reverso). */
-export function parsePieces(layout: string): { code: PieceCode; warp: number }[] {
+/** Lê as peças com seus modificadores (`>` warp, `<` warp reverso, `v` vão com queda). */
+export function parsePieces(layout: string): { code: PieceCode; warp: number; drop: boolean }[] {
   return layout
     .trim()
     .split(/\s+/)
     .map((t) => {
-      if (!/^[FSLRUDJBGX][<>]?$/.test(t)) throw new Error(`Peça de pista inválida: "${t}"`);
-      return { code: t[0] as PieceCode, warp: t[1] === '>' ? 1 : t[1] === '<' ? -1 : 0 };
+      if (!/^([FSLRUDJBX][<>]?|Gv?)$/.test(t)) throw new Error(`Peça de pista inválida: "${t}"`);
+      return { code: t[0] as PieceCode, warp: t[1] === '>' ? 1 : t[1] === '<' ? -1 : 0, drop: t[1] === 'v' };
     });
 }
 
@@ -193,10 +194,10 @@ export class Track {
     let heading = 0;
     let h = 0;
     let dist = 0;
-    parsed.forEach(({ code, warp }, index) => {
+    parsed.forEach(({ code, warp, drop }, index) => {
       const turn: 0 | 1 | -1 = code === 'L' ? 1 : code === 'R' ? -1 : 0;
       const length = turn === 0 ? TILE : (Math.PI / 2) * ARC_RADIUS;
-      const dh = code === 'U' ? RAMP_HEIGHT : code === 'D' ? -RAMP_HEIGHT : 0;
+      const dh = code === 'U' ? RAMP_HEIGHT : code === 'D' || (code === 'G' && drop) ? -RAMP_HEIGHT : 0;
       const cx = x + turn * leftX(heading) * ARC_RADIUS;
       const cz = z + turn * leftZ(heading) * ARC_RADIUS;
       const piece: Piece = { index, code, turn, x0: x, z0: z, heading0: heading, h0: h, dh, length, startDist: dist, cx, cz, warp };
@@ -231,6 +232,8 @@ export class Track {
   }
 
   heightOn(p: Piece, s: number): number {
+    // vão: não tem chão; a referência é o nível do pouso (o ímã de salto mira nele)
+    if (p.code === 'G') return p.h0 + p.dh;
     return p.h0 + profile(p.code, clamp(s / p.length, 0, 1));
   }
 
@@ -374,7 +377,9 @@ export class Track {
     const endPoint = (pi: number, dist: number): CenterPoint => {
       const p = this.pieces[pi];
       const pt = this.pointOn(p, 0);
-      return { x: pt.x, z: pt.z, h: this.heightOn(p, 0), heading: pt.heading, dist, pieceIndex: pi };
+      // altura do fim da peça anterior (num vão com queda, o início do vão já está no nível do pouso)
+      const prev = this.pieces[(pi - 1 + n) % n];
+      return { x: pt.x, z: pt.z, h: this.heightOn(prev, prev.length), heading: pt.heading, dist, pieceIndex: pi };
     };
     // começa logo depois de uma interrupção, para nenhum trecho ficar partido no fim da lista
     const first = this.pieces.findIndex((_, i) => this.isBreak(i) && !this.isBreak((i + 1) % n));

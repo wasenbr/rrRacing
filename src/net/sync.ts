@@ -2,6 +2,7 @@ import { emptyInput, type ControlInput } from '../sim/input';
 import type { RacerProgress } from '../sim/race';
 import type { VehicleSpec, VehicleState } from '../sim/vehicle';
 import type { Hazard, Projectile, RacerEntry, World, WorldEvent } from '../sim/world';
+import type { NetCmd } from './inputs';
 
 /* ------------------------------------------------------------------ */
 /* Mensagens da sala                                                   */
@@ -15,6 +16,10 @@ export interface LobbyPlayer {
   name: string;
   color: number;
   vehicleId: string;
+  /** ping (ms) medido pelo host; ausente = ainda sem medida (o host não tem) */
+  ping?: number;
+  /** caiu e o host guarda a vaga por alguns segundos */
+  away?: boolean;
 }
 
 /** Tudo que o convidado precisa para montar a mesma corrida do host. */
@@ -26,21 +31,34 @@ export interface OnlineRace {
 }
 
 export type ClientMsg =
-  | { t: 'hello'; name: string; color: number; vehicleId: string }
-  /** `n`: número do passo local em que o comando foi lido (o host devolve em `snap.a`) */
-  | { t: 'input'; i: ControlInput; n: number }
+  /** `rejoin`: ficha de sessão de quem caiu e está voltando (recebe o mesmo carro) */
+  | { t: 'hello'; name: string; color: number; vehicleId: string; rejoin?: string }
+  /** comandos dos últimos passos (ver `NetCmd`); o host aplica na ordem de `n` e devolve em `snap.a` */
+  | { t: 'input'; c: NetCmd[] }
   /** o convidado montou a corrida e pode largar */
   | { t: 'ready' }
-  | { t: 'ping' };
+  /** aba oculta (celular): o host espera mais antes de dar como caído; `back`: voltou */
+  | { t: 'away' }
+  | { t: 'back' }
+  /** saiu de propósito (o host não guarda a vaga) */
+  | { t: 'leave' };
 
 export type HostMsg =
-  | { t: 'lobby'; players: LobbyPlayer[]; racing: boolean; you: string }
+  /** `token`: ficha de sessão deste convidado (para voltar se cair) */
+  | { t: 'lobby'; players: LobbyPlayer[]; racing: boolean; you: string; token?: string }
   | { t: 'full' }
-  | { t: 'start'; race: OnlineRace; you: number }
-  /** `k`: sequência do estado; `a`: último comando (`n`) recebido de cada carro (-1 = nenhum); `cd`: contagem */
-  | { t: 'snap'; s: WorldSnap; k: number; a: number[]; cd: number }
-  | { t: 'end' }
-  | { t: 'ping' };
+  /** `k`: sequência do primeiro estado desta corrida (os anteriores são descartados) */
+  | { t: 'start'; race: OnlineRace; you: number; token?: string; k?: number }
+  /**
+   * `k`: sequência do estado; `a`: último comando (`n`) aplicado de cada carro (-1 = nenhum);
+   * `cd`: contagem; `pe`: eventos do estado anterior (o canal rápido pode perder um); `aw`: carros
+   * de quem está fora da tela; `dc`: de quem caiu e o host espera voltar
+   */
+  | { t: 'snap'; s: WorldSnap; k: number; a: number[]; cd: number; pe?: WorldEvent[]; aw?: number[]; dc?: number[] }
+  /** fim da corrida: `s` é o estado final oficial; `bye`: o host saiu (a sala acabou) */
+  | { t: 'end'; s?: WorldSnap; bye?: boolean }
+  /** o host está com a aba oculta (ou voltou) */
+  | { t: 'hostAway'; away: boolean };
 
 /* ------------------------------------------------------------------ */
 /* Validação do que chega pela rede (nada vindo de outro navegador é   */
@@ -85,10 +103,22 @@ export function sanitizeInput(v: unknown): ControlInput {
 }
 
 /** Primeira mensagem do convidado. Devolve null se não for um `hello` válido. */
-export function parseHello(m: unknown, vehicleIds: readonly string[]): { name: string; color: unknown; vehicleId: string } | null {
+export function parseHello(m: unknown, vehicleIds: readonly string[]): { name: string; color: unknown; vehicleId: string; rejoin: unknown } | null {
   if (!isObj(m) || m.t !== 'hello') return null;
   const vehicleId = typeof m.vehicleId === 'string' && vehicleIds.includes(m.vehicleId) ? m.vehicleId : vehicleIds[0];
-  return { name: cleanName(m.name), color: m.color, vehicleId };
+  return { name: cleanName(m.name), color: m.color, vehicleId, rejoin: m.rejoin };
+}
+
+/** Eventos soltos vindos do host (os de um estado anterior): só os válidos. */
+export function validateEvents(v: unknown, nRacers: number): WorldEvent[] {
+  if (!Array.isArray(v) || v.length > 400 || !plain(v)) return [];
+  return v.filter((e) => validEvent(e, nRacers)) as WorldEvent[];
+}
+
+/** Lista de índices de carro (ex.: quem está fora da tela). */
+export function parseRacerList(v: unknown, nRacers: number): number[] {
+  if (!Array.isArray(v) || v.length > MAX_RACERS) return [];
+  return v.filter((x) => isInt(x, 0, nRacers - 1)) as number[];
 }
 
 /** Lista de pilotos vinda do host. */
@@ -102,6 +132,8 @@ export function parseLobbyPlayers(v: unknown, palette: readonly number[], vehicl
       name: cleanName(p.name),
       color: Number.isInteger(p.color) && palette.includes(p.color as number) ? (p.color as number) : palette[0],
       vehicleId: typeof p.vehicleId === 'string' && vehicleIds.includes(p.vehicleId) ? p.vehicleId : vehicleIds[0],
+      ...(typeof p.ping === 'number' && Number.isFinite(p.ping) && p.ping >= 0 && p.ping <= 10000 && { ping: Math.round(p.ping) }),
+      ...(p.away === true && { away: true }),
     });
   }
   return out;

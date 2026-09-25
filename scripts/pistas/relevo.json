@@ -4,6 +4,7 @@
     "Chave = id da pista; índices = casa do traçado (0 = largada F, na ordem da corrida, como em tracado.json).",
     "pecas: U rampa subindo, D rampa descendo, B lombada, J salto (só em reta S; J/G do traçado já vêm de construir.py).",
     "setas: '>' seta vermelha no sentido da corrida (warp), '<' seta contra o sentido (warp reverso, só num lado).",
+    "quedas: casas G (último vão antes do pouso) em que o salto cai num patamar um nível abaixo (vira 'Gv' no traçado; conta como descida no fechamento).",
     "pocas: casas com poça fixa do planeta (gosma verde em Drakonis, água em Bogmire, óleo em New Mojave, neve em Nho, lava em Inferno).",
     "Leitura das rampas: no mapa isométrico a faixa de piso mais clara é rampa que sobe para o fundo da tela;",
     "o sentido da corrida diz se é U ou D. Dinheiro/blindagem não aparecem nos mapas (continuam espalhados pela pista).",
@@ -71,6 +72,34 @@
     ],
     "nota": "Dois degraus subindo no lado de cima-direita, descidas no S da esquerda; gosma verde na curva 20 e na 27 (a do mapa na casa 28 fica no grid e foi recuada)."
   },
+  "drakonis-3": {
+    "pecas": {
+      "7": "D",
+      "21": "U"
+    },
+    "setas": {
+      "15": ">"
+    },
+    "pocas": [
+      24
+    ],
+    "nota": "Faixas de rampa em 7 (descida) e 21 (subida); seta em 15 e gosma em 24."
+  },
+  "drakonis-4": {
+    "nota": "Mapa plano: sem faixas de rampa nem setas; a gosma do mapa fica na casa 27 (grid) e não entrou."
+  },
+  "drakonis-5": {
+    "pecas": {
+      "7": "D",
+      "22": "U"
+    },
+    "pocas": [
+      9,
+      13,
+      16
+    ],
+    "nota": "Descida em 7 e subida em 22; a faixa da casa 26 é grid. Gosma em 9, 13 e 16."
+  },
   "bogmire-1": {
     "pecas": {
       "5": "U",
@@ -106,6 +135,49 @@
     ],
     "nota": "Faixas de rampa no trecho da frente (9 e 12) e no de cima-esquerda (21 e 23); poça d'água na casa 25. O laço extra de cima-direita do mapa não está no nosso traçado."
   },
+  "bogmire-3": {
+    "pecas": {
+      "5": "D",
+      "14": "D",
+      "20": "U",
+      "23": "U"
+    },
+    "pocas": [
+      11,
+      13,
+      25
+    ],
+    "nota": "Descidas em 5 e 14, subidas em 20 e 23; poças d'água em 11, 13 e 25."
+  },
+  "bogmire-4": {
+    "pecas": {
+      "24": "U",
+      "30": "D"
+    },
+    "setas": {
+      "9": ">"
+    },
+    "nota": "Subida em 24 e descida em 30. As faixas perto de 2 e 12 ficaram planas: ficam entre cruzamentos (1/23 e 11/21) que precisam do mesmo nível. Seta em 9."
+  },
+  "bogmire-5": {
+    "nota": "Não transcrita: espiral com viadutos (cruzamentos 4/20 e 8/16 passam em níveis diferentes no original); o nosso cruzamento X é no mesmo nível, então as rampas da subida em espiral não fecham. Fica só com o traçado."
+  },
+  "bogmire-6": {
+    "pecas": {
+      "3": "U",
+      "15": "D",
+      "21": "U",
+      "31": "D"
+    },
+    "setas": {
+      "29": ">"
+    },
+    "pocas": [
+      11,
+      18
+    ],
+    "nota": "Subidas em 3 e 21, descidas em 15 e 31 (cruzamento 16/32 no mesmo nível); a faixa de 5 ficou plana para fechar. Seta em 29, água em 11 e 18."
+  },
   "newmojave-1": {
     "pecas": {
       "8": "U",
@@ -115,6 +187,21 @@
       14
     ],
     "nota": "Platô alto no laço de cima (8-17); mancha de óleo junto ao laço de cima."
+  },
+  "newmojave-2": {
+    "pecas": {
+      "4": "D",
+      "12": "U"
+    },
+    "setas": {
+      "7": ">"
+    },
+    "pocas": [
+      8,
+      9,
+      10
+    ],
+    "nota": "Descida em 4 e subida em 12 (a faixa da casa 27 é grid). Seta em 7; óleo em 8-10."
   },
   "newmojave-3": {
     "pecas": {
@@ -139,6 +226,55 @@
     ],
     "nota": "Seta antes do salto 19J sobre o vão 20G; manchas de óleo no trecho do meio (26-29)."
   },
+  "newmojave-4": {
+    "pecas": {
+      "2": "U",
+      "21": "U",
+      "25": "D",
+      "32": "D"
+    },
+    "setas": {
+      "32": ">"
+    },
+    "pocas": [
+      4,
+      6,
+      19,
+      28
+    ],
+    "nota": "Subida em 2 e descida em 32; no laço de cima, subida em 21 e descida em 25 (cruzamento 16/30 no mesmo nível). Seta do mapa na curva 33 recuada para 32; óleo em 4, 6, 19 e 28."
+  },
+  "newmojave-5": {
+    "pecas": {
+      "9": "U",
+      "25": "D"
+    },
+    "setas": {
+      "7": ">"
+    },
+    "pocas": [
+      19,
+      31
+    ],
+    "nota": "Subida em 9 e descida em 25 (a faixa junto da largada é grid). Seta em 7; óleo em 19 e 31."
+  },
+  "newmojave-6": {
+    "nota": "Mapa plano: sem faixas de rampa, setas ou poças."
+  },
+  "newmojave-7": {
+    "pecas": {
+      "3": "U",
+      "12": "U",
+      "19": "D",
+      "22": "D",
+      "27": "U",
+      "32": "D"
+    },
+    "pocas": [
+      31
+    ],
+    "nota": "Subidas em 3 e 12, descidas em 19 e 22; no laço da esquerda, subida em 27 e descida em 32 (cruzamento 23/33 no mesmo nível). Óleo em 31."
+  },
   "nho-1": {
     "setas": {
       "24": ">"
@@ -148,6 +284,15 @@
       23
     ],
     "nota": "Pista plana; seta vermelha do mapa na casa 26 (grid) recuada para 24; montes de neve em 8 e 23 (o da casa 27 é grid)."
+  },
+  "nho-2": {
+    "pecas": {
+      "1": "U",
+      "12": "U",
+      "23": "D",
+      "34": "D"
+    },
+    "nota": "Rampas claras em 1 e 12 (sobem para o fundo); os degraus de volta ficam em 23 e 34, onde o mapa mostra o trecho de cima terminando acima dos cruzamentos 24/32 e 35/43. Sem poças nem setas."
   },
   "nho-3": {
     "pecas": {
@@ -163,28 +308,167 @@
     ],
     "nota": "Saltos em sequência 7J-8G-9J-10G (ilha no meio) vêm do traçado; montes de neve na reta de baixo."
   },
+  "nho-4": {
+    "pecas": {
+      "9": "U",
+      "10": "D"
+    },
+    "pocas": [
+      5,
+      6,
+      8,
+      29
+    ],
+    "nota": "Duas faixas de rampa seguidas em 9-10 (morro); a faixa clara da casa 31 fica no grid e foi deixada plana. Montes de neve em 5, 6, 8 e 29."
+  },
+  "nho-5": {
+    "pecas": {
+      "14": "B",
+      "15": "B",
+      "16": "B",
+      "20": "B",
+      "21": "B",
+      "22": "B"
+    },
+    "setas": {
+      "5": ">",
+      "19": ">"
+    },
+    "pocas": [
+      13,
+      18,
+      23
+    ],
+    "nota": "Trechos de faixas claras e escuras alternadas em 14-16 e 20-22 lidos como lombadas (o piso volta ao mesmo nível); a faixa da casa 36 é grid. Setas em 5 e 19; neve em 13, 18 e 23."
+  },
+  "nho-6": {
+    "pecas": {
+      "2": "U",
+      "3": "U",
+      "22": "D",
+      "26": "U",
+      "35": "D"
+    },
+    "quedas": [
+      11
+    ],
+    "setas": {
+      "2": ">"
+    },
+    "pocas": [
+      5,
+      6,
+      25
+    ],
+    "nota": "Subida dupla em 2-3; o salto 10J-11G pousa um nível abaixo; descida em 22 e subida em 26 (cruzamento 16/30 no mesmo nível); a faixa do mapa na casa 36 (grid) foi recuada para 35. Seta do mapa na curva 1 recuada para 2."
+  },
+  "nho-7": {
+    "pecas": {
+      "3": "D",
+      "9": "U",
+      "22": "U"
+    },
+    "quedas": [
+      29
+    ],
+    "setas": {
+      "27": ">"
+    },
+    "pocas": [
+      23
+    ],
+    "nota": "Descida em 3, subidas em 9 e 22; o salto 28J-29G pousa um nível abaixo e fecha o circuito. Seta em 27, neve em 23."
+  },
   "inferno-1": {
     "pecas": {
       "5": "D",
       "9": "U",
       "18": "D",
-      "21": "U"
+      "21": "U",
+      "30": "U"
     },
+    "quedas": [
+      8
+    ],
     "setas": {
       "28": ">"
     },
     "pocas": [
       35
     ],
-    "nota": "Descida antes do salto 7J-8G; o pouso do original é mais baixo, aqui a rampa de 9 devolve o nível (cruzamentos 17/29 e 31/41 na mesma altura). Faixas de rampa em 18 e 21, seta em 28, lava na casa 35."
+    "nota": "Descida antes do salto 7J-8G, que pousa um nível abaixo como no original; a rampa de 9 sobe de novo e a faixa clara da casa 30 (entre os cruzamentos 29 e 31) fecha o circuito. Cruzamentos 17/29 e 31/41 no mesmo nível. Seta em 28, lava na casa 35."
+  },
+  "inferno-2": {
+    "pecas": {
+      "1": "U",
+      "3": "U",
+      "11": "D",
+      "15": "D",
+      "23": "U"
+    },
+    "quedas": [
+      19
+    ],
+    "setas": {
+      "1": ">",
+      "21": ">"
+    },
+    "pocas": [
+      13,
+      23
+    ],
+    "nota": "Faixas de rampa em 1, 3, 11, 15 e 23; a de 11 desce (a borda do trecho mostra o piso baixando) e o salto 18J-19G pousa um nível abaixo. Setas do mapa junto da largada (recuada para 1) e em 21; lava em 13 e 23."
+  },
+  "inferno-3": {
+    "pecas": {
+      "10": "D",
+      "18": "U",
+      "20": "U",
+      "24": "D",
+      "26": "D",
+      "31": "D",
+      "34": "U",
+      "35": "U"
+    },
+    "setas": {
+      "27": ">",
+      "33": ">"
+    },
+    "pocas": [
+      7,
+      23
+    ],
+    "nota": "Oito faixas de rampa; a de 36 (grid) foi recuada para 35. Cruzamento 9/19 no mesmo nível. Seta do mapa sobre o salto 28J recuada para 27; lava em 7 e 23 (a da casa 37 fica no grid)."
+  },
+  "inferno-4": {
+    "pecas": {
+      "2": "D",
+      "4": "D",
+      "6": "D",
+      "10": "U",
+      "13": "U",
+      "14": "U"
+    },
+    "setas": {
+      "3": ">",
+      "7": ">",
+      "19": ">"
+    },
+    "pocas": [
+      9,
+      10,
+      11
+    ],
+    "nota": "Três degraus descendo no trecho de baixo e três subindo no da esquerda. A faixa de 29 e a da casa 31 (grid) ficaram planas para o circuito fechar; o atalho do mapa entre 18 e 28 não está no traçado."
   },
   "inferno-5": {
     "pecas": {
       "5": "U",
       "9": "D",
+      "15": "D",
       "16": "D",
       "20": "U",
-      "23": "B"
+      "23": "U"
     },
     "setas": {
       "12": ">",
@@ -198,6 +482,50 @@
       19,
       22
     ],
-    "nota": "A segunda rampa do lado de baixo-esquerda (23) virou lombada: o mapa mostra 3 subidas e 2 descidas e a pista precisa fechar na mesma altura."
+    "nota": "Três subidas (5, 20, 23) e três descidas (9, 15, 16): a faixa clara da casa 15 fecha o circuito e a rampa de 23 voltou a ser subida."
+  },
+  "inferno-6": {
+    "pecas": {
+      "2": "U",
+      "4": "U",
+      "8": "U",
+      "10": "D",
+      "15": "D",
+      "19": "D",
+      "25": "U",
+      "34": "D"
+    },
+    "setas": {
+      "15": ">",
+      "26": ">"
+    },
+    "pocas": [
+      5,
+      9,
+      12,
+      32
+    ],
+    "nota": "Duas subidas no trecho da largada, morro 8-10 no trecho de trás, descidas em 15, 19 e 34, subida em 25. Seta do mapa sobre o salto 16J recuada para 15."
+  },
+  "inferno-7": {
+    "pecas": {
+      "5": "U",
+      "18": "D",
+      "26": "U"
+    },
+    "quedas": [
+      32
+    ],
+    "setas": {
+      "1": ">",
+      "9": ">"
+    },
+    "pocas": [
+      4,
+      19,
+      23,
+      24
+    ],
+    "nota": "Subida em 5, descida em 18 e subida em 26 (cruzamento 17/27 no mesmo nível); o salto 31J-32G pousa um nível abaixo. Seta da largada recuada para 1; lava em 4, 19, 23 e 24 (a da casa 36 fica no grid)."
   }
 }

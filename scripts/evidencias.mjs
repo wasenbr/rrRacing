@@ -85,6 +85,93 @@ async function telas() {
     ['bogmire-1', 6, 'iso', 'poca'],
     ['inferno-1', 7, 'chase', 'salto'],
   ];
+  // saltos (itens 22 e 35): o carro corre até a rampa J e a tela é tirada, com a prova congelada,
+  // na decolagem, no meio do vão e no pouso (vista iso). Altura e distância de cada salto vão para
+  // 40_saltos.json. As pistas com "Gv" pousam um nível abaixo da decolagem.
+  const jumps = [
+    ['nho-3', 7],
+    ['newmojave-3', 19],
+    ['inferno-1', 7],
+    ['nho-7', 28],
+    ['inferno-7', 31],
+  ];
+  const saltos = [];
+  for (const [trackId, j] of jumps) {
+    await page.evaluate((trackId) => {
+      const a = window.game.menuActions();
+      a.setCamera('iso');
+      a.quickRace({ trackId, vehicleId: 'havac', color: 0x2f7bff, difficulty: 'normal' });
+    }, trackId);
+    await wait(1500);
+    await page.waitForFunction(() => !window.game.preparing, null, { timeout: 60000 }).catch(() => {});
+    const res = { pista: trackId, casaJ: j, ok: false };
+    for (const fase of ['decolagem', 'meio', 'pouso']) {
+      // avança até o momento pedido e congela a prova (fase 'paused' sem o menu de pausa)
+      const r = await page.evaluate(([j, fase, prev]) => {
+        const g = window.game;
+        const w = g.world;
+        const tr = w.track;
+        const n = tr.pieces.length;
+        const me = w.racers[g.playerId];
+        const c = me.car;
+        g.phase = 'racing';
+        let gEnd = (j + 1) % n;
+        while (tr.pieces[(gEnd + 1) % n].code === 'G') gEnd = (gEnd + 1) % n;
+        const gapStart = tr.pieces[(j + 1) % n].startDist;
+        const gapEnd = tr.pieces[gEnd].startDist + tr.pieces[gEnd].length;
+        const info = prev ?? {};
+        let ok = false;
+        for (let k = 0; k < 60 * 120; k++) {
+          const wasAir = !c.grounded;
+          g.step(1 / 60);
+          if (c.fell) return { ...info, erro: 'caiu no vão' };
+          if (fase === 'decolagem') {
+            if (k > 60 * 3 && c.pieceIndex === j && !c.grounded) {
+              const J = tr.pieces[j];
+              Object.assign(info, { x0: c.x, z0: c.z, hRampa: tr.heightOn(J, J.length), yMax: c.y, velocidade: Math.hypot(c.vx, c.vz) });
+              ok = true;
+            }
+          } else {
+            if (!c.grounded) info.yMax = Math.max(info.yMax ?? c.y, c.y);
+            if (fase === 'meio') {
+              const d = tr.query(c.x, c.z, c.pieceIndex).dist;
+              if (!c.grounded && d >= (gapStart + gapEnd) / 2 && d < gapEnd) ok = true;
+            } else if (wasAir && c.grounded) {
+              const land = tr.query(c.x, c.z, c.pieceIndex);
+              Object.assign(info, { x1: c.x, z1: c.z, hPouso: land.height, casaPouso: land.pieceIndex });
+              ok = true;
+            }
+          }
+          if (ok) break;
+        }
+        if (!ok) return { ...info, erro: `momento não alcançado: ${fase}` };
+        g.phase = 'paused';
+        g.rig.snap();
+        g.redraw = true;
+        return info;
+      }, [j, fase, res.dados ?? null]);
+      await wait(900);
+      await page.screenshot({ path: `${dir}/40_${trackId}_salto_${fase}_iso.png` });
+      res.dados = r;
+      if (r.erro) {
+        res.erro = r.erro;
+        break;
+      }
+    }
+    const d = res.dados ?? {};
+    if (!res.erro && d.x1 !== undefined) {
+      res.ok = true;
+      res.distanciaM = +Math.hypot(d.x1 - d.x0, d.z1 - d.z0).toFixed(1);
+      res.alturaMaxSobreRampaM = +(d.yMax - d.hRampa).toFixed(2);
+      res.quedaNoPousoM = +(d.hRampa - d.hPouso).toFixed(2);
+      res.velocidadeDecolagemMs = +d.velocidade.toFixed(1);
+      res.casaPouso = d.casaPouso;
+    }
+    delete res.dados;
+    saltos.push(res);
+    await page.evaluate(() => { window.game.phase = 'racing'; });
+  }
+  fs.writeFileSync(`${dir}/40_saltos.json`, JSON.stringify(saltos, null, 2));
   for (const [trackId, piece, cam, tag] of features) {
     await page.evaluate(([trackId, cam]) => {
       const a = window.game.menuActions();
@@ -164,6 +251,45 @@ async function telas() {
   await frames(1);
   await page.screenshot({ path: `${dir}/51_faiscas_mureta.png` });
 
+  // chegada (item 62): o 1º colocado (CPU) cruza, freia e estaciona escurecido na beira; a tela é
+  // tirada quando o jogador (piloto automático, um pouco mais lento de propósito) passa por ele
+  await page.evaluate(() => {
+    const a = window.game.menuActions();
+    a.setCamera('iso');
+    a.quickRace({ trackId: 'chem6-1', vehicleId: 'marauder', color: 0x2f7bff, difficulty: 'normal' });
+  });
+  await wait(1500);
+  await page.waitForFunction(() => !window.game.preparing, null, { timeout: 60000 }).catch(() => {});
+  const chegada = await page.evaluate(() => {
+    const g = window.game;
+    const w = g.world;
+    const me = w.racers[g.playerId];
+    me.spec = { ...me.spec, maxSpeed: me.spec.maxSpeed * 0.85 };
+    let k = 0;
+    for (; k < 60 * 400 && !w.racers.some((r) => r.finishPlace); k++) g.step(1 / 60);
+    const first = w.racers.find((r) => r.finishPlace === 1);
+    if (!first || first.id === g.playerId) return { ok: false, motivo: 'jogador venceu ou ninguém cruzou' };
+    const T = w.track.totalLength;
+    // espera o 1º parar e o jogador chegar a 6–22 m antes dele
+    for (let j = 0; j < 60 * 40; j++) {
+      g.step(1 / 60);
+      if (me.finishPlace) break;
+      const parado = Math.hypot(first.car.vx, first.car.vz) < 0.3;
+      const df = w.track.query(first.car.x, first.car.z, first.car.pieceIndex).dist;
+      const dm = w.track.query(me.car.x, me.car.z, me.car.pieceIndex).dist;
+      const gap = (((df - dm) % T) + T) % T;
+      if (parado && gap > 6 && gap < 22) {
+        const q = w.track.query(first.car.x, first.car.z, first.car.pieceIndex);
+        return { ok: true, lateral: +q.lateral.toFixed(2), meiaLargura: w.track.halfWidth, distanciaJogador: +gap.toFixed(1) };
+      }
+    }
+    return { ok: false, motivo: 'jogador não passou pelo carro estacionado' };
+  });
+  await wait(900);
+  await page.screenshot({ path: `${dir}/52_chegada_iso.png` });
+  if (!chegada.ok) console.log('captura da chegada:', chegada.motivo);
+  fs.writeFileSync(`${dir}/52_chegada.json`, JSON.stringify(chegada, null, 2));
+
   // close dos carros: vitrine com os 5 modelos lado a lado (se o jogo expuser a função)
   const hasShowroom = await page.evaluate(() => typeof window.game.showroom === 'function');
   if (hasShowroom) {
@@ -225,27 +351,140 @@ async function ui() {
     await wait(300);
   };
   const waitImgs = () => page.waitForFunction(() => !document.querySelector('img.loading[data-thumb]'), null, { timeout: 90000 }).catch(() => {});
-  // viagem para o planeta seguinte (item 59): início, carro voando e chegada
+  // campanha simulada no Difícil até o título (compras gananciosas, quase sempre no pódio, vence os
+  // duelos): o final, os resultados e as garagens abaixo saem com números reais. A campanha recém-criada
+  // fica guardada e volta antes da loja.
   await page.evaluate(async () => {
-    const { PLANETS } = await window.devModules();
-    window.game.menus.showPlanetWarp({ from: PLANETS[0], to: PLANETS[1], planets: 6, vehicleId: 'marauder', color: 0xe02828 });
+    const m = await window.devModules();
+    const g = window.game;
+    const c0 = g.campaign;
+    window.__camp0 = c0;
+    const s = m.newCampaign(c0.characterId, c0.color, 'hard');
+    const order = ['dirtdevil', 'marauder', 'airblade', 'battletrak', 'havac'];
+    const parts = ['engine', 'tires', 'shocks', 'armor'];
+    const places = [1, 2, 1, 1, 3, 1];
+    const snaps = {};
+    for (let i = 0; !s.champion && i < 600; i++) {
+      for (;;) {
+        const next = order[order.indexOf(s.car.vehicleId) + 1];
+        if (next && m.carsForSale(s).includes(next)) {
+          const cost = m.carSwapCost(s.car, next);
+          if (cost > s.money) break;
+          s.money -= cost;
+          s.car = m.newCarSetup(next);
+          continue;
+        }
+        const k = parts.find((k) => {
+          const p = s.car.upgrades[k] < m.shopLevel(s) ? m.upgradePrice(s.car, k) : null;
+          return p !== null && p <= s.money;
+        });
+        if (!k) break;
+        s.money -= m.upgradePrice(s.car, k);
+        s.car.upgrades[k]++;
+      }
+      const kind = m.raceKind(s);
+      const before = structuredClone(s);
+      const place = kind === 'normal' ? places[i % places.length] : 1;
+      const pista = Math.round(4000 * m.moneyScale(s));
+      const kills = 1 + (i % 3);
+      const r = m.applyRaceResult(s, place, m.prizesFor(before)[place - 1] + pista, kills);
+      const snap = { before, after: structuredClone(s), r, place, pista, kills };
+      if (r.outcome === 'promoted' && before.planet === 1 && before.division === 0) snaps.promoted = snap;
+      if (kind === 'boss' && before.planet === 2) snaps.boss = snap;
+      if (kind === 'boss' && before.planet === 4) snaps.nho = before;
+      if (kind === 'boss' && before.planet === 5) snaps.inferno = before;
+    }
+    delete s.finalePending;
+    window.__camp = s;
+    window.__snaps = snaps;
+  });
+  // viagem para o planeta seguinte (item 59): início, carro voando e chegada com as novidades
+  await page.evaluate(async () => {
+    const m = await window.devModules();
+    const c0 = window.__camp0;
+    const at = { ...m.newCampaign(c0.characterId, c0.color, 'hard'), planet: 2 };
+    at.car = m.newCarSetup('airblade');
+    window.game.menus.showPlanetWarp({ from: m.PLANETS[1], to: m.PLANETS[2], planets: 6, vehicleId: 'airblade', color: c0.color, news: m.planetNews(at, m.VEHICLES) });
+    document.getAnimations().forEach((a) => a.pause());
   });
   await waitImgs();
-  for (const [name, ms] of [['33c_viagem_planeta_inicio', 450], ['33d_viagem_planeta_meio', 1350], ['33e_viagem_planeta_fim', 3800]]) {
+  for (const [name, ms] of [['33c_viagem_planeta_inicio', 450], ['33d_viagem_planeta_meio', 1350], ['33e_viagem_planeta_fim', 4200]]) {
     await freezeAt(ms);
     await page.screenshot({ path: `${dir}/${name}.png` });
   }
-  // final da campanha (item 58): holofotes e troféu, pódio com fogos e rota acendendo, créditos
-  await page.evaluate(() => window.game.menus.showChampion(window.game.hubData()));
+  // final da campanha (item 58): holofotes e troféu, pódio (chefe final no 2, Rip e Shred no 3), rota
+  // acendendo e créditos. Pausa já na abertura: as miniaturas demoram mais que os créditos no render
+  // por software
+  await page.evaluate(() => {
+    window.game.campaign = window.__camp;
+    window.game.menus.showChampion(window.game.hubData());
+    document.getAnimations().forEach((a) => a.pause());
+  });
   await waitImgs();
   for (const [name, ms] of [['33f_campeao_inicio', 1100], ['33f_campeao_meio', 3600], ['33f_campeao_fim', 9000]]) {
     await freezeAt(ms);
     await page.screenshot({ path: `${dir}/${name}.png` });
   }
   // toque pula para o resumo (estatísticas e nova campanha na próxima dificuldade)
-  await page.evaluate(() => document.querySelector('.finale').click());
+  // (os créditos no fim da animação já podem ter aberto o resumo sozinhos)
+  await page.evaluate(() => document.querySelector('.finale')?.click());
   await wait(600);
   await shot('33f_campeao_resumo');
+  // resultados da campanha simulada: PROMOVIDO (Drakonis B → A), chefe derrotado (Bogmire) e
+  // repescagem (duelo perdido em Nho A com os pontos faltando)
+  const results = async (name, key) => {
+    await page.evaluate(async (k) => {
+      const m = await window.devModules();
+      const c0 = window.__camp0;
+      let snap = window.__snaps[k];
+      if (k === 'playoff') {
+        const before = structuredClone(window.__snaps.nho);
+        before.points = m.promoteGoal(before) - 400;
+        const after = structuredClone(before);
+        const r = m.applyRaceResult(after, 2, m.prizesFor(before)[1], 0);
+        snap = { before, after, r, place: 2, pista: 0, kills: 0 };
+      }
+      const { before, after, r, place, pista, kills } = snap;
+      const me = m.CHARACTERS.find((ch) => ch.id === c0.characterId);
+      const prizes = m.prizesFor(before);
+      const others = m.opponentsFor(before, m.VEHICLES);
+      const free = [1, 2, 3, 4].slice(0, others.length + 1).filter((p) => p !== place);
+      const hex = (c) => `#${c.toString(16).padStart(6, '0')}`;
+      const rows = [
+        { place, name: me.name, color: hex(before.color), time: 70 + place * 1.4, kills, prize: prizes[place - 1] ?? 0, money: (prizes[place - 1] ?? 0) + pista, me: true, pilot: me.id, vehicleId: before.car.vehicleId },
+        ...others.map((o, i) => ({ place: free[i], name: o.name, color: hex(o.color), time: 70 + free[i] * 1.4, kills: i % 2, prize: prizes[free[i] - 1] ?? 0, money: prizes[free[i] - 1] ?? 0, me: false, pilot: o.name, vehicleId: o.spec.id })),
+      ];
+      const report = {
+        outcome: r.outcome, kind: r.kind, pointsEarned: r.pointsEarned, points: after.points, promote: m.promoteGoal(before),
+        label: `${m.PLANETS[after.planet].name} — Divisão ${m.DIVISIONS[after.division]}`, boss: m.PLANETS[before.planet].local, bonus: r.bonus,
+        playoffLeft: r.playoffLeft, planets: m.planetCount(after),
+      };
+      window.game.menus.showResults(rows, [71.2, 69.8, 70.4], report, false);
+    }, key);
+    await shot(name);
+  };
+  await results('33g_resultado_promovido', 'promoted');
+  await results('33h_resultado_chefe_derrotado', 'boss');
+  await results('33i_resultado_repescagem', 'playoff');
+  // garagens com o selo CHEFE (duelo final da Divisão A) em Nho A e no Inferno A, e em repescagem
+  const hubAt = async (name, make) => {
+    await page.evaluate(async (k) => {
+      const m = await window.devModules();
+      let st = structuredClone(k === 'inferno' ? window.__snaps.inferno : window.__snaps.nho);
+      if (k === 'playoff') {
+        st.points = m.promoteGoal(st) - 400;
+        m.applyRaceResult(st, 2, 0, 0);
+      }
+      window.game.campaign = st;
+      window.game.menuActions().backToHub();
+    }, make);
+    await wait(2500);
+    await shot(name);
+  };
+  await hubAt('33j_garagem_nho_a_chefe', 'nho');
+  await hubAt('33k_garagem_inferno_a_chefe', 'inferno');
+  await hubAt('33l_garagem_repescagem', 'playoff');
+  await page.evaluate(() => { window.game.campaign = window.__camp0; });
   await page.setViewportSize({ width: 1280, height: 1400 });
   await page.evaluate(() => window.game.menuActions().warpDone());
   await wait(1500);
@@ -293,6 +532,53 @@ async function celular() {
   await m.waitForFunction(() => !!window.game, null, { timeout: 180000 });
   await m.waitForTimeout(2500);
   await m.screenshot({ path: `${dir}/41_celular_menu.png`, timeout: 120000 });
+  // item 60 no celular: corrida rápida, garagem e loja em 844x390, com a medida de rolagem do menu
+  const medidas = {};
+  const mclick = async (sel) => {
+    await m.waitForSelector(sel, { timeout: 60000 });
+    await m.evaluate((q) => setTimeout(() => document.querySelector(q).click(), 0), sel);
+    await m.waitForTimeout(1500);
+  };
+  const mshot = async (name) => {
+    await m.waitForFunction(() => !document.querySelector('img.loading[data-thumb]'), null, { timeout: 90000 }).catch(() => {});
+    await m.waitForTimeout(300);
+    medidas[name] = await m.evaluate(() => {
+      const o = document.querySelector('.overlay');
+      return o ? { scrollHeight: o.scrollHeight, clientHeight: o.clientHeight, rola: o.scrollHeight > o.clientHeight + 2 } : null;
+    });
+    await m.screenshot({ path: `${dir}/${name}.png`, timeout: 120000 });
+  };
+  await mclick('button[data-act="quick"]');
+  await mshot('46_celular_corrida_rapida');
+  await m.evaluate(() => window.game.menuActions().toMain());
+  await m.waitForTimeout(800);
+  await mclick('button[data-act="new"]');
+  await mclick('button[data-act="new-start"]');
+  await mshot('47_celular_garagem');
+  await mclick('button[data-act="shop"]');
+  await mshot('48_celular_loja_melhorias');
+  await mclick('button[data-tab="weapons"]');
+  await mshot('49_celular_loja_armas');
+  await m.evaluate(() => window.game.menuActions().toMain());
+  await m.waitForTimeout(800);
+  // item 55: vão entre o volante e a fileira de armas, e tamanhos dos controles (px CSS)
+  const medeToque = () =>
+    m.evaluate(() => {
+      const r = (q) => document.querySelector(q)?.getBoundingClientRect();
+      const steer = r('.touch .steer');
+      const acts = [...document.querySelectorAll('.touch-actions button')].map((b) => b.getBoundingClientRect());
+      if (!steer || !acts.length) return null;
+      const fire2 = r('.touch-right .fire2');
+      const gas = r('.touch-right .gas');
+      return {
+        tela: `${innerWidth}x${innerHeight}`,
+        vaoVolanteArmas: Math.round(steer.top - Math.max(...acts.map((a) => a.bottom))),
+        volante: `${Math.round(steer.width)}x${Math.round(steer.height)}`,
+        tiro: Math.round(r('.touch-actions .fire').width),
+        tiroDireita: fire2 ? Math.round(fire2.width) : 0,
+        vaoTiroAcel: fire2 && gas ? Math.round(gas.top - fire2.bottom) : null,
+      };
+    });
   await m.evaluate(() => window.game.menuActions().quickRace({ trackId: 'chem6-1', vehicleId: 'marauder', color: 0xe02828, difficulty: 'normal' }));
   await m.waitForTimeout(1200);
   await m.evaluate(() => {
@@ -301,6 +587,15 @@ async function celular() {
   });
   await m.waitForTimeout(900);
   await m.screenshot({ path: `${dir}/42_celular_corrida_controles.png`, timeout: 120000 });
+  medidas.toque844 = await medeToque();
+  // iPhone SE / 8 deitado
+  await m.setViewportSize({ width: 667, height: 375 });
+  await m.waitForTimeout(900);
+  medidas.toque667 = await medeToque();
+  await m.screenshot({ path: `${dir}/42b_celular_667_controles.png`, timeout: 120000 });
+  await m.setViewportSize({ width: 844, height: 390 });
+  await m.waitForTimeout(600);
+  fs.writeFileSync(`${dir}/celular_medidas.json`, JSON.stringify(medidas, null, 2));
   // aceleração automática: o polegar direito fica com FREIO e TIRO (virar e atirar ao mesmo tempo)
   await m.evaluate(() => { window.game.menuActions().setAutoThrottle(true); window.game.menus.hideAll(); });
   await m.waitForTimeout(500);
@@ -340,7 +635,7 @@ async function jogo() {
       const entries = profiles.map((ai, i) => ({ name: `CPU${i}`, color: 0xffffff, spec: VEHICLES[car], ai }));
       const w = createWorld(track, entries, 4, 1234, PRIZES);
       w.started = true;
-      const stats = { fires: 0, hits: 0, explosions: 0, bumps: 0, pickups: 0, spins: 0, leadChanges: 0, placeChanges: 0, respawns: 0, hitsByKind: {}, dropsByKind: {} };
+      const stats = { fires: 0, hits: 0, explosions: 0, bumps: 0, pickups: 0, spins: 0, leadChanges: 0, placeChanges: 0, respawns: 0, hitsByKind: {}, firesByKind: {}, dropsByKind: {} };
       let leader = -1;
       const lastPlace = w.racers.map((r) => r.place);
       let t = 0;
@@ -351,7 +646,10 @@ async function jogo() {
         stepWorld(w, {}, dt);
         t += dt;
         for (const e of w.events) {
-          if (e.type === 'fire') stats.fires++;
+          if (e.type === 'fire') {
+            stats.fires++;
+            stats.firesByKind[e.kind] = (stats.firesByKind[e.kind] ?? 0) + 1;
+          }
           if (e.type === 'hit') {
             stats.hits++;
             stats.hitsByKind[e.kind] = (stats.hitsByKind[e.kind] ?? 0) + 1;
@@ -484,7 +782,38 @@ async function jogo() {
         rear: spec.rear,
       });
     }
-    return { races, handling };
+    // 3) taxa de acerto por arma da frente (todas as corridas acima): acertos / disparos
+    const hitRate = {};
+    for (const k of ['laser', 'missile', 'sundog']) {
+      const fires = races.reduce((s, r) => s + (r.firesByKind[k] ?? 0), 0);
+      const hits = races.reduce((s, r) => s + (r.hitsByKind[k] ?? 0), 0);
+      hitRate[k] = { fires, hits, rate: fires ? +(hits / fires).toFixed(2) : null };
+    }
+
+    // 4) corridas mistas: um carro de cada modelo, mesma CPU (habilidade/agressividade iguais), 3 voltas,
+    //    2 sementes por pista; registra vitórias e colocação média por carro (equilíbrio entre modelos)
+    const mixed = { races: 0, wins: {}, avgPlace: {} };
+    const placeSum = {};
+    for (const def of TRACKS)
+      for (const seed of [3, 9]) {
+        const track = new Track(def);
+        // a ordem do grid gira com a semente, para ninguém largar sempre na frente
+        const order = ids.map((_, i) => ids[(i + seed) % ids.length]);
+        const entries = order.map((id, i) => ({ name: id, color: 0xffffff, spec: VEHICLES[id], ai: { skill: 0.8, aggression: 0.6, lane: [-1.5, -0.5, 0.5, 1.5, 0, -1, 1][i % 7] } }));
+        const w = createWorld(track, entries, 3, seed, PRIZES);
+        w.started = true;
+        for (let k = 0; k < 60 * 600 && w.finishedCount < entries.length; k++) stepWorld(w, {}, dt);
+        mixed.races++;
+        for (const r of w.racers) {
+          if (r.finishPlace === 1) mixed.wins[r.name] = (mixed.wins[r.name] ?? 0) + 1;
+          placeSum[r.name] = (placeSum[r.name] ?? 0) + (r.finishPlace || entries.length);
+        }
+      }
+    for (const id of ids) {
+      mixed.wins[id] = mixed.wins[id] ?? 0;
+      mixed.avgPlace[id] = +(placeSum[id] / mixed.races).toFixed(2);
+    }
+    return { races, hitRate, mixed, handling };
   });
   fs.writeFileSync(path.join(out, 'jogo.json'), JSON.stringify(result, null, 2));
 }
@@ -514,14 +843,40 @@ async function picote() {
     await page.evaluate(async (leve) => {
       const m = await window.devModules();
       m.setAudioLite?.(leve);
-      // tarefas longas da thread principal durante a medição
+      // tarefas longas da thread principal durante a medição: início (performance.now), duração,
+      // fase do jogo e atribuição do navegador
       window.__longtasks = [];
       try {
         new PerformanceObserver((l) => {
-          for (const e of l.getEntries()) window.__longtasks.push(Math.round(e.duration));
+          for (const e of l.getEntries())
+            window.__longtasks.push({ inicio: Math.round(e.startTime), ms: Math.round(e.duration), atribuicao: e.attribution?.[0]?.name ?? '' });
         }).observe({ type: 'longtask', buffered: false });
       } catch {
         /* sem suporte */
+      }
+      // linha do tempo das fases (a longtask é atribuída à fase em que começou)
+      const g = window.game;
+      const faseAgora = () => `${g.phase}${g.preparing ? ':preparando' : ''}`;
+      window.__fases = [[performance.now(), faseAgora()]];
+      window.__faseTimer = setInterval(() => {
+        const f = faseAgora();
+        if (window.__fases[window.__fases.length - 1][1] !== f) window.__fases.push([performance.now(), f]);
+      }, 20);
+      // tempo de step() e render() separados (performance.mark/measure + intervalos para cruzar
+      // com as longtasks)
+      window.__trechos = [];
+      for (const nome of ['step', 'render']) {
+        const orig = g[nome];
+        g[nome] = function (...a) {
+          const t0 = performance.now();
+          performance.mark(`rr-${nome}`);
+          try {
+            return orig.apply(this, a);
+          } finally {
+            performance.measure(`rr-${nome}`, `rr-${nome}`);
+            window.__trechos.push([nome, t0, performance.now() - t0]);
+          }
+        };
       }
       window.game.menuActions().quickRace({ trackId: 'chem6-1', vehicleId: 'marauder', color: 0x2f7bff, difficulty: 'normal' });
     }, caso.leve);
@@ -565,6 +920,9 @@ async function picote() {
       };
       window.__playout0 = a.ctx.playoutStats ? { ...a.ctx.playoutStats.toJSON?.() } : null;
       window.__longtasks.length = 0;
+      window.__trechos.length = 0;
+      performance.clearMarks();
+      performance.clearMeasures();
     });
     await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
     await wait(SEG * 1000);
@@ -631,7 +989,30 @@ async function picote() {
       const bytes = new Uint8Array(wav.buffer);
       let bin = '';
       for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      clearInterval(window.__faseTimer);
       const lt = window.__longtasks;
+      const fases = window.__fases;
+      const faseEm = (t) => {
+        let f = fases[0][1];
+        for (const [ft, nome] of fases) if (ft <= t) f = nome;
+        return f;
+      };
+      const trechos = window.__trechos;
+      // quanto de cada longtask foi step() e render() (sobreposição dos intervalos)
+      const dentro = (ini, fim, nome) =>
+        trechos.reduce((s, [n, t0, d]) => (n === nome ? s + Math.max(0, Math.min(fim, t0 + d) - Math.max(ini, t0)) : s), 0);
+      const tarefas = lt
+        .map((e) => ({ ...e, fase: faseEm(e.inicio), stepMs: Math.round(dentro(e.inicio, e.inicio + e.ms, 'step')), renderMs: Math.round(dentro(e.inicio, e.inicio + e.ms, 'render')) }))
+        .sort((x, y) => y.ms - x.ms);
+      const soma = (nome) => trechos.reduce((s, [n, , d]) => (n === nome ? s + d : s), 0);
+      const conta = (nome) => trechos.filter(([n]) => n === nome).length;
+      const maior = (nome) => trechos.reduce((s, [n, , d]) => (n === nome ? Math.max(s, d) : s), 0);
+      const tempos = {
+        step: { chamadas: conta('step'), somaMs: Math.round(soma('step')), maiorMs: +maior('step').toFixed(1) },
+        render: { chamadas: conta('render'), somaMs: Math.round(soma('render')), maiorMs: +maior('render').toFixed(1) },
+      };
+      performance.clearMarks();
+      performance.clearMeasures();
       const ps = a.ctx.playoutStats?.toJSON?.() ?? null;
       const saltos = t.saltos ?? [];
       return {
@@ -647,7 +1028,15 @@ async function picote() {
         atrasosRenderMaior10ms: saltos.filter((s) => s > 10).length,
         atrasosRenderMs: saltos.slice(0, 30),
         picoDbfs: +(20 * Math.log10(pico || 1e-9)).toFixed(2),
-        longtasks: { total: lt.length, maiorMs: lt.length ? Math.max(...lt) : 0, somaMs: lt.reduce((s, v) => s + v, 0) },
+        longtasks: {
+          total: lt.length,
+          maiorMs: lt.length ? Math.max(...lt.map((e) => e.ms)) : 0,
+          somaMs: lt.reduce((s, e) => s + e.ms, 0),
+          // as 15 maiores: início (performance.now), fase, e quanto foi step()/render()
+          maiores: tarefas.slice(0, 15),
+        },
+        tempos,
+        fases: fases.map(([t, f]) => [Math.round(t), f]),
         playoutStats: ps,
         playoutInicio: window.__playout0,
         wav: btoa(bin),
@@ -667,7 +1056,9 @@ async function picote() {
           'Corrida real (chem6-1, autopiloto, q=baixo) com CPU 4x mais lenta (CDP Emulation.setCPUThrottlingRate). A saída do master é gravada por um ' +
           'AudioWorklet. buracosSinal = silêncio digital >= 2 ms no meio do som; descontinuidades = saltos de amostra ~8x maiores que a variação local; ' +
           'atrasosRender = saltos (> 2 ms) do atraso do relógio de áudio em relação ao relógio de parede (a thread de áudio não entregou a tempo: buraco na saída); ' +
-          'playoutStats = contadores do Chrome (fallbackFrames = amostras que o dispositivo tocou em silêncio), quando disponíveis.',
+          'playoutStats = contadores do Chrome (fallbackFrames = amostras que o dispositivo tocou em silêncio), quando disponíveis. ' +
+          'longtasks.maiores = tarefas longas (inicio = performance.now), com a fase do jogo e os ms de step()/render() dentro delas; ' +
+          'tempos = soma e maior duração de step() e render() na medição (performance.mark/measure rr-step e rr-render).',
         casos: resultados,
       },
       null,
@@ -680,7 +1071,8 @@ async function picote() {
 async function som() {
   const dir = path.join(out, 'som');
   fs.mkdirSync(dir, { recursive: true });
-  const clips = await page.evaluate(async () => {
+  const refWav = fs.readFileSync(new URL('./locutor/voz-referencia-arena.wav', import.meta.url)).toString('base64');
+  const clips = await page.evaluate(async (refWavB64) => {
     const m = await window.devModules();
     const ctxMod = m, sfx = m;
     const { EngineSound, SONGS, SynthRock } = m;
@@ -909,8 +1301,154 @@ async function som() {
         };
       }, 0.025)));
     }
+    // ---- rodada 10 (Som 7) ----
+    const extra = {};
+    // motor: varredura 0 → 100% em 8 s, pé embaixo, com e sem nitro (item 21 / nitro)
+    const sweep = (nitro) => render(10, async () => {
+      const e = new EngineSound();
+      e.start();
+      return (t) => { const s = Math.max(0, Math.min(1, (t - 1) / 8)); e.update(s * (nitro ? 1.15 : 1), t < 1 ? 0 : 1, nitro && t >= 1, 0); };
+    });
+    res.push(analyse('motor_varredura', await sweep(false)));
+    res.push(analyse('motor_nitro', await sweep(true)));
+    // final da campanha (item 58): trilha de vitória + fogos + multidão + locutor, como em showChampion
+    res.push(analyse('final_campanha', await render(14, async (c, a) => {
+      await loadAnn();
+      const s = new SynthRock(c, a.music);
+      a.music.gain.value = 0.7;
+      s.play(SONGS[0]);
+      const later = [];
+      const show = sfx.finaleShow((sec, fn) => later.push([c.currentTime + sec, fn]));
+      const cues = show.cues.map(([sec, fn]) => [0.9 + sec, fn]).sort((x, y) => x[0] - y[0]);
+      const says = [[0.05, 'dominating', 'Viper Mackay'], [4.2, 'holyToledo', null]];
+      return (t) => {
+        s.schedule();
+        while (cues.length && cues[0][0] <= t) cues.shift()[1]();
+        for (let i = later.length - 1; i >= 0; i--) if (later[i][0] <= t) later.splice(i, 1)[0][1]();
+        while (says.length && says[0][0] <= t) { const [, k, who] = says.shift(); ann.busyUntil = 0; ann.say(k, who, 3); }
+      };
+    }, 0.01)));
+    // espacialização: um rival passa da esquerda para a direita (chega, cruza a 3 m, vai embora), com Doppler
+    {
+      const clip = await render(5, async () => {
+        const r = new m.RivalEngines(1);
+        r.start();
+        return (t) => {
+          const x = (t - 2.5) * 14; // m, lateral (−35 → +35)
+          const dist = Math.hypot(x, 3);
+          r.update([{ speedRatio: 0.8, throttle: 1, dist, pan: Math.max(-1, Math.min(1, x / 12)), closing: (-x / dist) * 14 }]);
+        };
+      });
+      res.push(analyse('rival_passando_esq_dir', clip));
+      const seg = (arr, a0, a1) => { let s = 0; const i0 = Math.floor(a0 * SR), i1 = Math.floor(a1 * SR); for (let i = i0; i < i1; i++) s += arr[i] * arr[i]; return 10 * Math.log10(s / (i1 - i0) + 1e-12); };
+      // tom dominante por autocorrelação (40–400 Hz) antes e depois de cruzar: Doppler = razão
+      const pitch = (a0) => {
+        const i0 = Math.floor(a0 * SR), N = 8192;
+        let best = 0, lag = 0;
+        for (let L = Math.floor(SR / 400); L < SR / 40; L++) { let s = 0; for (let i = 0; i < N; i++) s += clip.mono[i0 + i] * clip.mono[i0 + i + L]; if (s > best) { best = s; lag = L; } }
+        return lag ? +(SR / lag).toFixed(1) : 0;
+      };
+      extra.espacializacao = {
+        antes_1a2s: { L_dB: +seg(clip.L, 1, 2).toFixed(1), R_dB: +seg(clip.R, 1, 2).toFixed(1), tomHz: pitch(1.6) },
+        depois_3a4s: { L_dB: +seg(clip.L, 3, 4).toFixed(1), R_dB: +seg(clip.R, 3, 4).toFixed(1), tomHz: pitch(3.2) },
+        observacao: 'pan -1→+1 e velocidade de aproximação +14 → −14 m/s: antes do cruzamento o lado esquerdo domina e o tom é mais alto (Doppler); depois, o direito domina e o tom cai.',
+      };
+    }
+    // motores nas telas de resultados, viagem e final: motor do jogador + 2 rivais acelerando e, em
+    // 1,5 s, o silence() chamado por showResults (com ou sem rede), showPlanetWarp e toHub/showChampion
+    extra.motorNasTelas = {};
+    for (const tela of ['resultados', 'viagem', 'final']) {
+      const clip = await render(4, async () => {
+        const e = new EngineSound();
+        e.start();
+        const r = new m.RivalEngines(2);
+        r.start();
+        let off = false;
+        return (t) => {
+          if (t >= 1.5 && !off) { off = true; e.silence(); r.silence(); }
+          if (!off) { e.update(0.7, 1, false, 0); r.update([{ speedRatio: 0.7, throttle: 1, dist: 8, pan: -0.4, closing: 0 }, { speedRatio: 0.6, throttle: 1, dist: 14, pan: 0.5, closing: 0 }]); }
+        };
+      });
+      const rms = (a0, a1) => { let s = 0; const i0 = Math.floor(a0 * SR), i1 = Math.floor(a1 * SR); for (let i = i0; i < i1; i++) s += clip.mono[i] * clip.mono[i]; return +(10 * Math.log10(s / (i1 - i0) + 1e-12)).toFixed(1); };
+      extra.motorNasTelas[tela] = { rmsCorrida_dB: rms(0.5, 1.5), rmsTela_2a4s_dB: rms(2, 4) };
+    }
+    // locutor (itens 32/53): métricas de emoção contra a referência de arena (voz humana, CC-BY)
+    {
+      const kFilt = (x) => {
+        // ponderação K (BS.1770) para SR: prateleira +4 dB em 1,5 kHz + passa-alta 38 Hz
+        const biq = (x, b, a) => { const y = new Float32Array(x.length); let x1 = 0, x2 = 0, y1 = 0, y2 = 0; for (let i = 0; i < x.length; i++) { const v = (b[0] * x[i] + b[1] * x1 + b[2] * x2 - a[1] * y1 - a[2] * y2) / a[0]; x2 = x1; x1 = x[i]; y2 = y1; y1 = v; y[i] = v; } return y; };
+        let A = Math.pow(10, 4 / 40), w = 2 * Math.PI * 1500 / SR, al = Math.sin(w) / (2 * Math.SQRT1_2), c = Math.cos(w), sA = 2 * Math.sqrt(A) * al;
+        const y = biq(x, [A * ((A + 1) + (A - 1) * c + sA), -2 * A * ((A - 1) + (A + 1) * c), A * ((A + 1) + (A - 1) * c - sA)], [(A + 1) - (A - 1) * c + sA, 2 * ((A - 1) - (A + 1) * c), (A + 1) - (A - 1) * c - sA]);
+        w = 2 * Math.PI * 38 / SR; al = Math.sin(w) / (2 * 0.5); c = Math.cos(w);
+        return biq(y, [(1 + c) / 2, -(1 + c), (1 + c) / 2], [1 + al, -2 * c, 1 - al]);
+      };
+      const band = async (x, lo, hi) => {
+        const c = new OfflineAudioContext(1, x.length, SR);
+        const b = c.createBuffer(1, x.length, SR); b.copyToChannel(x, 0);
+        const s = c.createBufferSource(); s.buffer = b;
+        let node = s;
+        for (let k = 0; k < 2; k++) { const f1 = c.createBiquadFilter(); f1.type = 'highpass'; f1.frequency.value = lo; const f2 = c.createBiquadFilter(); f2.type = 'lowpass'; f2.frequency.value = hi; node.connect(f1); f1.connect(f2); node = f2; }
+        node.connect(c.destination); s.start();
+        return (await c.startRendering()).getChannelData(0);
+      };
+      const voiceMetrics = async (x) => {
+        const k = kFilt(x);
+        const win = Math.floor(0.4 * SR), hop = Math.floor(0.1 * SR);
+        let M = -99;
+        for (let s = 0; s + win <= k.length; s += hop) { let e = 0; for (let i = s; i < s + win; i++) e += k[i] * k[i]; if (e > 0) M = Math.max(M, -0.691 + 10 * Math.log10(e / win)); }
+        const fr = Math.floor(0.02 * SR), nf = Math.floor(x.length / fr);
+        const hi = await band(x, 2000, 4000), lo = await band(x, 300, 800), sp = await band(x, 300, 3000);
+        const en = (a, i) => { let e = 0; for (let j = i * fr; j < (i + 1) * fr; j++) e += a[j] * a[j]; return e / fr; };
+        const E = Array.from({ length: nf }, (_, i) => en(x, i)), Emax = Math.max(...E);
+        let eh = 0, el = 0;
+        for (let i = 0; i < nf; i++) if (E[i] > Emax * 1e-3) { eh += en(hi, i); el += en(lo, i); }
+        // sílabas/s: picos (≥4 dB de proeminência, ≥100 ms entre si) do envelope 300–3000 Hz
+        const h = Math.floor(0.01 * SR), nb = Math.floor(sp.length / h);
+        const env = Array.from({ length: nb }, (_, i) => { let e = 0; for (let j = i * h; j < Math.min(sp.length, i * h + 4 * h); j++) e += sp[j] * sp[j]; return 10 * Math.log10(e / (4 * h) + 1e-12); });
+        const top = Math.max(...env);
+        let peaks = 0, lastPk = -99, active = 0;
+        for (let i = 1; i < nb - 1; i++) {
+          if (env[i] > top - 25) active++;
+          if (env[i] >= env[i - 1] && env[i] > env[i + 1] && env[i] > top - 20 && i - lastPk >= 10) {
+            let l = env[i], r = env[i];
+            for (let j = i; j >= Math.max(0, i - 30); j--) l = Math.min(l, env[j]);
+            for (let j = i; j < Math.min(nb, i + 30); j++) r = Math.min(r, env[j]);
+            if (env[i] - Math.max(l, r) >= 4) { peaks++; lastPk = i; }
+          }
+        }
+        return { loudnessMomentaneoMaxLUFS: +M.toFixed(1), esforcoVocal_dB_2a4k_vs_300a800: +(10 * Math.log10(eh / (el || 1e-12))).toFixed(1), silabasPorSeg: +(peaks / Math.max(0.1, active * 0.01)).toFixed(2) };
+      };
+      const toMono = (b) => { const x = new Float32Array(b.length); for (let ch = 0; ch < b.numberOfChannels; ch++) { const d = b.getChannelData(ch); for (let i = 0; i < x.length; i++) x[i] += d[i] / b.numberOfChannels; } return x; };
+      const decode = async (ab) => { const c = new OfflineAudioContext(1, 1, SR); return toMono(await c.decodeAudioData(ab)); };
+      // referência (arquivo cru) e cada fala: arquivo cru e depois da cadeia de arena do jogo
+      const refB = Uint8Array.from(atob(refWavB64), (ch) => ch.charCodeAt(0)).buffer;
+      const ref = await voiceMetrics(await decode(refB));
+      const throughArena = async (x) => {
+        const c = new OfflineAudioContext(1, x.length + Math.floor(0.5 * SR), SR);
+        const b = c.createBuffer(1, x.length, SR); b.copyToChannel(x, 0);
+        const s = c.createBufferSource(); s.buffer = b;
+        s.connect(m.arenaChain(c, c.destination)); s.start();
+        return (await c.startRendering()).getChannelData(0);
+      };
+      const falas = {};
+      for (const f of ['start_0', 'start_1', 'start_2', 'hotFury_0', 'lightsUp_0', 'hammered_0', 'holyToledo_0', 'wow_0']) {
+        const x = await decode(await (await fetch(m.publicUrl(`audio/locutor/${f}.mp3`))).arrayBuffer());
+        const cru = await voiceMetrics(x);
+        const arena = await voiceMetrics(await throughArena(x));
+        falas[f] = { cru, arena, abaixoDaReferencia: { loudness: cru.loudnessMomentaneoMaxLUFS < ref.loudnessMomentaneoMaxLUFS, esforco: cru.esforcoVocal_dB_2a4k_vs_300a800 < ref.esforcoVocal_dB_2a4k_vs_300a800, taxa: cru.silabasPorSeg < ref.silabasPorSeg }, arenaAtingeReferencia: { loudness: arena.loudnessMomentaneoMaxLUFS >= ref.loudnessMomentaneoMaxLUFS, esforco: arena.esforcoVocal_dB_2a4k_vs_300a800 >= ref.esforcoVocal_dB_2a4k_vs_300a800 } };
+      }
+      extra.locutor = {
+        referencia: { arquivo: 'scripts/locutor/voz-referencia-arena.wav (Alba MacKenna, CC-BY 4.0)', ...ref },
+        falas,
+        observacao: 'loudness = máximo momentâneo (janela 400 ms, ponderação K); esforço = energia 2–4 kHz menos 300–800 Hz nos quadros com voz; taxa = picos silábicos do envelope 300–3000 Hz por segundo de fala. "arena" = a fala depois de arenaChain (src/audio/announcer.ts), usada nas falas de largada/ataque (ARENA_LINES).',
+      };
+    }
+    window.__somExtra = extra;
     return res;
-  });
+  }, refWav);
+  const extra = await page.evaluate(() => window.__somExtra);
+  fs.writeFileSync(path.join(dir, 'locutor_emocao.json'), JSON.stringify(extra.locutor, null, 2));
+  fs.writeFileSync(path.join(dir, 'espacializacao_e_telas.json'), JSON.stringify({ espacializacao: extra.espacializacao, motorNasTelas: extra.motorNasTelas }, null, 2));
   const metrics = [];
   for (const c of clips) {
     fs.writeFileSync(path.join(dir, `${c.name}.wav`), Buffer.from(c.wav, 'base64'));
@@ -942,13 +1480,37 @@ async function desempenho() {
         new Promise((resolve) => {
           const g = window.game;
           const orig = g.render;
+          const origStep = g.step;
           const t = [];
+          // tempo de step() e render() separados (performance.mark/measure)
+          const custo = { step: 0, render: 0, passos: 0 };
           g.render = function (...a) {
-            t.push(performance.now());
-            return orig.apply(this, a);
+            const t0 = performance.now();
+            t.push(t0);
+            performance.mark('rr-render');
+            try {
+              return orig.apply(this, a);
+            } finally {
+              performance.measure('rr-render', 'rr-render');
+              custo.render += performance.now() - t0;
+            }
+          };
+          g.step = function (...a) {
+            const t0 = performance.now();
+            performance.mark('rr-step');
+            try {
+              return origStep.apply(this, a);
+            } finally {
+              performance.measure('rr-step', 'rr-step');
+              custo.step += performance.now() - t0;
+              custo.passos++;
+            }
           };
           setTimeout(() => {
             g.render = orig;
+            g.step = origStep;
+            performance.clearMarks();
+            performance.clearMeasures();
             const iv = t.slice(1).map((x, i) => x - t[i]).sort((a, b) => a - b);
             const seg = t.length > 1 ? (t[t.length - 1] - t[0]) / 1000 : ms / 1000;
             const p95 = iv.length ? iv[Math.min(iv.length - 1, Math.floor(iv.length * 0.95))] : 0;
@@ -957,6 +1519,10 @@ async function desempenho() {
               fpsMedio: +(Math.max(0, t.length - 1) / seg).toFixed(1),
               quadroP95ms: +p95.toFixed(1),
               fpsP95: p95 ? +(1000 / p95).toFixed(1) : 0,
+              // custo médio por quadro desenhado e por passo da simulação
+              renderMsQuadro: t.length ? +(custo.render / t.length).toFixed(2) : 0,
+              stepMsPasso: custo.passos ? +(custo.step / custo.passos).toFixed(2) : 0,
+              passos: custo.passos,
             });
           }, ms);
         }),
@@ -1021,7 +1587,9 @@ async function desempenho() {
     observacao:
       'Render por software (SwiftShader, sem GPU): valores absolutos são muito menores que num aparelho real; servem para comparar níveis. ' +
       'fpsP95 = qps do quadro no percentil 95 do tempo de quadro (os 5% mais lentos). menuQps = quadros desenhados por segundo atrás do menu principal (limite ~30). ' +
-      'pausaQuadros = quadros desenhados em 4 s de pausa (esperado 0: imagem congelada). trava30 = nível baixo travou a corrida em 30 qps.',
+      'pausaQuadros = quadros desenhados em 4 s de pausa (esperado 0: imagem congelada). trava30 = nível baixo travou a corrida em 30 qps. ' +
+      'O menu principal só desenha ao entrar e quando algo muda (menuQps/desenhoQps perto de 0 é o esperado). ' +
+      'renderMsQuadro/stepMsPasso = custo médio de render() por quadro e de step() por passo (performance.mark rr-render/rr-step).',
     pista: 'chem6-1',
     tela: '960x540',
     amostras,

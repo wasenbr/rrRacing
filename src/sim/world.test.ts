@@ -46,19 +46,29 @@ describe('mundo da corrida', () => {
     expect(done.armor).toBe(armor);
   });
 
-  it('quem termina estaciona na beira da pista, sem sobrepor o outro terminado', () => {
-    const world = createWorld(track, aiEntries(), 1, 42);
-    world.started = true;
-    for (let i = 0; i < 60 * 240 && world.finishedCount < 2; i++) stepWorld(world, {}, DT);
-    expect(world.finishedCount).toBeGreaterThanOrEqual(2);
-    for (let i = 0; i < 60 * 8; i++) stepWorld(world, {}, DT);
-    const [a, b] = [1, 2].map((p) => world.racers.find((r) => r.finishPlace === p)!);
-    for (const r of [a, b]) {
-      expect(Math.hypot(r.car.vx, r.car.vz)).toBeLessThan(0.3);
-      expect(Math.abs(track.query(r.car.x, r.car.z, r.car.pieceIndex).lateral)).toBeGreaterThan(2.5);
-    }
-    expect(Math.hypot(a.car.x - b.car.x, a.car.z - b.car.z)).toBeGreaterThan(4);
-  });
+  it('em todas as pistas, com 4 carros, quem termina estaciona encostado na beira, sem sobrepor outro', () => {
+    const ids = Object.keys(VEHICLES);
+    const lanes = [0.5, -1, 1.5, -2];
+    const fails: string[] = [];
+    for (const seed of [1, 42])
+      for (const def of TRACKS) {
+        const t = new Track(def);
+        const entries: RacerEntry[] = lanes.map((lane, i) => ({ name: `C${i}`, color: 0, spec: VEHICLES[ids[i % ids.length]], ai: { skill: 0.95 - i * 0.1, aggression: 0.6, lane } }));
+        const world = createWorld(t, entries, 1, seed);
+        world.started = true;
+        for (let i = 0; i < 60 * 300 && world.finishedCount < 4; i++) stepWorld(world, {}, DT);
+        for (let i = 0; i < 60 * 8; i++) stepWorld(world, {}, DT);
+        const done = world.racers.filter((r) => r.finishPlace);
+        if (done.length < 4) fails.push(`${def.id}/${seed}: só ${done.length} terminaram`);
+        for (const r of done) {
+          const lat = Math.abs(t.query(r.car.x, r.car.z, r.car.pieceIndex).lateral);
+          const v = Math.hypot(r.car.vx, r.car.vz);
+          if (!(lat > t.halfWidth - 2.5 && v < 0.3)) fails.push(`${def.id}/${seed} P${r.finishPlace}: lateral ${lat.toFixed(1)}, v ${v.toFixed(1)}`);
+          for (const o of done) if (o.id > r.id && Math.hypot(o.car.x - r.car.x, o.car.z - r.car.z) < 3) fails.push(`${def.id}/${seed}: P${r.finishPlace} e P${o.finishPlace} sobrepostos`);
+        }
+      }
+    expect(fails).toEqual([]);
+  }, 120000);
 
   it('terminado parado numa rampa não recua', () => {
     const ramp = new Track({ id: 'rampa', name: 'rampa', planet: 'x', theme: 'chem6', laps: 1, layout: 'F U S S S R S S S S S S S R S S D S S S S R S S S S S S S R' });
@@ -319,5 +329,59 @@ describe('mundo da corrida', () => {
       spins += world.events.filter((e) => e.type === 'spin').length;
     }
     expect(spins).toBe(1);
+  });
+
+  it('mancha de óleo some depois de 2 giros ou do tempo de vida', () => {
+    const entries: RacerEntry[] = [0, 1, 2].map((i) => ({ name: `C${i}`, color: 0, spec: VEHICLES.marauder, ai: null }));
+    const world = createWorld(track, entries, 4, 1);
+    world.started = true;
+    const oil = { id: 98, kind: 'oil' as const, owner: -1, x: 0, y: 0, z: 0, age: 5 };
+    world.hazards.push(oil);
+    const [a, b, c] = world.racers;
+    for (const r of [a, b]) {
+      Object.assign(r.car, { x: oil.x, z: oil.z, vx: Math.sin(r.car.heading) * 20, vz: Math.cos(r.car.heading) * 20 });
+      stepWorld(world, {}, DT);
+      expect(r.spinTime).toBeGreaterThan(0);
+      r.car.x = r.car.z = 500; // sai da mancha
+    }
+    expect(world.hazards.includes(oil)).toBe(false);
+    // tempo de vida: sem ninguém passar, some ao fim de WEAPONS.oil.life
+    const old = { ...oil, id: 99, x: 300, z: 300, age: WEAPONS.oil.life - 0.01, spins: 0 };
+    world.hazards.push(old);
+    c.car.x = c.car.z = 600;
+    for (let i = 0; i < 3; i++) stepWorld(world, {}, DT);
+    expect(world.hazards.includes(old)).toBe(false);
+  });
+
+  it('míssil só curva num cone em torno do disparo e o sundog para de perseguir', () => {
+    const entries: RacerEntry[] = [
+      { name: 'Alvo', color: 0, spec: VEHICLES.marauder, ai: null },
+      { name: 'Atirador', color: 0, spec: VEHICLES.havac, ai: null },
+    ];
+    const world = createWorld(track, entries, 4, 1);
+    world.started = true;
+    const [target] = world.racers;
+    const t = target.car;
+    const lx = Math.cos(t.heading), lz = -Math.sin(t.heading);
+    const fx = Math.sin(t.heading), fz = Math.cos(t.heading);
+    // alvo 20 m à frente e 6 m ao lado (~0,29 rad): o míssil vira até o limite do cone e para ali
+    const aim = t.heading;
+    world.projectiles.push({ id: 90, kind: 'missile', owner: 1, x: t.x - fx * 20 - lx * 6, y: t.y + 1, z: t.z - fz * 20 - lz * 6, heading: aim, speed: 0.01, life: 2, pieceIndex: t.pieceIndex, aim });
+    let turned = 0;
+    for (let i = 0; i < 60; i++) {
+      stepWorld(world, {}, DT);
+      const m = world.projectiles.find((p) => p.id === 90)!;
+      turned = Math.abs(m.heading - aim);
+      expect(turned).toBeLessThanOrEqual(WEAPONS.missile.maxTurn + 1e-9);
+    }
+    expect(turned).toBeCloseTo(WEAPONS.missile.maxTurn, 6);
+    // sundog já velho (passou do tempo de perseguição): não curva mais
+    world.projectiles = [];
+    world.projectiles.push({ id: 91, kind: 'sundog', owner: 1, x: t.x - lx * 6, y: t.y + 1, z: t.z - lz * 6, heading: aim, speed: 0.01, life: WEAPONS.sundog.life - WEAPONS.sundog.chase - 0.05, pieceIndex: t.pieceIndex });
+    // (um sundog novo, no mesmo lugar, curva para o alvo)
+    world.projectiles.push({ id: 92, kind: 'sundog', owner: 1, x: t.x - lx * 6, y: t.y + 1, z: t.z - lz * 6, heading: aim, speed: 0.01, life: WEAPONS.sundog.life, pieceIndex: t.pieceIndex });
+    stepWorld(world, {}, DT);
+    expect(world.projectiles.find((p) => p.id === 91)!.heading).toBeCloseTo(aim, 9);
+    expect(Math.abs(world.projectiles.find((p) => p.id === 92)!.heading - aim)).toBeGreaterThan(0.01);
   });
 });

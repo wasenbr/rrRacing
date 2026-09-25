@@ -34,10 +34,13 @@
   width: 138px;
   height: 138px;
   padding: 4px;
-  background: var(--rh-plate);
-  border: 2px solid var(--rh-edge);
-  border-radius: 6px;
-  box-shadow: inset 0 0 0 2px #000, 0 3px 10px rgba(0, 0, 0, 0.6);
+  /* moldura metálica escovada (borda em degradê de aço) sobre a placa escura */
+  background:
+    radial-gradient(circle at 50% 45%, rgba(40, 42, 52, 0.9), rgba(8, 8, 12, 0.92)) padding-box,
+    linear-gradient(145deg, #f2f4f8, #8a8e98 28%, #4a4e58 50%, #c8ccd4 72%, #5a5e68) border-box;
+  border: 3px solid transparent;
+  border-radius: 7px;
+  box-shadow: inset 0 0 0 1px #000, inset 0 0 12px rgba(0, 0, 0, 0.8), 0 0 0 1px #000, 0 3px 10px rgba(0, 0, 0, 0.6);
 }
 .rh-map { width: 100%; height: 100%; display: block; }
 
@@ -173,23 +176,45 @@
 .rh-center.m-go { background-image: linear-gradient(180deg, #fff 0%, #7aff6a 45%, #0a8a10 100%); }
 .rh-center.m-warn { background-image: linear-gradient(180deg, #fff 0%, #ff7a5a 45%, #a00a00 100%); font-size: 52px; }
 
-.rh-toast {
+/* avisos de corrida (acertos, +$, voltas): faixa logo abaixo do bloco de posição, alinhada à
+   direita (fora do centro: não cobrem a contagem nem o carro) */
+.rh-toast, .rh-note {
   position: absolute;
-  top: 32%;
-  left: 50%;
-  transform: translateX(-50%);
-  padding: 6px 14px;
+  padding: 5px 12px;
   font-family: 'Trebuchet MS', sans-serif;
   font-weight: 700;
-  font-size: 15px;
-  background: rgba(10, 10, 14, 0.8);
-  border: 1px solid rgba(255, 255, 255, 0.25);
-  border-radius: 16px;
+  font-style: normal;
+  font-size: 14px;
+  background: linear-gradient(180deg, rgba(34, 34, 42, 0.9), rgba(10, 10, 14, 0.9));
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 6px;
   white-space: nowrap;
+  max-width: min(46vw, 420px);
+  overflow: hidden;
+  text-overflow: ellipsis;
   opacity: 0;
-  transition: opacity 0.2s;
+  transform: translateX(8px);
+  transition: opacity 0.2s, transform 0.2s;
 }
-.rh-toast.show { opacity: 1; }
+.rh-toast {
+  top: calc(100% + 6px);
+  right: 8px;
+  border-right: 3px solid #ff7a2a;
+}
+.rh-toast.show { opacity: 1; transform: none; }
+/* avisos de sistema (música, som, câmera): canto de baixo à esquerda */
+.rh-note {
+  left: max(12px, env(safe-area-inset-left));
+  bottom: max(12px, env(safe-area-inset-bottom));
+  border-left: 3px solid #7af0ff;
+  transform: translateX(-8px);
+  font-size: 13px;
+}
+.rh-note.show { opacity: 1; transform: none; }
+/* celular: os cantos de baixo e a faixa sob a posição (pausa/câmera) são dos controles de toque;
+   o aviso de corrida vai para a esquerda do bloco de posição e o de sistema para o meio de baixo */
+body:has(.touch:not(.off)) .rh-toast { top: 2px; right: calc(100% + 8px); max-width: 34vw; }
+body:has(.touch:not(.off)) .rh-note { left: 50%; bottom: max(8px, env(safe-area-inset-bottom)); transform: translateX(-50%); max-width: 30vw; }
 .rh-mirror {
   position: absolute; display: none; border: 5px solid #2a2c32; border-radius: 10px;
   /* moldura de retrovisor: aro cromado, sombra interna e sombra projetada */
@@ -215,7 +240,7 @@
   .rh-speed b { font-size: 16px; }
   .rh-center { font-size: 44px; }
   .rh-center.m-count { font-size: 84px; }
-  .rh-toast { top: 34%; font-size: 13px; }
+  .rh-toast, .rh-note { font-size: 12px; padding: 4px 9px; }
 }
 
 /* legibilidade em pistas claras (neve de Nho, deserto): contorno escuro em todo texto e uma
@@ -225,7 +250,7 @@
   border-radius: 10px;
   background: radial-gradient(ellipse at 70% 40%, rgba(0, 0, 0, 0.42), rgba(0, 0, 0, 0.18) 70%, rgba(0, 0, 0, 0) 100%);
 }
-.rh-right, .rh-money, .rh-time, .rh-best, .rh-speed, .rh-laps span, .rh-toast {
+.rh-right, .rh-money, .rh-time, .rh-best, .rh-speed, .rh-laps span, .rh-toast, .rh-note {
   text-shadow: 1.5px 0 0 #000, -1.5px 0 0 #000, 0 1.5px 0 #000, 0 -1.5px 0 #000, 0 2px 4px rgba(0, 0, 0, 0.9);
 }
 .rh-best, .rh-speed span { color: #f2f2f2; }

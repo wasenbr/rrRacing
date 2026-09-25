@@ -32,7 +32,9 @@ const BUILDERS: Record<string, (color: number, shadows: boolean) => CarVisual> =
 const VISUAL_SCALE: Record<string, number> = {
   dirtdevil: 0.797, // 2,76 x 5,10; vol 24,1 → sA 0,866 · sV 0,734
   marauder: 0.777, // 2,82 x 5,40; vol 25,1 → sA 0,833 · sV 0,725
-  airblade: 0.776, // 3,44 x 4,91; vol 21,7 → sA 0,791 · sV 0,761
+  // Air Blade da rodada 10 (bandeja por cima dos pneus, barbatana alta): ~3,4 x 5,6; vol ~45
+  // (estimado) → sA ~0,74 · sV ~0,60 → 0,67; um pouco acima (0,68) para não sumir perto dos outros
+  airblade: 0.68,
   battletrak: 0.755, // 3,36 x 5,52; vol 19,4 → sA 0,755 · sV 0,789 (baixo: fica em sA)
   havac: 1, // 2,59 x 4,08; vol 9,6
 };

@@ -1,5 +1,5 @@
 import { raceDistance, type Racer, type World, type WorldEvent } from '../sim/world';
-import { audio, duckFor, isMuted } from './context';
+import { audio, duckFor, isAudioLite, isMuted } from './context';
 import { getBuffer, loadBuffer, publicUrl } from './samples';
 
 /**
@@ -61,6 +61,82 @@ interface Manifest {
   lines: Record<string, string[]>;
   /** bordões gravados inteiros com o nome ("Viper jams into first!"): frase -> apelido -> arquivos */
   combos?: Record<string, Record<string, string[]>>;
+}
+
+/**
+ * Falas de largada e de ataque: passam pela cadeia de "arena" (ver arenaChain). As demais
+ * (colocação, avisos) vão direto ao barramento do locutor.
+ */
+export const ARENA_LINES = new Set<string>(['start', 'hotFury', 'lightsUp', 'hammered', 'wow', 'holyToledo', 'jamsFirst', 'finishFirst', 'launches', 'wipedOut', 'ouch', 'dominating', 'lastLap']);
+
+const arenaCache = new WeakMap<BaseAudioContext, AudioNode>();
+
+/**
+ * Cadeia de "arena" do locutor (itens 32/53: as falas medidas tinham loudness de pico 2–4 dB abaixo
+ * da referência de locutor de luta; ver som() em scripts/evidencias.mjs): saturação leve (voz
+ * "estourando" o microfone), corte de grave, presença em 3 kHz e corpo em 1,2 kHz, compressão
+ * (a fala inteira no mesmo nível de grito) e reverb curto de ginásio (~0,4 s; fora no modo leve).
+ */
+export function arenaChain(ctx: BaseAudioContext, dest: AudioNode): AudioNode {
+  const have = arenaCache.get(ctx);
+  if (have) return have;
+  const input = ctx.createGain();
+  input.gain.value = 1.9;
+  const sat = ctx.createWaveShaper();
+  const n = 1024;
+  const curve = new Float32Array(new ArrayBuffer(n * 4));
+  for (let i = 0; i < n; i++) {
+    const x = (i / (n - 1)) * 2 - 1;
+    curve[i] = Math.tanh(x * 1.5) / Math.tanh(1.5);
+  }
+  sat.curve = curve;
+  sat.oversample = isAudioLite() ? 'none' : '2x';
+  const biquad = (type: BiquadFilterType, f: number, q: number, gain = 0) => {
+    const b = ctx.createBiquadFilter();
+    b.type = type;
+    b.frequency.value = f;
+    b.Q.value = q;
+    b.gain.value = gain;
+    return b;
+  };
+  const hp = biquad('highpass', 140, 0.7);
+  const presence = biquad('peaking', 3000, 0.9, 5);
+  const body = biquad('peaking', 1200, 1, 2);
+  const comp = ctx.createDynamicsCompressor();
+  comp.threshold.value = -24;
+  comp.knee.value = 6;
+  comp.ratio.value = 3.5;
+  comp.attack.value = 0.003;
+  comp.release.value = 0.12;
+  // o compressor do navegador já soma ganho de compensação (~+10 dB com estes ajustes): o resultado
+  // fica ~+4 dB de loudness sobre a fala crua, com picos abaixo dela (a fala inteira "no grito")
+  const makeup = ctx.createGain();
+  makeup.gain.value = 0.85;
+  input.connect(sat);
+  sat.connect(hp);
+  hp.connect(presence);
+  presence.connect(body);
+  body.connect(comp);
+  comp.connect(makeup);
+  makeup.connect(dest);
+  if (!isAudioLite()) {
+    // reverb curto de ginásio: ruído estéreo decaindo em ~0,4 s, bem baixo (não embola a fala)
+    const len = Math.floor(ctx.sampleRate * 0.4);
+    const ir = ctx.createBuffer(2, len, ctx.sampleRate);
+    for (let ch = 0; ch < 2; ch++) {
+      const d = ir.getChannelData(ch);
+      for (let i = 1; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (ctx.sampleRate * 0.08));
+    }
+    const verb = ctx.createConvolver();
+    verb.buffer = ir;
+    const wet = ctx.createGain();
+    wet.gain.value = 0.12;
+    makeup.connect(verb);
+    verb.connect(wet);
+    wet.connect(dest);
+  }
+  arenaCache.set(ctx, input);
+  return input;
 }
 
 /** Prioridades: 3 = fura a fila e corta o que estiver falando. */
@@ -146,12 +222,13 @@ export class Announcer {
       let at = t;
       // velocidade natural: acelerar afinava a voz (soava esquilo); a energia vem da gravação
       const rate = 1;
+      const arena = ARENA_LINES.has(key);
       if (nameBuf) {
-        this.play(nameBuf, at, rate);
+        this.play(nameBuf, at, rate, arena);
         // a fala entra logo depois do nome (encaixe como no original)
         at += Math.max(0.15, nameBuf.duration / rate - 0.22);
       }
-      this.play(lineBuf, at, rate);
+      this.play(lineBuf, at, rate, arena);
       const dur = at - t + lineBuf.duration / rate;
       duckFor(0.5, dur);
       this.busyUntil = now + dur;
@@ -174,13 +251,13 @@ export class Announcer {
     this.lastSpoke = now;
   }
 
-  private play(buf: AudioBuffer, t: number, rate = 1): void {
+  private play(buf: AudioBuffer, t: number, rate = 1, arena = false): void {
     const a = audio();
     if (!a) return;
     const s = a.ctx.createBufferSource();
     s.buffer = buf;
     s.playbackRate.value = rate;
-    s.connect(a.voice);
+    s.connect(arena ? arenaChain(a.ctx, a.voice) : a.voice);
     s.start(t);
     this.playing.push(s);
     s.onended = () => (this.playing = this.playing.filter((x) => x !== s));

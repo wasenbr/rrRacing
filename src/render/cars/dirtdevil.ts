@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
-import { carFrame, carveTires, cockpitRig, Kit, sideProfile, tireSpan, wheel, wheelTravel, type CarVisual, type TireSpot } from './common';
+import { bodySink, carFrame, carveTires, cockpitRig, Kit, Linkage, sideProfile, tireSpan, wheel, wheelDrop, wheelTravel, type CarVisual, type TireSpot } from './common';
 
 const WR = 0.82; // rodas de monster truck, como no sprite do original
 const WX = 0.94; // meia-bitola
@@ -210,14 +210,16 @@ export function createDirtDevil(color: number, shadows: boolean): CarVisual {
   for (const sx of [-1, 1]) k.jumpJet(sx * 0.42, BOT - 0.18, 0);
 
   // ---- suspensão aparente: eixos rígidos, diferencial e amortecedores amarelos com mola cromada
+  // (braços e amortecedores recalculados a cada quadro entre a bandeja e o eixo)
+  const links = new Linkage(root, body, chassis, shadows);
   for (const sz of [-1, 1]) {
     chassis.add(bar(k, V(-WX + 0.22, WR, sz * WZ), V(WX - 0.22, WR, sz * WZ), 0.075, k.gunMetal));
     k.add(new THREE.SphereGeometry(0.2, 16, 10), k.gunMetal, 0, WR, sz * WZ, chassis);
-    bar(k, V(0, WR, sz * WZ), V(0, BOT - 0.06, sz * (WZ - 0.6)), 0.06, k.gunMetal);
+    links.add(V(0, BOT - 0.06, sz * (WZ - 0.6)), V(0, WR, sz * WZ), 0.06, k.gunMetal);
     for (const sx of [-1, 1]) {
       // topo preso na bandeja, por dentro da caixa de roda (o pneu esterçado passa por fora)
-      bar(k, V(sx * 0.3, BOT - 0.02, sz * (WZ + 0.2)), V(sx * 0.64, WR, sz * WZ), 0.085, k.warn);
-      bar(k, V(sx * 0.3, BOT - 0.02, sz * (WZ - 0.2)), V(sx * 0.64, WR, sz * WZ), 0.085, k.warn);
+      links.add(V(sx * 0.3, BOT - 0.02, sz * (WZ + 0.2)), V(sx * 0.64, WR, sz * WZ), 0.085, k.warn);
+      links.add(V(sx * 0.3, BOT - 0.02, sz * (WZ - 0.2)), V(sx * 0.64, WR, sz * WZ), 0.085, k.warn);
       const spring = new THREE.TorusGeometry(0.1, 0.02, 5, 12).rotateX(Math.PI / 2);
       for (let i = 0; i < 3; i++) k.add(spring, k.chrome, sx * (0.5 + i * 0.04), BOT - 0.12 - i * 0.12, sz * WZ);
     }
@@ -253,13 +255,13 @@ export function createDirtDevil(color: number, shadows: boolean): CarVisual {
   return {
     root,
     body,
-    cabin: [ext, chassis],
+    cabin: [ext, chassis, links.group],
     cockpit,
     steeringWheel,
     flames,
     eye,
     animate(a) {
-      chassis.position.y = travel(a);
+      chassis.position.y = wheelDrop(travel(a), bodySink(body, WX, WZ), 0.04);
       for (const w of wheels) {
         w.spin.rotation.x = a.spin;
         if (w.sz > 0) w.pivot.rotation.y = -a.steer * STEER;

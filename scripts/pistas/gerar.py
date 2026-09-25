@@ -1,8 +1,8 @@
 """
 Gera src/data/tracks/index.ts a partir do traçado extraído dos minimapas (construir.py).
 
-O traçado (retas, curvas, cruzamentos e vãos) é o do original. O relevo (rampas, lombadas, setas
-de warp e poças fixas) vem de scripts/pistas/relevo.json, transcrito à mão dos mapas completos.
+O traçado (retas, curvas, cruzamentos e vãos) é o do original. O relevo (rampas, lombadas, quedas
+depois de saltos, setas de warp e poças fixas) vem de scripts/pistas/relevo.json, transcrito à mão dos mapas completos.
 Pistas ainda sem transcrição ficam só com o traçado (retas, curvas, saltos J/G e cruzamentos X),
 sem relevo, setas ou poças inventados.
 
@@ -54,8 +54,15 @@ def transcribed(codes, key, rel):
             # o carro pula na lombada; colada numa curva ele sai por cima da mureta
             raise SystemExit(f'{key}: lombada B na casa {i} colada numa curva')
         codes[i] = c
-    if codes.count('U') != codes.count('D'):
-        raise SystemExit(f"{key}: {codes.count('U')} subidas e {codes.count('D')} descidas, o circuito não fecha")
+    # vãos com queda: o pouso fica um nível abaixo da decolagem (salto que cai num patamar inferior)
+    drops = sorted(set(rel.get('quedas', [])))
+    for i in drops:
+        if codes[i] != 'G' or codes[(i + 1) % n] == 'G':
+            raise SystemExit(f'{key}: queda na casa {i} ({codes[i]}) precisa ser o último vão (G) antes do pouso')
+    if codes.count('U') != codes.count('D') + len(drops):
+        raise SystemExit(f"{key}: {codes.count('U')} subidas e {codes.count('D') + len(drops)} descidas/quedas, o circuito não fecha")
+    for i in drops:
+        mods[i] = 'v'
     for k, m in rel.get('setas', {}).items():
         i = int(k)
         if m not in ('>', '<') or codes[i] not in 'SUDB' or i in flat:

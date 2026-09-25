@@ -193,21 +193,22 @@ export function wheel(kit: Kit, o: WheelOpts, x: number, y: number, z: number): 
 const treadCache = new Map<string, THREE.BufferGeometry>();
 
 /** Banda de rodagem com cravos em V: cada cravo são dois braços inclinados que se encontram no meio. */
-export function chevronTread(r: number, width: number): THREE.BufferGeometry {
-  const key = `${r}:${width}`;
+/** `lug`: altura do cravo (padrão 0,09); `count`: cravos na volta (padrão ~22 por metro de raio). */
+export function chevronTread(r: number, width: number, lug = 0.09, count?: number): THREE.BufferGeometry {
+  const key = `${r}:${width}:${lug}:${count}`;
   const hit = treadCache.get(key);
   if (hit) return hit;
-  const n = Math.max(14, Math.round(r * 22));
+  const n = count ?? Math.max(14, Math.round(r * 22));
   const arm = width * 0.5;
   const parts: THREE.BufferGeometry[] = [];
   for (let i = 0; i < n; i++) {
     const a = (i / n) * Math.PI * 2;
     for (const side of [-1, 1]) {
       // braço deitado sobre o topo do pneu (y = r), girado em torno do eixo radial, depois levado ao ângulo a
-      const g = new THREE.BoxGeometry(arm, 0.09, 0.11);
+      const g = new THREE.BoxGeometry(arm, lug, 0.11 + (lug - 0.09) * 0.8);
       g.translate((side * arm) / 2, 0, 0);
       g.rotateY(side * 0.5);
-      g.translate(0, r * 0.985, 0);
+      g.translate(0, r * 0.985 + (lug - 0.09) / 2, 0);
       g.rotateX(a);
       parts.push(g.toNonIndexed());
     }
@@ -456,9 +457,95 @@ export function wheelTravel(travel: number): (a: CarAnim) => number {
     const h = Math.min(dt, 0.05);
     const target = a.grounded ? 0 : -travel;
     v += ((target - y) * 160 - v * 16) * h;
-    y = Math.max(-travel * 1.15, Math.min(travel * 0.3, y + v * h));
+    // curso limitado: a roda nunca sobe acima do repouso (entrava no para-lama, item 51) nem desce
+    // além do curso (os braços descolavam)
+    const ny = y + v * h;
+    y = Math.max(-travel, Math.min(0, ny));
+    if (y !== ny) v = 0;
     return y;
   };
+}
+
+/**
+ * Quanto a carroceria desceu sobre as rodas no quadro anterior (m, ≥ 0), no canto mais baixo:
+ * pouso (body.position.y < 0) mais inclinação da curva/freada nos cantos (±wx, ±wz). O jogo aplica
+ * esse balanço depois de `animate`; usar o do quadro anterior basta para as rodas acompanharem.
+ */
+export function bodySink(body: THREE.Object3D, wx: number, wz: number): number {
+  return Math.max(0, -body.position.y + Math.abs(body.rotation.z) * wx + Math.abs(body.rotation.x) * wz);
+}
+
+/**
+ * Altura do grupo das rodas: curso da suspensão (`travelY`, ≤ 0) e, se a carroceria afundar mais que a
+ * folga do arco (`gap`), as rodas descem junto — o pneu nunca atravessa o para-lama/bandeja.
+ */
+export function wheelDrop(travelY: number, sink: number, gap: number): number {
+  return Math.min(travelY, Math.min(0, gap - sink));
+}
+
+const unitRod = new Map<number, THREE.CylinderGeometry>();
+
+/**
+ * Braços e amortecedores que ligam a carroceria (`body`, que balança) às rodas (`chassis`, que sobe e
+ * desce): cada barra é recalculada a cada quadro entre o ponto na bandeja e o cubo da roda, então nunca
+ * descola com a suspensão, o pouso ou a inclinação. Fica num grupo próprio sob `root` (vai em `cabin`,
+ * some no cockpit); as barras têm onBeforeRender, então o mergeStatic não as junta.
+ */
+export class Linkage {
+  readonly group = new THREE.Group();
+  private rods: { mesh: THREE.Mesh; a: THREE.Vector3; b: THREE.Vector3 }[] = [];
+  private readonly pa = new THREE.Vector3();
+  private readonly pb = new THREE.Vector3();
+  private readonly m = new THREE.Matrix4();
+  private readonly q = new THREE.Quaternion();
+  private readonly s = new THREE.Vector3();
+  private static readonly UP = new THREE.Vector3(0, 1, 0);
+
+  constructor(
+    root: THREE.Object3D,
+    private readonly body: THREE.Object3D,
+    private readonly chassis: THREE.Object3D,
+    private readonly shadows: boolean,
+  ) {
+    root.add(this.group);
+  }
+
+  /** Barra de raio `r` entre `a` (coordenadas da carroceria) e `b` (coordenadas do grupo das rodas). */
+  add(a: THREE.Vector3, b: THREE.Vector3, r: number, mat: THREE.Material): THREE.Mesh {
+    const key = Math.round(r * 1000);
+    let geo = unitRod.get(key);
+    if (!geo) unitRod.set(key, (geo = new THREE.CylinderGeometry(r, r, 1, 8)));
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.castShadow = this.shadows;
+    mesh.frustumCulled = false;
+    // matriz local escrita à mão (place): o three só a multiplica pela do grupo
+    mesh.matrixAutoUpdate = false;
+    const rod = { mesh, a: a.clone(), b: b.clone() };
+    const place = () => this.place(rod);
+    mesh.onBeforeRender = place;
+    mesh.onBeforeShadow = place;
+    this.group.add(mesh);
+    this.rods.push(rod);
+    this.place(rod);
+    return mesh;
+  }
+
+  /** Recoloca a barra entre os dois pontos com as matrizes atuais (chamado na hora de desenhar). */
+  private place(rod: { mesh: THREE.Mesh; a: THREE.Vector3; b: THREE.Vector3 }): void {
+    const { body, chassis } = this;
+    body.updateMatrix();
+    chassis.updateMatrix();
+    this.pa.copy(rod.a).applyMatrix4(body.matrix);
+    this.pb.copy(rod.b).applyMatrix4(chassis.matrix);
+    const len = this.pa.distanceTo(this.pb);
+    this.s.set(1, Math.max(1e-4, len), 1);
+    this.q.setFromUnitVectors(Linkage.UP, this.pb.sub(this.pa).normalize());
+    this.pa.addScaledVector(this.pb, len / 2); // pb virou a direção: pa = ponto médio
+    this.m.compose(this.pa, this.q, this.s);
+    const mesh = rod.mesh;
+    mesh.matrix.copy(this.m);
+    mesh.matrixWorld.multiplyMatrices(this.group.matrixWorld, this.m);
+  }
 }
 
 /** Textura de esteira (para o Battle Trak), com rolagem por offset. */
