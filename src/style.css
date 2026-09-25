@@ -1378,3 +1378,11 @@ h3 {
   .quick .quick-opts { grid-template-columns: auto 1fr; }
   .quick h3 { margin: 6px 0 3px; }
 }
+
+/* controle (joystick): destaque do botão em foco nos menus e tela de configurar botões */
+.pad-nav .overlay :is(button, input, select, summary, a):focus { outline: 3px solid #ffd23a; outline-offset: 2px; box-shadow: 0 0 0 6px rgba(255, 210, 58, 0.25); }
+.pad-setup { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; background: rgba(0, 0, 0, 0.72); padding: 16px; }
+.pad-setup-card { width: min(360px, 100%); display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; padding: 20px; border-radius: 14px; background: #1b1b24; border: 1px solid var(--line); }
+.pad-setup-card .pad-name { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.pad-setup-card .pad-action { font-size: 24px; color: #ffd23a; letter-spacing: 1px; }
+.pad-setup-card .row-buttons { display: flex; gap: 8px; width: 100%; margin-top: 8px; }

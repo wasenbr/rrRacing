@@ -3,6 +3,7 @@
  * glifos quebrados em aparelhos sem fonte de emoji.
  */
 const P: Record<string, string> = {
+  gamepad: '<path d="M7 7h10a5 5 0 0 1 4.8 6.4l-1 3.4a2.6 2.6 0 0 1-4.4 1L14.6 16H9.4l-1.8 1.8a2.6 2.6 0 0 1-4.4-1l-1-3.4A5 5 0 0 1 7 7z" fill="currentColor"/><path d="M7.5 10v4M5.5 12h4" stroke="#000" stroke-opacity=".55" stroke-width="1.8" stroke-linecap="round"/><circle cx="16" cy="10.8" r="1.2" fill="#000" opacity=".55"/><circle cx="18" cy="13.2" r="1.2" fill="#000" opacity=".55"/>',
   install: '<path d="M12 3v11m0 0-4.5-4.5M12 14l4.5-4.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>',
   globe: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3 12h18M12 3c2.8 3 2.8 15 0 18M12 3c-2.8 3-2.8 15 0 18" fill="none" stroke="currentColor" stroke-width="1.8"/>',
   folder: '<path d="M3 6.5A1.5 1.5 0 0 1 4.5 5H10l2 2h7.5A1.5 1.5 0 0 1 21 8.5v10a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z" fill="currentColor"/>',

@@ -20,6 +20,8 @@ import { DIFFICULTIES, DIFFICULTY_LABEL, type Difficulty } from '../sim/world';
 import type { SlotInfo } from '../core/storage';
 import { formatTime } from './hud';
 import { isTouchDevice, setTiltSteering, tiltSteeringEnabled, tiltSupported } from '../input/controls';
+import { clearCustomMap, connectedPads, openPadSetup } from '../input/gamepad';
+import { startPadNav } from '../input/padnav';
 import { portraitSvg, warmPortraits } from './portraits';
 import { trackOutlineUrl, trackThumbnail } from './trackThumb';
 import { icon, iconizeHtml } from './icons';
@@ -552,7 +554,6 @@ export class Menus {
   })();
   private secretKeys = new Set<string>();
   private tarquinnTaps: number[] = [];
-  private padTimer = 0;
   private nick = (() => {
     try {
       return localStorage.getItem('rnrr3d-nick') ?? '';
@@ -584,6 +585,8 @@ export class Menus {
     });
     window.addEventListener('keyup', (e) => this.secretKeys.delete(e.code));
     window.addEventListener('blur', () => this.secretKeys.clear());
+    // controle: navegação dos menus; L + R + Select libera o piloto secreto na nova campanha
+    startPadNav(this.el, { onSecret: () => this.trySecret() });
     // botão flutuante de tela cheia nos menus (celular)
     this.fsButton = document.createElement('button');
     this.fsButton.className = 'fs-float';
@@ -737,7 +740,8 @@ export class Menus {
     return `<details class="help">
       <summary>Controles</summary>
       <p><b>Teclado:</b> ↑/W acelera · ↓/S freia/ré · ←→/A D vira · Q/E derrapar (freio de mão) · Ctrl esq./Espaço atira · \ ou X arma traseira · Shift assistência (nitro/pulo) · C câmera · Esc pausa · M som</p>
-      <p><b>Controle:</b> RT acelera · LT freia · analógico vira · LB derrapar · X/RB atira · B arma traseira · L3/R3 assistência · Y câmera · Start pausa</p>
+      <p><b>Controle Xbox:</b> RT ou A acelera · LT freia · analógico ou direcional vira · LB derrapar · X ou RB atira · B arma traseira · L3/R3 assistência · Y câmera · Start pausa.</p>
+      <p><b>Controle PlayStation:</b> R2 acelera · L2 freia · analógico ou direcional vira · L1 derrapar · ✕ atira · □ assistência (turbo/pulo) · ○ arma traseira · R1 câmera · Options pausa. Nos menus: direcional escolhe, A/✕ confirma, B/○ volta. Controle USB genérico: configure os botões em “Som e opções”.</p>
       <p><b>Celular:</b> polegar esquerdo no volante: toque à esquerda ou à direita da faixa para virar, como as setas do teclado (arrastando para cima, atira sem soltar a direção) e tem TIRO, a arma traseira (mina/óleo) e a assistência (nitro/pulo) logo acima, cada botão com o ícone da arma atual; polegar direito acelera, freia e tem o botão DERRAPAR (deslizando do ACEL até o TIRO logo acima, atira sem soltar o gás). Em “Som e opções”: aceleração automática (o polegar direito ganha um TIRO) e direção por inclinação.</p>
       <p>Armas e nitro recarregam a cada volta. Dinheiro e blindagem aparecem pela pista.</p>
     </details>`;
@@ -847,18 +851,6 @@ export class Menus {
     return true;
   }
 
-  /** Controle: L + R + Select (botões 4, 5 e 8) enquanto a tela de nova campanha estiver aberta. */
-  private watchPadSecret(): void {
-    cancelAnimationFrame(this.padTimer);
-    const tick = () => {
-      if (!this.el.querySelector('.chars') || this.el.style.display === 'none') return;
-      const pad = Array.from(navigator.getGamepads?.() ?? []).find((p) => p && p.connected);
-      if (pad && pad.buttons[4]?.pressed && pad.buttons[5]?.pressed && pad.buttons[8]?.pressed) this.trySecret();
-      this.padTimer = requestAnimationFrame(tick);
-    };
-    this.padTimer = requestAnimationFrame(tick);
-  }
-
   /** Piloto escolhido em destaque: retrato grande com a placa do nome em moldura metálica. */
   private charFeature(id = this.newChar.characterId): string {
     const c = CHARACTERS.find((k) => k.id === id) ?? CHARACTERS[0];
@@ -899,7 +891,6 @@ export class Menus {
         <button class="go" data-act="new-start">COMEÇAR</button>
         <button data-act="main">← Voltar</button>
       </div>`);
-    this.watchPadSecret();
   }
 
   /* ---------------- salvar / carregar ---------------- */
@@ -1216,6 +1207,11 @@ export class Menus {
 
   private lastAudio: AudioSettings | null = null;
 
+  private settingsMsg(msg: string): void {
+    const el = this.el.querySelector('.pw-msg');
+    if (el) el.textContent = msg;
+  }
+
   showSettings(a: AudioSettings): void {
     this.lastAudio = a;
     const toggle = (key: string, label: string, on: boolean, help = '') =>
@@ -1243,6 +1239,10 @@ export class Menus {
         <button data-act="pick-music">${icon('plus')} Adicionar músicas do aparelho</button>
         ${a.user ? `<button data-act="clear-music">${icon('trash')} Remover músicas do aparelho</button>` : ''}
         ${total ? `<button data-act="skip-track">${icon('next')} Próxima música</button>` : ''}
+        <h3>Controle (joystick)</h3>
+        <p class="small-note">Xbox e PlayStation funcionam direto. Controle USB genérico com botões trocados? Configure aqui.</p>
+        <button data-act="pad-setup">${icon('gamepad')} Configurar controle</button>
+        <button data-act="pad-reset">Restaurar botões do controle</button>
         <p class="pw-msg"></p>
         <button data-act="close-settings">← Voltar</button>
       </div>`);
@@ -1806,6 +1806,13 @@ export class Menus {
       }
       case 'settings':
         return this.actions.openSettings();
+      case 'pad-setup':
+        return openPadSetup(this.el, (msg) => this.settingsMsg(msg));
+      case 'pad-reset': {
+        const pads = connectedPads();
+        pads.forEach(clearCustomMap);
+        return this.settingsMsg(pads.length ? 'Botões do controle restaurados.' : 'Nenhum controle encontrado. Conecte o controle e aperte um botão dele.');
+      }
       case 'close-settings':
         return this.actions.closeSettings();
       case 'fullscreen':

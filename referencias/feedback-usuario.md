@@ -143,3 +143,10 @@ Cada item precisa ser atendido e verificado pelos avaliadores.
     o jogo precisa entrar e correr sem engasgos.
 66. Navegador de teste (playwright/capturas) sempre fora da vista do usuário — nunca na frente da
     tela enquanto ele trabalha.
+
+# Retorno do usuário (2026-09-25, joystick)
+
+67. O joystick não funcionava: suportar controle USB genérico, Xbox e PlayStation — na corrida e
+    para navegar nos menus (direcional escolhe, confirmar/voltar), com opção de configurar os botões.
+68. Controle de PlayStation 5: R2 acelera, L2 freia, R1 muda a câmera, ✕ atira, □ solta o turbo e
+    ○ solta a arma traseira (L1 continua derrapando).

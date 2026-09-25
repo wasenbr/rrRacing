@@ -1,6 +1,7 @@
 import { clamp } from '../sim/math';
 import { emptyInput, type ControlInput } from '../sim/input';
 import { icon } from '../ui/icons';
+import { padSetupActive, readPads } from './gamepad';
 import { fullscreenSupported, iosInstallSteps, isInstalled, isIos } from '../ui/pwa';
 
 const TILT_KEY = 'rnrr3d-tilt';
@@ -83,7 +84,8 @@ export class Controls {
   private keys = new Set<string>();
   private touch = new Map<string, number>(); // ação -> quantidade de dedos pressionando
   private listeners: ((a: UiAction) => void)[] = [];
-  private prevPadButtons: boolean[] = [];
+  private prevPadCamera = false;
+  private prevPadPause = false;
   /** direção analógica do volante de toque (-1..1), 0 = solto */
   private touchSteer = 0;
   /** volante de toque arrastado até o fim da faixa: curva fechada */
@@ -156,29 +158,21 @@ export class Controls {
   }
 
   private readGamepad(input: ControlInput): void {
-    const pads = navigator.getGamepads ? navigator.getGamepads() : [];
-    const pad = Array.from(pads).find((p) => p && p.connected);
+    const pad = padSetupActive ? null : readPads();
     if (!pad) return;
-    const b = (i: number) => pad.buttons[i]?.pressed ?? false;
-    const v = (i: number) => pad.buttons[i]?.value ?? 0;
-    const axis = pad.axes[0] ?? 0;
-    if (Math.abs(axis) > 0.15) input.steer = clamp(input.steer + axis, -1, 1);
-    if (b(14)) input.steer = -1;
-    if (b(15)) input.steer = 1;
-    input.throttle = Math.max(input.throttle, v(7), b(0) ? 1 : 0);
-    input.brake = Math.max(input.brake, v(6));
-    input.fire ||= b(2) || b(5);
-    input.drop ||= b(1);
-    // LB: curva fechada (freio de mão)
-    input.sharp ||= b(4);
-    input.nitro ||= b(10) || b(11);
+    if (pad.steer) input.steer = clamp(input.steer + pad.steer, -1, 1);
+    input.throttle = Math.max(input.throttle, pad.throttle);
+    input.brake = Math.max(input.brake, pad.brake);
+    input.fire ||= pad.fire;
+    input.drop ||= pad.drop;
+    // LB/L1: curva fechada (freio de mão)
+    input.sharp ||= pad.sharp;
+    input.nitro ||= pad.nitro;
     // borda de subida para ações de interface
-    const cam = b(3);
-    const pause = b(9);
-    if (cam && !this.prevPadButtons[3]) this.emit('camera');
-    if (pause && !this.prevPadButtons[9]) this.emit('pause');
-    this.prevPadButtons[3] = cam;
-    this.prevPadButtons[9] = pause;
+    if (pad.camera && !this.prevPadCamera) this.emit('camera');
+    if (pad.pause && !this.prevPadPause) this.emit('pause');
+    this.prevPadCamera = pad.camera;
+    this.prevPadPause = pad.pause;
   }
 }
 
