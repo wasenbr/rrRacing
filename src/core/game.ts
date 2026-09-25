@@ -1226,7 +1226,10 @@ export class Game {
       const p = this.player;
       const promote = seasonInfo(this.campaign).promote;
       const boss = currentPlanet(this.campaign).local;
+      const fromPlanet = this.campaign.planet;
       const res = applyRaceResult(this.campaign, p.place, p.money, p.kills);
+      // subiu de planeta: o "Continuar" dos resultados mostra a viagem até o novo planeta
+      this.warpFrom = res.outcome === 'promoted' && this.campaign.planet !== fromPlanet ? fromPlanet : -1;
       this.championPending = res.outcome === 'champion';
       saveCampaign(this.campaign);
       report = {
@@ -1272,6 +1275,18 @@ export class Game {
   /** Mostra a garagem com a próxima pista já montada ao fundo. */
   /** a última corrida deu o título: o "Continuar" dos resultados abre a tela de campeão */
   private championPending = false;
+  /** planeta de onde o jogador acabou de sair (-1: sem viagem pendente) */
+  private warpFrom = -1;
+
+  /** Animação de viagem para o novo planeta (com a música dele já tocando). */
+  private showPlanetWarp(): void {
+    const c = this.campaign!;
+    const from = PLANETS[this.warpFrom];
+    this.warpFrom = -1;
+    this.menus.showPlanetWarp({ from, to: currentPlanet(c), planets: planetCount(c), vehicleId: c.car.vehicleId, color: c.color });
+    this.music.play(currentPlanet(c).theme, 'menu');
+    this.announcer.say('holyToledo', null, 3);
+  }
 
   /** Tela de campeão sobre a garagem (a campanha continua dali). */
   private showChampion(): void {
@@ -1477,7 +1492,15 @@ export class Game {
           this.showChampion();
           return;
         }
+        if (this.warpFrom >= 0) {
+          this.showPlanetWarp();
+          return;
+        }
         this.toHub();
+      },
+      warpDone: () => {
+        const c = this.campaign!;
+        this.toHub(`Bem-vindo a ${currentPlanet(c).name}! Rivais mais fortes à vista: confira a loja antes de correr.`);
       },
       toMain: () => this.toMenu(),
       openSettings: () => {

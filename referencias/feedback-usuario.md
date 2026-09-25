@@ -130,3 +130,6 @@ Cada item precisa ser atendido e verificado pelos avaliadores.
 57. Economia equilibrada com as compras: o dinheiro ganho tem que casar com o que a loja oferece
     em cada planeta (nem sobrar cedo, nem faltar para acompanhar os rivais).
 58. Um final marcante ao "zerar" a campanha.
+59. Animação na mudança de planeta (ao ser promovido para o planeta seguinte).
+60. A tela entre as corridas (garagem) está longa demais, com muita rolagem: deixar compacta.
+61. Destacar o número da corrida atual / total (ex.: 2/5) na garagem.

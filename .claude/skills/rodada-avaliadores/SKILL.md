@@ -30,10 +30,13 @@ rodada = 1
 repita:
   1. MELHORAR   aplicar as correções pendentes (na 1ª rodada: plano próprio a partir das referências)
   2. VERIFICAR  npm run typecheck && npm test   (tem que passar; senão corrigir antes de seguir)
-  3. EVIDÊNCIAS reiniciar o `npm run dev` (um só; conferir a porta), aquecer com uma requisição à
-                página (com o vite em Idle a 1ª carga fria pode passar de 3 min) e rodar:
-                node scripts/evidencias.mjs <scratchpad>/rN tudo http://localhost:<porta>/
-  4. AVALIAR    escolher os GRUPOS desta rodada (seção "Grupos") e lançar os avaliadores deles EM
+  3. EVIDÊNCIAS escolher os GRUPOS desta rodada (seção "Grupos") e gerar SÓ as partes que eles usam
+                (tabela "Partes por grupo"). Reiniciar o `npm run dev` (um só; conferir a porta),
+                aquecer com uma requisição à página (com o vite em Idle a 1ª carga fria pode passar
+                de 3 min) e rodar:
+                node scripts/evidencias.mjs <scratchpad>/rN <partes> http://localhost:<porta>/
+                (<partes> separadas por vírgula, ex.: jogo,telas; "tudo" só quando todos os grupos)
+  4. AVALIAR    lançar os avaliadores dos grupos escolhidos EM
                 PARALELO (Agent, general-purpose, sempre agentes NOVOS a cada rodada, para não ficarem
                 condescendentes). Prompt: seção "Avaliadores".
   5. DECIDIR    fim SÓ se a última avaliação de CADA avaliador (desta rodada ou anterior) tiver
@@ -58,7 +61,23 @@ Gera em `<pasta>`:
   batidas, tempo parado) e dirigibilidade de cada carro (0–60, frenagem, grip).
 - `som/` — WAV + espectrograma PNG de cada efeito, do motor acelerando, de cada música e de uma
   mixagem de corrida; `metricas.json` com pico, RMS, fator de crista, clipping e centroide espectral.
-- `erros.txt` — erros de JavaScript na página.
+- `desempenho.json` — fps médio e p95 por nível de qualidade, CPU lenta, fps nos menus.
+- `erros.txt` — erros de JavaScript na página (sai em qualquer combinação de partes).
+
+Partes (2º argumento, separadas por vírgula): `desempenho`, `jogo`, `som` (inclui `picote`),
+`picote`, `telas` (inclui `ui` e `celular`), `ui` (menus, garagem, loja, slots; inclui `celular`),
+`celular`, `tudo`.
+
+Partes por grupo (juntar as dos grupos da rodada; `telas` entra sempre por causa do QA):
+
+| Grupo | Partes |
+|---|---|
+| Aparência | telas, jogo |
+| Jogo | jogo, telas |
+| Plataforma | telas, desempenho |
+| Som | som |
+| Online | telas |
+| QA | telas |
 
 Limitação: os avaliadores não ouvem. Som é julgado por espectrograma, métricas e leitura do código.
 O render é por software (SwiftShader); lentidão nas capturas não é defeito do jogo.

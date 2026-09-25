@@ -180,6 +180,24 @@ async function ui() {
   await click('button[data-act="new-start"]');
   await wait(1500);
   await shot('33_garagem');
+  // garagem na altura de um notebook comum (item 60: sem rolagem longa)
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await wait(800);
+  await shot('33b_garagem_720');
+  // viagem para o planeta seguinte (item 59): início, meio e fim da animação
+  await page.evaluate(async () => {
+    const { PLANETS } = await window.devModules();
+    window.game.menus.showPlanetWarp({ from: PLANETS[0], to: PLANETS[1], planets: 6, vehicleId: 'marauder', color: 0xe02828 });
+  });
+  await wait(400);
+  await page.screenshot({ path: `${dir}/33c_viagem_planeta_inicio.png` });
+  await wait(900);
+  await page.screenshot({ path: `${dir}/33d_viagem_planeta_meio.png` });
+  await wait(3000);
+  await page.screenshot({ path: `${dir}/33e_viagem_planeta_fim.png` });
+  await page.setViewportSize({ width: 1280, height: 1400 });
+  await page.evaluate(() => window.game.menuActions().warpDone());
+  await wait(1500);
   await click('button[data-act="shop"]');
   await shot('34_loja_melhorias');
   await click('button[data-tab="weapons"]');
@@ -969,16 +987,19 @@ async function desempenho() {
   await freshPage();
 }
 
+// partes separadas por vírgula (ex.: "jogo,telas"); "tudo" = todas
+const parts = new Set(what.split(',').map((w) => w.trim()));
+const want = (...names) => parts.has('tudo') || names.some((n) => parts.has(n));
 try {
-  if (what === 'tudo' || what === 'desempenho') await desempenho();
-  if (what === 'tudo' || what === 'jogo') await jogo();
-  if (what === 'tudo' || what === 'som' || what === 'picote') await picote();
-  if (what === 'tudo' || what === 'som') await som();
+  if (want('desempenho')) await desempenho();
+  if (want('jogo')) await jogo();
+  if (want('som', 'picote')) await picote();
+  if (want('som')) await som();
   // a etapa de som troca o AudioContext da página por um OfflineAudioContext: recarregar antes das telas
-  if (what === 'tudo') await freshPage();
-  if (what === 'tudo' || what === 'telas') await telas();
-  if (what === 'tudo' || what === 'telas' || what === 'ui') await ui();
-  if (what === 'tudo' || what === 'telas' || what === 'ui' || what === 'celular') await celular();
+  if (want('som', 'picote') && want('telas', 'ui', 'celular')) await freshPage();
+  if (want('telas')) await telas();
+  if (want('telas', 'ui')) await ui();
+  if (want('telas', 'ui', 'celular')) await celular();
 } finally {
   fs.writeFileSync(path.join(out, 'erros.txt'), errors.join('\n') || 'sem erros');
   console.log('evidências em', out, '| erros de página:', errors.length);

@@ -20,5 +20,6 @@ if (import.meta.env.DEV) {
     ...(await import('./sim/world')),
     ...(await import('./sim/vehicle')),
     ...(await import('./sim/garage')),
+    ...(await import('./sim/campaign')),
   });
 }

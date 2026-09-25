@@ -4,7 +4,7 @@ import { carThumbnail, itemThumbnail, SHOWROOM_COLOR, type CarThumbStyle, type S
 import { planetThumbnail } from '../render/planetThumbs';
 import type { ThemeId } from '../sim/track';
 import {
-  bossBonus, CAMPAIGN_RULES, canAdvanceEarly, carsForSale, DIVISIONS, planetCount, planetForLevel, PLANETS, POINTS, raceKind, seasonInfo, shopLevel, START_MONEY,
+  bossBonus, CAMPAIGN_RULES, canAdvanceEarly, carsForSale, DIVISIONS, planetCount, planetForLevel, PLANETS, POINTS, raceKind, rulesOf, seasonInfo, shopLevel, START_MONEY,
   type CampaignState, type OpponentSetup, type PlanetDef, type RaceKind, type RaceOutcome, RIVALS, CHAMPION_BONUS, seasonSchedule,
 } from '../sim/campaign';
 import {
@@ -40,6 +40,26 @@ const DIFF_HELP: Record<Difficulty, string> = {
 };
 
 const money = (n: number) => `$${n.toLocaleString('pt-BR')}`;
+
+/** Viagem entre planetas (animação da promoção de planeta). */
+export interface PlanetWarp {
+  from: PlanetDef;
+  to: PlanetDef;
+  /** planetas da campanha nesta dificuldade */
+  planets: number;
+  vehicleId: string;
+  color: number;
+}
+
+/** Falas do locutor na chegada a um planeta ({planet}, {boss}). */
+const WARP_LINES = [
+  'Bem-vindo a {planet}! Aperte o cinto e prepare o metal!',
+  'Chegamos a {planet}! {boss} já está esquentando os motores!',
+  '{planet}, preparem-se: tem um novato faminto chegando!',
+  'Atenção, {planet}! {boss} manda recado: aqui ninguém passa!',
+  'Novo planeta, nova carnificina! {planet} vai tremer!',
+  '{planet}! O último degrau antes da glória! {boss} te espera no fogo!',
+];
 
 /** Resumo das regras da campanha numa dificuldade (tela de nova campanha). */
 function campaignRulesText(d: Difficulty): string {
@@ -109,6 +129,8 @@ export interface MenuActions {
   restart(): void;
   quit(): void;
   resultsContinue(): void;
+  /** fim da animação de viagem para o novo planeta */
+  warpDone(): void;
   toMain(): void;
   setCamera(mode: CameraMode): void;
   openSettings(): void;
@@ -837,11 +859,9 @@ export class Menus {
     const season = seasonInfo(s);
     const pct = Math.min(100, (s.points / season.promote) * 100);
     const u = s.car.upgrades;
-    const base = this.vehicles[s.car.vehicleId];
     const early = canAdvanceEarly(s);
     const kind = raceKind(s);
     const boss = d.planet.local;
-    const raceCell = kind === 'playoff' ? 'REPESCAGEM' : kind === 'boss' ? 'CHEFE' : `${s.race + 1}/${season.races}`;
     const triesText = (n: number) => (n === 1 ? '<b>Última chance</b> — se perder, a divisão recomeça' : `Restam <b>${n}</b> tentativas`);
     const duel =
       kind === 'boss'
@@ -856,51 +876,111 @@ export class Menus {
       s.division === 1
         ? `Você já tem os pontos! Continue correndo para ganhar dinheiro ou <button class="inline-go" data-act="advance">desafiar ${esc(boss)} agora ${icon('arrowRight')}</button>`
         : `Você já tem os pontos! Continue correndo aqui para ganhar dinheiro ou <button class="inline-go" data-act="advance">subir agora ${icon('arrowRight')}</button>`;
+    const car = this.vehicles[s.car.vehicleId];
     this.show(`
-      <div class="card wide">
-        <div class="hub-head">
-          <div class="hub-planet">${planetImg(d.planet.theme, 72)}<span><small>PLANETA</small><b>${esc(d.planet.name)}</b></span></div>
-          <div><small>DIVISÃO</small><b>${div}</b></div>
-          <div><small>CORRIDA</small><b>${raceCell}</b></div>
-          <div><small>DINHEIRO</small><b class="gold">${money(s.money)}</b></div>
+      <div class="card wide hub">
+        <div class="hub-top">
+          <div class="hub-planet">${planetImg(d.planet.theme, 72)}<span><small>PLANETA ${s.planet + 1}/${planetCount(s)}</small><b>${esc(d.planet.name)}</b><em>Divisão ${div}</em></span></div>
+          ${this.raceBadge(s)}
+          <div class="hub-money"><small>DINHEIRO</small><b class="gold">${money(s.money)}</b></div>
         </div>
-        ${planetRoute(s.planet, s.champion, planetCount(s))}
-        <div class="points"><span>Pontos: <b>${s.points}</b> / ${season.promote} para subir${s.division === 1 && !s.champion ? ` e vencer ${esc(boss)}` : ''}</span><div class="bar"><i style="width:${pct}%"></i></div></div>
-        ${this.seasonCalendar(s)}
+        <div class="hub-progress">
+          ${planetRoute(s.planet, s.champion, planetCount(s))}
+          <div class="points"><span>Pontos: <b>${s.points}</b> / ${season.promote} para subir${s.division === 1 && !s.champion ? ` e vencer ${esc(boss)}` : ''}</span><div class="bar"><i style="width:${pct}%"></i></div></div>
+        </div>
         ${notice ? `<div class="notice">${iconizeHtml(notice)}</div>` : ''}
         ${duel}
         ${early ? `<div class="notice promoted">${earlyText}</div>` : ''}
-        <div class="hub-grid">
-          <div class="panel">
+        <div class="hub-main">
+          <div class="panel hub-track">
             <h3>Próxima pista</h3>
             ${trackImg(d.track.def, 320, 200)}
             <p class="trk-name"><b>${esc(d.track.def.name)}</b> · ${d.track.def.laps} voltas${d.track.def.slime ? ' · poças de gosma' : ''}</p>
+            ${this.seasonCalendar(s)}
+          </div>
+          <div class="panel hub-rivals">
             <h3>${kind === 'normal' ? 'Rivais' : 'Chefe do planeta'}</h3>
             <ul class="rivals">${d.opponents
               .map(
-                (o) => `<li><div class="rv-portrait">${portraitSvg(o.name, 76)}<span class="nameplate mini"><span>${esc(o.name)}</span></span></div><div><b style="color:${hex(o.color)}">${esc(o.spec.name)}</b><small>carro rival</small></div>${carImg(o.spec.id, o.color, 96, 'transparent')}</li>`,
+                (o) => `<li>${portraitSvg(o.name, 56)}<div><b>${esc(o.name)}</b><small style="color:${hex(o.color)}">${esc(o.spec.name)}</small></div>${carImg(o.spec.id, o.color, 96, 'transparent')}</li>`,
               )
               .join('')}</ul>
           </div>
-          <div class="panel">
-            <h3>Seu piloto e carro</h3>
-            <div class="me-row">${portraitSvg(d.character.id, 72)}<div><b>${esc(d.character.name)}</b><div class="skills">${this.bonusText(d.character)}</div></div></div>
-            <div class="mycar">${base ? this.carCard(base, s.color, '', buildSpec(base, s.car), d.spec) : this.carCard(d.spec, s.color)}</div>
+          <div class="panel hub-me">
+            <h3>Você</h3>
+            <div class="me-row">${portraitSvg(d.character.id, 56)}<div><b>${esc(d.character.name)}</b><div class="skills">${this.bonusText(d.character)}</div></div></div>
+            <div class="hub-car">${carImg(s.car.vehicleId, s.color, 160, 'transparent')}<b>${esc(car?.name ?? d.spec.name)}</b></div>
             <ul class="upg-list">
-              ${UPGRADE_KINDS.filter((k) => upgradeAvailable(s.car.vehicleId, k)).map((k) => `<li><span>${upgradeLabel(s.car.vehicleId, k)} <small>${upgradeName(s.car.vehicleId, k, u[k])}</small></span> ${pips(u[k], MAX_UPGRADE)}</li>`).join('')}
+              ${UPGRADE_KINDS.filter((k) => upgradeAvailable(s.car.vehicleId, k)).map((k) => `<li><span>${upgradeLabel(s.car.vehicleId, k)}</span> ${pips(u[k], MAX_UPGRADE)}</li>`).join('')}
             </ul>
             <p class="small-note">${d.spec.frontCharges}× ${weaponFull(d.spec.front)} · ${d.spec.rearCharges}× ${weaponFull(d.spec.rear)} · ${d.spec.nitroCharges}× ${weaponFull(d.spec.assist)}</p>
           </div>
         </div>
-        <h3>Câmera</h3>${this.cameraPicker()}
-        <button class="go" data-act="hub-race">CORRER!</button>
-        <div class="row-buttons">
-          <button data-act="shop">${icon('cart')} Loja</button>
-          <button data-act="save">${icon('save')} Salvar</button>
-          <button data-act="settings">${icon('gear')} Opções</button>
-          <button data-act="main">Menu</button>
+        <div class="hub-actions">
+          <button class="go" data-act="hub-race">CORRER!</button>
+          <div class="row-buttons">
+            <button data-act="shop">${icon('cart')} Loja</button>
+            <button data-act="save">${icon('save')} Salvar</button>
+            <button data-act="settings">${icon('gear')} Opções</button>
+            <button data-act="main">Menu</button>
+          </div>
+          <div class="hub-cam"><small>CÂMERA</small>${this.cameraPicker()}</div>
         </div>
       </div>`);
+  }
+
+  /**
+   * Viagem para o próximo planeta: o planeta vencido recebe o selo, o seu carro cruza o espaço até
+   * o novo planeta, que cresce na tela, e o nome entra com impacto. Toque em qualquer lugar pula.
+   */
+  showPlanetWarp(w: PlanetWarp): void {
+    const n = PLANETS.indexOf(w.to);
+    const line = WARP_LINES[n % WARP_LINES.length].replace('{planet}', w.to.name).replace('{boss}', w.to.local);
+    this.show(`
+      <div class="warp">
+        <div class="warp-stars"></div><div class="warp-stars far"></div>
+        <div class="warp-stage">
+          <div class="warp-from">${planetImg(w.from.theme, 176)}<span class="warp-check">✓</span><small>${esc(w.from.name)}</small></div>
+          <div class="warp-path"><i class="warp-trail"></i><span class="warp-ship">${carImg(w.vehicleId, w.color, 96, 'transparent')}</span></div>
+          <div class="warp-to">${planetImg(w.to.theme, 176)}</div>
+        </div>
+        <div class="warp-title">
+          <small>PLANETA ${n + 1} DE ${w.planets}</small>
+          <h2>${esc(w.to.name.toUpperCase())}</h2>
+          <p>Divisão B · Chefe local: <b>${esc(w.to.local)}</b></p>
+        </div>
+        <p class="warp-larry"><b>Loudmouth Larry:</b> “${esc(line)}”</p>
+        <button class="go warp-go" data-act="warp-done">Continuar ${icon('arrowRight')}</button>
+      </div>`);
+  }
+
+  /**
+   * Número da corrida em destaque (ex.: 2/6) com uma bolinha por corrida da divisão: feitas, a atual e
+   * o duelo do chefe no fim da Divisão A. Nos duelos, o selo vira CHEFE / REPESCAGEM.
+   */
+  private raceBadge(s: CampaignState): string {
+    const kind = raceKind(s);
+    const cal = seasonSchedule(s);
+    const dots = cal
+      .map((r, i) => {
+        let name = r.trackId;
+        try {
+          name = trackById(r.trackId).name;
+        } catch {
+          /* pista sem definição: mostra o id */
+        }
+        const cls = [r.done ? 'done' : '', r.current ? 'now' : '', r.boss ? 'boss' : ''].filter(Boolean).join(' ');
+        return `<i class="${cls}" title="${i + 1}. ${esc(name)}${r.boss ? ' (chefe)' : ''}"></i>`;
+      })
+      .join('');
+    const tries = kind === 'playoff' ? Array.from({ length: rulesOf(s).playoffTries }, (_, i) => `<i class="${i < (s.playoff ?? 0) ? 'now' : 'done'}"></i>`).join('') : '';
+    const big =
+      kind === 'playoff'
+        ? `<b class="race-word">REPESCAGEM</b>`
+        : kind === 'boss'
+          ? `<b class="race-word">CHEFE <span>${s.race + 1}/${cal.length}</span></b>`
+          : `<b class="race-num">${s.race + 1}<span>/${cal.length}</span></b>`;
+    return `<div class="race-badge ${kind}"><small>${kind === 'playoff' ? 'TENTATIVAS' : 'CORRIDA'}</small>${big}<div class="race-dots">${kind === 'playoff' ? tries : dots}</div></div>`;
   }
 
   /** Calendário da divisão: as pistas das corridas, com as já disputadas marcadas e a próxima em destaque. */
@@ -918,7 +998,7 @@ export class Menus {
         return `<li style="${style}">${mark}${i + 1}. ${esc(name)}${r.boss ? ` · <b>chefe: ${esc(PLANETS[s.planet].local)}</b>` : ''}</li>`;
       })
       .join('');
-    return `<details class="season-cal small-note"><summary>Calendário — ${esc(PLANETS[s.planet].name)}, Divisão ${DIVISIONS[s.division]} (${seasonSchedule(s).length} corridas)</summary><ol style="list-style:none;padding:0;margin:6px 0;columns:2;font-size:12px">${races}</ol></details>`;
+    return `<details class="season-cal small-note"><summary>Calendário da divisão (${seasonSchedule(s).length} corridas)</summary><ol style="list-style:none;padding:0;margin:6px 0;columns:2;font-size:12px">${races}</ol></details>`;
   }
 
   /* ---------------- loja ---------------- */
@@ -1200,7 +1280,7 @@ export class Menus {
       ? `<div class="notice ${report.outcome}">
           ${report.bonus ? `Você derrotou ${esc(report.boss)}! Bônus de chefe: <b class="gold">${money(report.bonus)}</b><br>` : ''}
           ${report.outcome === 'champion' ? `${planetRoute(report.planets, true, report.planets)}Você venceu a galáxia inteira! Lenda do rock.` : ''}
-          ${report.outcome === 'promoted' ? `${planetImg(PLANETS.find((p) => report.label.startsWith(p.name))?.theme, 112, 'promo')}Subiu para: <b>${report.label}</b>` : ''}
+          ${report.outcome === 'promoted' ? `${planetImg(PLANETS.find((p) => report.label.startsWith(p.name))?.theme, 112, 'promo')}Subiu para: <b>${report.label}</b><span hidden>${planetImg(PLANETS.find((p) => report.label.startsWith(p.name))?.theme, 176)}</span>` : ''}
           ${report.outcome === 'retry' ? (report.kind === 'playoff' ? `${esc(report.boss)} venceu a repescagem. A divisão recomeça — melhore o carro na loja!` : `Não somou ${report.promote} pontos. A divisão recomeça — melhore o carro na loja!`) : ''}
           ${
             report.outcome !== 'playoff'
@@ -1275,6 +1355,13 @@ export class Menus {
   }
 
   private onClick(e: Event): void {
+    // viagem entre planetas: o 1º toque fora do botão adianta a animação para o fim; o 2º continua
+    const warp = (e.target as HTMLElement).closest('.warp');
+    if (warp && !(e.target as HTMLElement).closest('button')) {
+      if (warp.classList.contains('skip')) this.actions.warpDone();
+      else warp.classList.add('skip');
+      return;
+    }
     const t = (e.target as HTMLElement).closest('button');
     if (!t || t.disabled) return;
     const d = t.dataset;
@@ -1433,6 +1520,8 @@ export class Menus {
         return this.actions.quit();
       case 'results-continue':
         return this.actions.resultsContinue();
+      case 'warp-done':
+        return this.actions.warpDone();
       case 'settings':
         return this.actions.openSettings();
       case 'close-settings':
