@@ -1395,6 +1395,10 @@ h3 {
 
 /* controle (joystick): destaque do botão em foco nos menus e tela de configurar botões */
 .pad-nav .overlay :is(button, input, select, summary, a):focus { outline: 3px solid #ffd23a; outline-offset: 2px; box-shadow: 0 0 0 6px rgba(255, 210, 58, 0.25); }
+/* dois controles: cursor de cada jogador na cor da coluna dele (J1 azul, J2 vermelho); no mesmo botão, o vermelho fica por fora */
+.pad-nav.pad-duo .overlay :is(button, input, select, summary, a):focus { outline-color: #3d8bff; box-shadow: 0 0 0 6px rgba(61, 139, 255, 0.3); }
+.pad-nav.pad-duo .overlay .pad-cur2 { box-shadow: 0 0 0 4px #ff3b3b, 0 0 0 8px rgba(255, 59, 59, 0.3); }
+.pad-nav.pad-duo .overlay .pad-cur2:focus { box-shadow: 0 0 0 7px #ff3b3b, 0 0 0 11px rgba(255, 59, 59, 0.3); }
 .pad-setup { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; background: rgba(0, 0, 0, 0.72); padding: 16px; }
 .pad-setup-card { width: min(360px, 100%); display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; padding: 20px; border-radius: 14px; background: #1b1b24; border: 1px solid var(--line); }
 .pad-setup-card .pad-name { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }

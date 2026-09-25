@@ -157,3 +157,28 @@ Cada item precisa ser atendido e verificado pelos avaliadores.
     jogador com seu carro, sua câmera e sua HUD, no mesmo aparelho.
 70. Controle de PlayStation: △ solta o turbo e □ muda a distância da câmera (substitui o item 68
     nesses dois botões).
+
+# Retorno do usuário (2026-09-25, campanha cooperativa)
+
+70. Modo cooperativo na campanha: dois jogadores em tela dividida jogam a mesma campanha. Cada um
+    com piloto, carro, dinheiro e loja próprios; pontos da dupla (vale a melhor colocação); sem fogo
+    amigo entre os dois; o chefe é derrotado se qualquer um vencer o duelo.
+
+# Retorno do usuário (2026-09-25, jogando na TV pelo HDMI)
+
+71. Resolução baixa na TV: opção "Resolução máxima" nas configurações desenha na densidade da tela
+    (até 2x), sem a resolução dinâmica baixar, inclusive nos menus.
+72. Som surround nas caixas 5.1/7.1 do PC: efeitos e motores rivais que vêm de trás tocam nas
+    caixas traseiras (a frente segue com a mixagem de sempre); em estéreo nada muda. As opções
+    mostram se o surround está ligado.
+
+# Retorno do usuário (2026-09-25, sons de mureta e menu)
+
+73. Som da batida na mureta "muito chato": deve ser um baque curto e contido, sem raspão chiado
+    sustentado nem repetir a cada roçada.
+74. Mover o cursor do menu pelo controle toca um "blip" curto, como no jogo original.
+75. Modo de 2 jogadores: cada controle tem o seu cursor nos menus, com cor própria (jogador 1
+    azul, jogador 2 vermelho, as cores das colunas da tela dividida).
+73. O PC manda só estéreo para a TV Samsung (o sistema Dolby fica ligado à TV): opção "Dolby
+    Surround" codifica o que vem de trás em matriz no estéreo, para o Pro Logic II do aparelho
+    mandar às caixas traseiras.

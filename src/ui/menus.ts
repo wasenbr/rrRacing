@@ -175,6 +175,8 @@ export interface MenuActions {
   setAutoThrottle(on: boolean): void;
   setQuality(q: QualityPref): void;
   setBatterySaver(mode: BatteryPref): void;
+  setSharp(on: boolean): void;
+  setSurroundMatrix(on: boolean): void;
   toggleFullscreen(): void;
   install(): void;
   quitGame(): void;
@@ -213,6 +215,12 @@ export interface AudioSettings {
   batteryNow: boolean;
   /** o navegador informa a bateria (getBattery); sem isso a Automática decide pela folga do aparelho */
   batteryDetect?: boolean;
+  /** resolução máxima: desenha na densidade da tela, sem a resolução dinâmica baixar */
+  sharp: boolean;
+  /** canais da saída de som (2 estéreo, 6 = 5.1, 8 = 7.1) */
+  channels: number;
+  /** estéreo com as traseiras em matriz Dolby Surround */
+  surroundMatrix: boolean;
 }
 
 export interface ResultRow {
@@ -623,7 +631,7 @@ export class Menus {
     window.addEventListener('keyup', (e) => this.secretKeys.delete(e.code));
     window.addEventListener('blur', () => this.secretKeys.clear());
     // controle: navegação dos menus; L + R + Select libera o piloto secreto na nova campanha
-    startPadNav(this.el, { onSecret: () => this.trySecret() });
+    startPadNav(this.el, { onSecret: () => this.trySecret(), swap: () => this.split.swap });
     // botão flutuante de tela cheia nos menus (celular)
     this.fsButton = document.createElement('button');
     this.fsButton.className = 'fs-float';
@@ -1348,7 +1356,9 @@ export class Menus {
         <div class="shop-row"><div><b>Volume da música</b></div><input class="vol" type="range" min="0" max="100" value="${Math.round(a.musicVolume * 100)}"/></div>
         ${toggle('sfx', 'Efeitos sonoros', a.sfx)}
         ${toggle('announcer', 'Locutor', a.announcer)}
+        ${a.touch ? '' : a.channels > 2 ? `<div class="shop-row"><div class="grow"><b>Som surround</b><small>Ligado em ${a.channels === 8 ? '7.1' : '5.1'}: o que vem de trás toca nas caixas traseiras.</small></div></div>` : toggle('matrix', 'Dolby Surround', a.surroundMatrix, 'Para home theater ou soundbar ligado à TV: ponha o aparelho em Pro Logic II (ou Dolby Surround / Surround) e o que vem de trás vai às caixas traseiras. Em fone ou caixas comuns, deixe desligado.')}
         <div class="shop-row"><div class="grow"><b>Qualidade gráfica</b><small>Em uso: ${QUALITY_LABELS[a.qualityNow]}. Baixa deixa o jogo liso em aparelhos simples.</small></div><button class="toggle on" data-quality="${a.quality}">${QUALITY_LABELS[a.quality].toUpperCase()}</button></div>
+        ${toggle('sharp', 'Resolução máxima', a.sharp, 'Imagem nítida na TV ou no monitor grande; pode perder quadros em vídeo simples')}
         <div class="shop-row"><div class="grow"><b>Economia de bateria</b><small>${a.batteryNow ? 'Ligada agora' : 'Desligada agora'}. ${a.batteryDetect === false ? 'Este navegador não informa a bateria: a Automática fica em até 60 quadros por segundo e liga a economia se o aparelho não der conta' : 'Automática liga fora da tomada'}: 30 quadros por segundo e menos resolução, sombras e fumaça.</small></div><button class="toggle ${a.battery === 'off' ? '' : 'on'}" data-battery="${a.battery}">${BATTERY_LABELS[a.battery].toUpperCase()}</button></div>
         ${a.touch ? toggle('autothrottle', 'Aceleração automática', a.autoThrottle, 'O carro acelera sozinho; o polegar direito freia e atira') : ''}
         ${a.touch && tiltSupported() ? toggle('tilt', 'Direção por inclinação', tiltSteeringEnabled(), 'Vire o celular como um volante; o polegar esquerdo fica só com as armas') : ''}
@@ -1866,6 +1876,8 @@ export class Menus {
         return;
       }
       if (d.toggle === 'autothrottle') this.actions.setAutoThrottle(d.on !== '1');
+      else if (d.toggle === 'sharp') this.actions.setSharp(d.on !== '1');
+      else if (d.toggle === 'matrix') this.actions.setSurroundMatrix(d.on !== '1');
       else this.actions.setAudio(d.toggle as 'music' | 'sfx' | 'announcer', d.on !== '1');
     }
     if (d.upgrade) this.actions.buyUpgrade(d.upgrade as UpgradeKind);

@@ -1,9 +1,13 @@
-import { connectedPads, padSetupActive, readPadMenu, type PadMenuState } from './gamepad';
+import { sfxMenuMove } from '../audio/sfx';
+import { connectedPads, padSetupActive, readPadMenu, splitAssignment, type PadMenuState } from './gamepad';
 
 /**
  * Navegação dos menus pelo controle: direcional (D-pad ou analógico) move o foco para o botão mais
  * próximo naquele sentido, Confirmar clica, Voltar aciona o "← Voltar" da tela e Start fecha a pausa.
  * Só roda com um controle conectado e com o menu na tela.
+ * Com dois controles (modo de 2 jogadores) cada um tem o seu cursor: o do jogador 1 é o foco da
+ * página (azul) e o do jogador 2 é a marca `.pad-cur2` (vermelho), nas cores das colunas da tela
+ * dividida. Quem é o jogador 1 segue a troca de controles da tela dividida.
  */
 
 const FOCUSABLE = 'button, input:not([type="hidden"]), select, summary, a[href]';
@@ -56,36 +60,70 @@ function signature(el: HTMLElement): string {
   return el.tagName + JSON.stringify(el.dataset) + (el.dataset && Object.keys(el.dataset).length ? '' : el.textContent?.trim());
 }
 
-export function startPadNav(root: HTMLElement, hooks: { onSecret: () => void }): void {
+/** Um cursor: o foco da página (jogador 1 ou controle único) ou a marca do jogador 2. */
+interface Cursor {
+  get(): HTMLElement | null;
+  set(el: HTMLElement): void;
+  prev: PadMenuState;
+  holdDir: string;
+  holdT: number;
+}
+
+const RELEASED: PadMenuState = { x: 0, y: 0, confirm: true, back: true, pause: true, secret: true };
+
+export function startPadNav(root: HTMLElement, hooks: { onSecret: () => void; swap: () => boolean }): void {
   let raf = 0;
-  let prev: PadMenuState = { x: 0, y: 0, confirm: true, back: true, pause: true, secret: true };
-  let holdDir = '';
-  let holdT = 0;
   let last = 0;
 
   const active = () => root.style.display !== 'none' && !padSetupActive;
-  const current = (): HTMLElement | null => {
-    const f = document.activeElement as HTMLElement | null;
-    return f && root.contains(f) && visible(f) ? f : null;
-  };
-  const focus = (el: HTMLElement) => {
+  const show = (el: HTMLElement) => {
     document.body.classList.add('pad-nav');
-    el.focus({ preventScroll: true });
     el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  };
+  const p1: Cursor = {
+    get() {
+      const f = document.activeElement as HTMLElement | null;
+      return f && root.contains(f) && visible(f) ? f : null;
+    },
+    set(el) {
+      el.focus({ preventScroll: true });
+      show(el);
+    },
+    prev: RELEASED,
+    holdDir: '',
+    holdT: 0,
+  };
+  let mark2: HTMLElement | null = null;
+  const clear2 = () => {
+    mark2?.classList.remove('pad-cur2');
+    mark2 = null;
+  };
+  const p2: Cursor = {
+    get: () => (mark2 && root.contains(mark2) && visible(mark2) ? mark2 : null),
+    set(el) {
+      clear2();
+      mark2 = el;
+      el.classList.add('pad-cur2');
+      show(el);
+    },
+    prev: RELEASED,
+    holdDir: '',
+    holdT: 0,
   };
   const initial = (list: HTMLElement[]) => list.find((el) => el.classList.contains('go')) ?? list[0];
 
-  const move = (dx: number, dy: number) => {
+  const move = (c: Cursor, dx: number, dy: number) => {
     const list = candidates(root);
     if (!list.length) return;
-    const cur = current();
-    if (!cur) return focus(initial(list));
+    const cur = c.get();
+    if (!cur) return c.set(initial(list));
     // controles deslizantes e listas: esquerda/direita mudam o valor
     if (dx && cur instanceof HTMLInputElement && cur.type === 'range') {
       const step = (Number(cur.max) - Number(cur.min)) / 20;
       cur.value = String(Number(cur.value) + dx * step);
       cur.dispatchEvent(new Event('input', { bubbles: true }));
       cur.dispatchEvent(new Event('change', { bubbles: true }));
+      sfxMenuMove();
       return;
     }
     if (dx && cur instanceof HTMLSelectElement) {
@@ -93,28 +131,36 @@ export function startPadNav(root: HTMLElement, hooks: { onSecret: () => void }):
       if (i !== cur.selectedIndex) {
         cur.selectedIndex = i;
         cur.dispatchEvent(new Event('change', { bubbles: true }));
+        sfxMenuMove();
       }
       return;
     }
     const next = nearest(cur, list, dx, dy);
-    if (next) focus(next);
-  };
-
-  const press = (el: HTMLElement) => {
-    const sig = signature(el);
-    el.click();
-    // a tela foi redesenhada: devolve o foco ao mesmo botão, se ele ainda existir
-    if (!current()) {
-      const same = candidates(root).find((c) => signature(c) === sig);
-      if (same) focus(same);
+    if (next) {
+      c.set(next);
+      sfxMenuMove();
     }
   };
 
-  const confirm = () => {
-    const cur = current();
+  const press = (el: HTMLElement) => {
+    // a tela pode ser redesenhada: guarda onde estava cada cursor para devolvê-lo ao mesmo botão
+    const at = [p1, p2].map((c) => {
+      const cur = c.get();
+      return cur ? signature(cur) : '';
+    });
+    el.click();
+    [p1, p2].forEach((c, k) => {
+      if (!at[k] || c.get()) return;
+      const same = candidates(root).find((e) => signature(e) === at[k]);
+      if (same) c.set(same);
+    });
+  };
+
+  const confirm = (c: Cursor) => {
+    const cur = c.get();
     if (cur) return press(cur);
     const list = candidates(root);
-    if (list.length) return focus(initial(list));
+    if (list.length) return c.set(initial(list));
     // telas sem botões (viagem entre planetas, final): um toque avança
     (root.firstElementChild as HTMLElement | null)?.click();
   };
@@ -127,44 +173,62 @@ export function startPadNav(root: HTMLElement, hooks: { onSecret: () => void }):
     if (btn) press(btn);
   };
 
+  /** Direção, confirmar, voltar e pausa de um cursor; `s` é o estado do controle dele. */
+  const drive = (c: Cursor, s: PadMenuState, dt: number) => {
+    const dir = s.x || s.y ? `${s.x},${s.y}` : '';
+    // diagonal: vale o eixo vertical (listas são verticais)
+    const step = () => (s.y ? move(c, 0, s.y) : move(c, s.x, 0));
+    if (dir && dir !== c.holdDir) {
+      step();
+      c.holdT = REPEAT_FIRST;
+    } else if (dir) {
+      c.holdT -= dt;
+      if (c.holdT <= 0) {
+        step();
+        c.holdT = REPEAT_NEXT;
+      }
+    }
+    c.holdDir = dir;
+    // tela nova com o controle em uso: já põe o cursor no botão principal
+    if (!dir && document.body.classList.contains('pad-nav') && !c.get()) {
+      const list = candidates(root);
+      if (list.length) c.set(initial(list));
+    }
+    if (s.confirm && !c.prev.confirm) confirm(c);
+    else if (s.back && !c.prev.back) back();
+    else if (s.pause && !c.prev.pause) {
+      const resume = root.querySelector<HTMLElement>('[data-act="resume"]');
+      if (resume && visible(resume)) press(resume);
+    }
+    if (s.secret && !c.prev.secret) hooks.onSecret();
+    c.prev = s;
+  };
+
   const tick = (t: number) => {
     raf = 0;
-    if (!connectedPads().length) return;
+    const pads = connectedPads();
+    if (!pads.length) {
+      clear2();
+      document.body.classList.remove('pad-duo');
+      return;
+    }
     raf = requestAnimationFrame(tick);
-    const s = readPadMenu();
-    if (!s) return;
     const dt = last ? Math.min((t - last) / 1000, 0.1) : 0;
     last = t;
-    if (active()) {
-      const dir = s.x || s.y ? `${s.x},${s.y}` : '';
-      if (dir && dir !== holdDir) {
-        // diagonal: vale o eixo vertical (listas são verticais)
-        if (s.y) move(0, s.y);
-        else move(s.x, 0);
-        holdT = REPEAT_FIRST;
-      } else if (dir) {
-        holdT -= dt;
-        if (holdT <= 0) {
-          if (s.y) move(0, s.y);
-          else move(s.x, 0);
-          holdT = REPEAT_NEXT;
-        }
-      }
-      holdDir = dir;
-      // tela nova com o controle em uso: já foca o botão principal
-      if (!dir && document.body.classList.contains('pad-nav') && !current()) {
-        const list = candidates(root);
-        if (list.length) focus(initial(list));
-      }
-      if (s.confirm && !prev.confirm) confirm();
-      else if (s.back && !prev.back) back();
-      else if (s.pause && !prev.pause) {
-        const resume = root.querySelector<HTMLElement>('[data-act="resume"]');
-        if (resume && visible(resume)) press(resume);
-      }
-      if (s.secret && !prev.secret) hooks.onSecret();
-    } else holdDir = '';
-    prev = s;
+    const duo = pads.length >= 2;
+    document.body.classList.toggle('pad-duo', duo);
+    if (!duo) clear2();
+    const own = duo ? splitAssignment(hooks.swap()) : null;
+    const s1 = readPadMenu(own?.p1 ? [own.p1] : pads);
+    const s2 = own?.p2 ? readPadMenu([own.p2]) : null;
+    if (!active()) {
+      p1.holdDir = p2.holdDir = '';
+      if (s1) p1.prev = s1;
+      if (s2) p2.prev = s2;
+      return;
+    }
+    if (s1) drive(p1, s1, dt);
+    if (s2) drive(p2, s2, dt);
   };
 
   const wake = () => {

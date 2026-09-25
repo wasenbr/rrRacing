@@ -1,4 +1,4 @@
-import { audio, isAudioLite } from './context';
+import { audio, isAudioLite, SpatialPan } from './context';
 import { ENGINE_LOOPS, getBuffer, loadBuffer, loopBounds } from './samples';
 
 /**
@@ -747,6 +747,8 @@ export interface RivalEngineInput {
   dist: number;
   /** -1 (esquerda) .. +1 (direita) */
   pan: number;
+  /** 0 (na frente) .. 1 (atrás): caixas traseiras no surround */
+  rear: number;
   /** velocidade de aproximação (m/s, positiva = chegando): Doppler */
   closing: number;
 }
@@ -770,7 +772,7 @@ export class RivalEngines {
     fireGain: GainNode;
     tone: BiquadFilterNode;
     gain: GainNode;
-    pan: StereoPannerNode;
+    pan: SpatialPan;
     rpm: number;
     /** ligada ao barramento; calada há um tempo, sai do grafo e para de gastar CPU de áudio */
     on: boolean;
@@ -839,11 +841,10 @@ export class RivalEngines {
       hp.frequency.value = 45;
       const gain = ctx.createGain();
       gain.gain.value = 0;
-      const pan = ctx.createStereoPanner();
+      const pan = new SpatialPan(ctx, a.engine, a.rearEngine);
       tone.connect(hp);
       hp.connect(gain);
-      gain.connect(pan);
-      pan.connect(a.engine);
+      gain.connect(pan.input);
       cyc.start(t, Math.random() * 2);
       fire.start(t);
       this.voices.push({ cyc, cycGain: cg, rec: [], fire, fireBand, fireGain, tone, gain, pan, rpm: 0.3, on: true, quietSince: -1 });
@@ -904,11 +905,7 @@ export class RivalEngines {
     }
     const release = () => {
       for (const v of voices) {
-        try {
-          v.pan.disconnect();
-        } catch {
-          /* já desconectado */
-        }
+        v.pan.attach(false);
       }
     };
     if (srcs.length) srcs[0].onended = release;
@@ -933,7 +930,7 @@ export class RivalEngines {
       const r = rivals[i];
       if (!r) {
         v.gain.gain.setTargetAtTime(0, t, 0.15);
-        this.park(v, t, a.engine, 0);
+        this.park(v, t, 0);
         return;
       }
       const s = Math.max(0, r.speedRatio);
@@ -970,9 +967,9 @@ export class RivalEngines {
       // formantes do motor do jogador: x2 de compensação) e o acelerador pesa mais
       const level = near * near * (0.45 + r.throttle * 0.25) * 2;
       v.gain.gain.setTargetAtTime(level, t, 0.08);
-      this.park(v, t, a.engine, level);
+      this.park(v, t, level);
       // pan até ±0,8: em ±1 o outro canal ficava em silêncio (soava "furado" no fone)
-      v.pan.pan.setTargetAtTime(Math.max(-0.8, Math.min(0.8, r.pan)), t, 0.05);
+      v.pan.set(Math.max(-0.8, Math.min(0.8, r.pan)), r.rear, 0.05);
     });
   }
 
@@ -985,23 +982,23 @@ export class RivalEngines {
     }
     // sem update (menu): desliga as vozes depois que o volume já caiu
     setTimeout(() => {
-      for (const v of this.voices) this.park(v, a.ctx.currentTime, a.engine, 0);
+      for (const v of this.voices) this.park(v, a.ctx.currentTime, 0);
     }, 800);
   }
 
   /** Tira do grafo a voz calada há mais de 0,6 s; volta quando precisa soar (o ganho já está em ~0, sem estalo). */
-  private park(v: RivalEngines['voices'][number], t: number, bus: AudioNode, level: number): void {
+  private park(v: RivalEngines['voices'][number], t: number, level: number): void {
     if (level > 1e-4) {
       v.quietSince = -1;
       if (!v.on) {
-        v.pan.connect(bus);
+        v.pan.attach(true);
         v.on = true;
       }
       return;
     }
     if (v.quietSince < 0) v.quietSince = t;
     else if (v.on && t - v.quietSince > 0.6) {
-      v.pan.disconnect();
+      v.pan.attach(false);
       v.on = false;
     }
   }

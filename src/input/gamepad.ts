@@ -254,9 +254,8 @@ export interface PadMenuState {
   secret: boolean;
 }
 
-/** Estado para os menus: direção (analógico ou D-pad) e confirmar/voltar. */
-export function readPadMenu(): PadMenuState | null {
-  const pads = connectedPads();
+/** Estado para os menus: direção (analógico ou D-pad) e confirmar/voltar (de `pads`, ou de todos). */
+export function readPadMenu(pads: Gamepad[] = connectedPads()): PadMenuState | null {
   if (!pads.length) return null;
   let x = 0;
   let y = 0;

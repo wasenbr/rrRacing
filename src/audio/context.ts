@@ -19,6 +19,13 @@ let sfxBus: GainNode | null = null;
 let engineBus: GainNode | null = null;
 let musicBus: GainNode | null = null;
 let voiceBus: GainNode | null = null;
+/** surround (5.1/7.1): efeitos e motores que vêm de trás vão às caixas traseiras */
+let rearSfxBus: GainNode | null = null;
+let rearEngineBus: GainNode | null = null;
+/** canais da saída em uso (2 = estéreo, 6 = 5.1, 8 = 7.1) */
+let outChannels = 2;
+/** estéreo com as traseiras codificadas em matriz (Dolby Surround / Pro Logic II do receiver) */
+let matrixOn = false;
 let musicDuck: GainNode | null = null;
 let impactDuck: GainNode | null = null;
 let engineDuck: GainNode | null = null;
@@ -79,10 +86,13 @@ export interface AudioOut {
   music: GainNode;
   /** locutor */
   voice: GainNode;
+  /** caixas traseiras (null em estéreo): efeitos e motores */
+  rearOut: GainNode | null;
+  rearEngine: GainNode | null;
 }
 
 export function audio(): AudioOut | null {
-  return ctx && sfxBus && musicBus && engineBus && voiceBus ? { ctx, out: sfxBus, engine: engineBus, music: musicBus, voice: voiceBus } : null;
+  return ctx && sfxBus && musicBus && engineBus && voiceBus ? { ctx, out: sfxBus, engine: engineBus, music: musicBus, voice: voiceBus, rearOut: rearSfxBus, rearEngine: rearEngineBus } : null;
 }
 
 /** Teto do master: -1 dBFS. */
@@ -145,7 +155,89 @@ function buildGraph(c: BaseAudioContext): void {
   postLimit.gain.value = 0.84;
   limiter.connect(postLimit);
   postLimit.connect(clip);
-  clip.connect(master);
+  // surround: a saída do Windows configurada em 5.1/7.1 (o Chrome informa em maxChannelCount).
+  // A mixagem de sempre vai às caixas da frente; um caminho próprio leva o que vem de trás às
+  // traseiras (os compressores do Web Audio são só estéreo: as traseiras têm o seu limitador)
+  const max = ctx.destination.maxChannelCount || 2;
+  outChannels = max >= 8 ? 8 : max >= 6 ? 6 : 2;
+  rearSfxBus = ctx.createGain();
+  rearSfxBus.gain.value = sfxOn ? SFX_TRIM : 0;
+  rearEngineBus = ctx.createGain();
+  rearEngineBus.gain.value = sfxOn ? ENGINE_TRIM : 0;
+  if (outChannels === 2) {
+    // estéreo: as traseiras entram no par L/R em matriz (coeficientes do codificador Pro Logic II,
+    // com inversão de polaridade no lugar dos ±90°). Um decodificador Dolby Surround / Pro Logic
+    // (receiver ou soundbar ligado à TV) manda a diferença L−R às caixas traseiras; o lado sai da
+    // proporção entre os dois canais. Só soa quando a opção está ligada (ver SpatialPan.set)
+    const split = ctx.createChannelSplitter(2);
+    const enc = ctx.createChannelMerger(2);
+    const rearMix = ctx.createGain();
+    rearSfxBus.connect(rearMix);
+    rearEngineBus.connect(rearMix);
+    rearMix.connect(split);
+    const coef: [number, number, number][] = [
+      [0, 0, -0.87],
+      [1, 0, -0.49],
+      [0, 1, 0.49],
+      [1, 1, 0.87],
+    ];
+    for (const [from, to, k] of coef) {
+      const g = ctx.createGain();
+      g.gain.value = k;
+      split.connect(g, from);
+      g.connect(enc, 0, to);
+    }
+    enc.connect(preLimit);
+  }
+  if (outChannels > 2) {
+    const dest = ctx.destination;
+    dest.channelCount = outChannels;
+    dest.channelCountMode = 'explicit';
+    dest.channelInterpretation = 'discrete';
+    // ordem do Windows: FL FR C LFE (5.1: SL SR) (7.1: BL BR SL SR)
+    const merger = ctx.createChannelMerger(outChannels);
+    const front = ctx.createChannelSplitter(2);
+    clip.connect(front);
+    front.connect(merger, 0, 0);
+    front.connect(merger, 1, 1);
+    // mesmo caminho da frente: pré-limitador, limitador, compensação e soft clip
+    const rearIn = ctx.createGain();
+    rearIn.gain.value = 0.89;
+    rearSfxBus.connect(rearIn);
+    rearEngineBus.connect(rearIn);
+    const rearLimiter = ctx.createDynamicsCompressor();
+    rearLimiter.threshold.value = -1.5;
+    rearLimiter.knee.value = 0;
+    rearLimiter.ratio.value = 20;
+    rearLimiter.attack.value = 0.001;
+    rearLimiter.release.value = 0.12;
+    const rearPost = ctx.createGain();
+    rearPost.gain.value = 0.84;
+    const rearClip = ctx.createWaveShaper();
+    rearClip.curve = ceilingCurve(0.8, CEIL);
+    rearClip.oversample = 'none';
+    rearIn.connect(rearLimiter);
+    rearLimiter.connect(rearPost);
+    rearPost.connect(rearClip);
+    const rear = ctx.createChannelSplitter(2);
+    rearClip.connect(rear);
+    // 7.1: traseiras e laterais recebem o mesmo par, 3 dB abaixo cada
+    const pairs = outChannels === 8 ? [4, 6] : [4];
+    const pairGain = pairs.length > 1 ? Math.SQRT1_2 : 1;
+    for (const first of pairs) {
+      const l = ctx.createGain();
+      const r = ctx.createGain();
+      rear.connect(l, 0);
+      rear.connect(r, 1);
+      l.gain.value = r.gain.value = pairGain;
+      l.connect(merger, 0, first);
+      r.connect(merger, 0, first + 1);
+    }
+    merger.connect(master);
+    master.channelCount = outChannels;
+    master.channelCountMode = 'explicit';
+    master.channelInterpretation = 'discrete';
+  } else clip.connect(master);
   master.connect(ctx.destination);
 
   sfxBus = ctx.createGain();
@@ -319,6 +411,90 @@ export function setSfxEnabled(on: boolean): void {
   if (ctx && sfxBus && engineBus) {
     sfxBus.gain.setTargetAtTime(on ? SFX_TRIM : 0, ctx.currentTime, 0.05);
     engineBus.gain.setTargetAtTime(on ? ENGINE_TRIM : 0, ctx.currentTime, 0.05);
+    rearSfxBus?.gain.setTargetAtTime(on ? SFX_TRIM : 0, ctx.currentTime, 0.05);
+    rearEngineBus?.gain.setTargetAtTime(on ? ENGINE_TRIM : 0, ctx.currentTime, 0.05);
+  }
+}
+
+/**
+ * Liga a matriz Dolby Surround na saída estéreo (vale a partir do próximo som; os motores dos rivais
+ * mudam no quadro seguinte). Sem efeito quando a saída já é 5.1/7.1.
+ */
+export function setSurroundMatrix(on: boolean): void {
+  matrixOn = on;
+}
+
+/** As caixas traseiras recebem som: saída 5.1/7.1 ou matriz ligada. */
+function rearActive(): boolean {
+  return outChannels > 2 || matrixOn;
+}
+
+/** Canais da saída de som em uso: 2 (estéreo), 6 (5.1) ou 8 (7.1). Só sabe depois do primeiro gesto. */
+export function audioChannels(): number {
+  return outChannels;
+}
+
+/** Pan de um efeito: só o lado (-1..1) ou o lado e o quanto a fonte está atrás (0..1). */
+export type Pan = number | { side: number; rear: number };
+
+/**
+ * Pan de uma fonte posicional: `side` (-1 esquerda .. 1 direita) e `rear` (0 na frente .. 1 atrás).
+ * Em estéreo o `rear` é ignorado (a mixagem de sempre). Em surround divide a fonte entre as caixas
+ * da frente e as traseiras com potência constante.
+ */
+export class SpatialPan {
+  readonly input: StereoPannerNode;
+  private readonly front: GainNode;
+  private readonly back: GainNode | null;
+  private attached = true;
+
+  constructor(
+    private readonly ctx: BaseAudioContext,
+    private readonly frontBus: AudioNode,
+    private readonly rearBus: AudioNode | null,
+    side = 0,
+    rear = 0,
+  ) {
+    this.input = ctx.createStereoPanner();
+    this.front = ctx.createGain();
+    this.input.connect(this.front);
+    this.front.connect(frontBus);
+    this.back = rearBus ? ctx.createGain() : null;
+    if (this.back && rearBus) {
+      this.input.connect(this.back);
+      this.back.connect(rearBus);
+    }
+    this.set(side, rear);
+  }
+
+  set(side: number, rear: number, smooth = 0): void {
+    const t = this.ctx.currentTime;
+    const s = Math.max(-1, Math.min(1, side));
+    const r = this.back && rearActive() ? Math.max(0, Math.min(1, rear)) : 0;
+    const f = Math.cos((r * Math.PI) / 2);
+    const b = Math.sin((r * Math.PI) / 2);
+    if (smooth > 0) {
+      this.input.pan.setTargetAtTime(s, t, smooth);
+      this.front.gain.setTargetAtTime(f, t, smooth);
+      this.back?.gain.setTargetAtTime(b, t, smooth);
+    } else {
+      this.input.pan.value = s;
+      this.front.gain.value = f;
+      if (this.back) this.back.gain.value = b;
+    }
+  }
+
+  /** Liga/desliga as saídas do grafo (voz calada não gasta CPU de áudio). */
+  attach(on: boolean): void {
+    if (on === this.attached) return;
+    this.attached = on;
+    if (on) {
+      this.front.connect(this.frontBus);
+      if (this.back && this.rearBus) this.back.connect(this.rearBus);
+    } else {
+      this.front.disconnect();
+      this.back?.disconnect();
+    }
   }
 }
 

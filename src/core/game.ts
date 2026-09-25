@@ -2,7 +2,7 @@ import { AutoDegrade, batteryApiAvailable, DynamicResolution, ECO_AUTO_S, ECO_PA
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Announcer, Commentary } from '../audio/announcer';
-import { resumeAudio, setAudioLite, setSfxEnabled, suspendAudio, toggleMute, unlockAudio } from '../audio/context';
+import { audioChannels, resumeAudio, setSurroundMatrix, setAudioLite, setSfxEnabled, suspendAudio, toggleMute, unlockAudio, type Pan } from '../audio/context';
 import { Music } from '../audio/music';
 import { EngineSound, RivalEngines, warmEngineStep, type RivalEngineInput } from '../audio/engine';
 import { sfxAssist, sfxBump, sfxBurn, sfxCountdown, sfxDrop, sfxExplosion, sfxFall, sfxFire, sfxHit, sfxLand, sfxLap, sfxPickup, sfxSkid, sfxWall, prepareSfx, finaleShow } from '../audio/sfx';
@@ -379,7 +379,7 @@ export class Game {
   private level: THREE.Group | null = null;
   private hemi: THREE.HemisphereLight;
   private resultsShown = false;
-  private prefs = loadPrefs({ camera: 'iso' as CameraMode, music: true, sfx: true, announcer: true, musicVolume: 0.7, autoThrottle: false, quality: 'auto' as QualityPref, battery: 'auto' as BatteryPref | boolean });
+  private prefs = loadPrefs({ camera: 'iso' as CameraMode, music: true, sfx: true, announcer: true, musicVolume: 0.7, autoThrottle: false, quality: 'auto' as QualityPref, sharp: false, surroundMatrix: false, battery: 'auto' as BatteryPref | boolean });
   private music = new Music();
   /** tela de menu atual (para voltar depois das configurações de som) */
   private screen: 'main' | 'hub' = 'main';
@@ -569,6 +569,7 @@ export class Game {
     this.quality = resolveQuality(this.prefs.quality, this.touch);
     // economia de bateria: escolha do jogador nas opções (getBattery não existe no Safari/Firefox)
     this.prefs.battery = normalizeBatteryPref(this.prefs.battery);
+    setSurroundMatrix(this.prefs.surroundMatrix);
     this.onBattery = this.prefs.battery === 'on';
     // automática: liga/desliga sozinha ao tirar/pôr na tomada (a resposta chega depois de montar tudo)
     watchBattery((d) => {
@@ -593,6 +594,7 @@ export class Game {
     setMaxAnisotropy(maxAniso);
     this.dynRes.min = this.quality.minScale;
     this.dynRes.scale = this.quality.startScale;
+    this.applySharp();
     setRoadDetail(this.quality.level === 'alto');
     root.appendChild(this.renderer.domElement);
     // GPU reiniciada (driver, aba em segundo plano no celular): pausa com aviso e refaz ao voltar
@@ -1418,6 +1420,14 @@ export class Game {
     this.resize();
   }
 
+  /** Resolução máxima: escala fixa em 1 e resolução dinâmica desligada; ao desligar, volta a medir. */
+  private applySharp(): void {
+    const byUrl = new URLSearchParams(location.search).has('q');
+    this.dynRes.enabled = !this.prefs.sharp && !byUrl;
+    if (this.prefs.sharp) this.dynRes.scale = 1;
+    else this.dynRes.scale = Math.min(this.dynRes.scale, this.quality.startScale);
+  }
+
   private resize(): void {
     const w = (this.width = Math.max(1, this.root.clientWidth));
     const h = (this.height = Math.max(1, this.root.clientHeight));
@@ -1429,11 +1439,12 @@ export class Game {
     const dpr = window.devicePixelRatio || 1;
     const lvl = this.quality.level;
     const floor = lvl === 'baixo' ? (this.touch && dpr >= 2 ? 0.75 : 0) : Math.min(dpr, 1) * (lvl === 'alto' ? 0.85 : this.touch ? 0.75 : 0.6);
-    const top = Math.min(dpr, this.quality.maxPixelRatio) * (this.onBattery ? ECO_RES : 1);
+    // resolução máxima (opção): a densidade da tela inteira (até 2x), inclusive nos menus
+    const top = (this.prefs.sharp ? Math.min(dpr, 2) : Math.min(dpr, this.quality.maxPixelRatio)) * (this.onBattery ? ECO_RES : 1);
     // o mínimo da escala é o piso efetivo: abaixo dele cada degrau não mudaria a imagem (e a queda
     // automática esperava a escala chegar a um piso que não fazia efeito)
     this.dynRes.setMin(Math.max(this.quality.minScale, Math.min(1, floor / top)));
-    const scale = this.phase === 'menu' ? Math.min(this.dynRes.scale, 0.75) : this.dynRes.scale;
+    const scale = this.phase === 'menu' && !this.prefs.sharp ? Math.min(this.dynRes.scale, 0.75) : this.dynRes.scale;
     const pr = Math.max(floor, top * scale);
     this.redraw = true;
     // só recria o buffer da tela quando o tamanho ou a densidade mudam de fato (cada setSize é um
@@ -1944,7 +1955,7 @@ export class Game {
     this.wallSoundCd -= dt;
     if (car.wallImpact > 4 && this.wallSoundCd <= 0) {
       sfxWall(clamp(car.wallImpact / 22, 0.3, 1));
-      this.wallSoundCd = 0.25;
+      this.wallSoundCd = 0.5;
     }
     if (car.landingImpact > 2) {
       this.bounceVel -= car.landingImpact * 0.12;
@@ -1958,7 +1969,7 @@ export class Game {
       if (c2.landingImpact > 4) sfxLand(clamp(c2.landingImpact / 16, 0.3, 1));
       if (c2.wallImpact > 4 && this.wallSoundCd <= 0) {
         sfxWall(clamp(c2.wallImpact / 22, 0.3, 1));
-        this.wallSoundCd = 0.25;
+        this.wallSoundCd = 0.5;
       }
       if (c2.landingImpact > 2) this.shake2 = Math.max(this.shake2, clamp(c2.landingImpact / 25, 0, 0.6));
       if (c2.wallImpact > 4) this.shake2 = Math.max(this.shake2, clamp(c2.wallImpact / 30, 0, 0.5));
@@ -1999,6 +2010,28 @@ export class Game {
     return clamp(side * 0.8 * Math.min(1, d / 12), -0.8, 0.8);
   }
 
+  /**
+   * Quanto a fonte está atrás da câmera: 0 na frente, 0,5 ao lado, 1 atrás (caixas traseiras no
+   * surround). Colado no carro fica na frente, como o próprio carro.
+   */
+  private rear(x: number, z: number): number {
+    if (this.p2 >= 0) return 0;
+    const fwd = this.panVec.set(0, 0, -1).applyQuaternion(this.rig.active.quaternion);
+    const c = this.player.car;
+    const dx = x - c.x;
+    const dz = z - c.z;
+    const d = Math.hypot(dx, dz);
+    const fl = Math.hypot(fwd.x, fwd.z);
+    if (d < 0.5 || fl < 1e-6) return 0;
+    const ahead = (dx * fwd.x + dz * fwd.z) / (d * fl);
+    return ((1 - ahead) / 2) * Math.min(1, d / 12);
+  }
+
+  /** Lado e frente/trás de um efeito (ver pan e rear). */
+  private at(x: number, z: number): Pan {
+    return { side: this.pan(x, z), rear: this.rear(x, z) };
+  }
+
   private onEvent(e: WorldEvent): void {
     const racers = this.world.racers;
     const me = this.playerId;
@@ -2011,22 +2044,22 @@ export class Game {
     const name = (id: number) => (id === me && this.p2 < 0 ? 'Você' : racers[id].name);
     switch (e.type) {
       case 'fire':
-        sfxFire(e.kind, this.vol(e.x, e.z), this.pan(e.x, e.z));
+        sfxFire(e.kind, this.vol(e.x, e.z), this.at(e.x, e.z));
         this.effects.muzzle(e.kind, e.x, e.y, e.z);
         break;
       case 'drop': {
         const c = racers[e.racer].car;
-        sfxDrop(this.vol(c.x, c.z), e.kind, this.pan(c.x, c.z));
+        sfxDrop(this.vol(c.x, c.z), e.kind, this.at(c.x, c.z));
         break;
       }
       case 'hit':
         if (e.kind === 'laser' || e.kind === 'sundog') {
           this.effects.zap(e.kind, e.x, e.y, e.z);
           this.effects.sparks(e.x, e.y, e.z, 8);
-          sfxHit(this.vol(e.x, e.z), this.pan(e.x, e.z));
+          sfxHit(this.vol(e.x, e.z), this.at(e.x, e.z));
         } else {
           this.effects.explosion(e.x, e.y - 0.8, e.z, false);
-          sfxExplosion(this.vol(e.x, e.z), false, this.pan(e.x, e.z));
+          sfxExplosion(this.vol(e.x, e.z), false, this.at(e.x, e.z));
         }
         if (local(e.target)) {
           this.shakeOf(e.target, e.kind === 'laser' ? 0.25 : 0.7);
@@ -2041,7 +2074,7 @@ export class Game {
         if (e.kind !== 'missile') this.effects.zap(e.kind, e.x, e.y, e.z);
         if (e.kind === 'missile') {
           this.effects.explosion(e.x, e.y - 0.8, e.z, false);
-          sfxExplosion(this.vol(e.x, e.z) * 0.7, false, this.pan(e.x, e.z));
+          sfxExplosion(this.vol(e.x, e.z) * 0.7, false, this.at(e.x, e.z));
         }
         break;
       case 'spin':
@@ -2050,12 +2083,12 @@ export class Game {
           sfxSkid(1);
         } else {
           const sc = racers[e.racer].car;
-          sfxSkid(this.vol(sc.x, sc.z) * 0.6, this.pan(sc.x, sc.z));
+          sfxSkid(this.vol(sc.x, sc.z) * 0.6, this.at(sc.x, sc.z));
         }
         break;
       case 'explode': {
         this.effects.explosion(e.x, e.y, e.z, true, racers[e.racer].color);
-        sfxExplosion(local(e.racer) ? 1 : this.vol(e.x, e.z), true, this.pan(e.x, e.z));
+        sfxExplosion(local(e.racer) ? 1 : this.vol(e.x, e.z), true, this.at(e.x, e.z));
         if (local(e.racer)) {
           this.shakeOf(e.racer, 1.2);
           this.hudOf(e.racer).message('DESTRUÍDO!', 2, 'warn');
@@ -2077,7 +2110,7 @@ export class Game {
         if (local(e.a) || local(e.b)) {
           const mine = local(e.a) ? e.a : e.b;
           const other = racers[mine === e.a ? e.b : e.a].car;
-          sfxBump(clamp(e.strength / 15, 0, 1), this.pan(other.x, other.z));
+          sfxBump(clamp(e.strength / 15, 0, 1), this.at(other.x, other.z));
           for (const id of [e.a, e.b]) if (local(id)) this.shakeOf(id, clamp(e.strength / 40, 0, 0.3));
         }
         break;
@@ -2115,12 +2148,12 @@ export class Game {
         const ac = racers[e.racer].car;
         if (e.kind === 'jump') this.effects.jumpJet(ac.x, ac.y, ac.z);
         else this.effects.nitroBurst(ac.x - Math.sin(ac.heading) * 2, ac.y, ac.z - Math.cos(ac.heading) * 2);
-        sfxAssist(e.kind, local(e.racer) ? 1 : this.vol(ac.x, ac.z) * 0.7, this.pan(ac.x, ac.z));
+        sfxAssist(e.kind, local(e.racer) ? 1 : this.vol(ac.x, ac.z) * 0.7, this.at(ac.x, ac.z));
         break;
       }
       case 'fall':
         this.effects.fall(e.x, THEMES[this.track.def.theme].groundLevel, e.z, THEMES[this.track.def.theme].groundStyle);
-        sfxFall(local(e.racer) ? 1 : this.vol(e.x, e.z) * 0.6, this.pan(e.x, e.z));
+        sfxFall(local(e.racer) ? 1 : this.vol(e.x, e.z) * 0.6, this.at(e.x, e.z));
         if (local(e.racer)) this.hudOf(e.racer).message('CAIU!', 1.2, 'warn');
         break;
       case 'respawn':
@@ -2429,6 +2462,9 @@ export class Game {
       battery: normalizeBatteryPref(this.prefs.battery),
       batteryNow: this.onBattery,
       batteryDetect: this.batteryKnown,
+      sharp: this.prefs.sharp,
+      channels: audioChannels(),
+      surroundMatrix: this.prefs.surroundMatrix,
     };
   }
 
@@ -2610,6 +2646,19 @@ export class Game {
         this.prefs.battery = mode;
         savePrefs(this.prefs);
         this.updateEco();
+        this.menus.showSettings(this.audioSettings());
+      },
+      setSurroundMatrix: (on: boolean) => {
+        this.prefs.surroundMatrix = on;
+        savePrefs(this.prefs);
+        setSurroundMatrix(on);
+        this.menus.showSettings(this.audioSettings());
+      },
+      setSharp: (on: boolean) => {
+        this.prefs.sharp = on;
+        savePrefs(this.prefs);
+        this.applySharp();
+        this.resize();
         this.menus.showSettings(this.audioSettings());
       },
       setQuality: (q: QualityPref) => {
@@ -4132,11 +4181,12 @@ export class Game {
         if (dist > 45) continue;
         const closing = -((o.car.vx - pc.vx) * dx + (o.car.vz - pc.vz) * dz) / Math.max(dist, 1);
         // objetos reaproveitados (o motor dos rivais não guarda a lista)
-        const e = this.nearPool[near.length] ?? (this.nearPool[near.length] = { speedRatio: 0, throttle: 0, dist: 0, pan: 0, closing: 0 });
+        const e = this.nearPool[near.length] ?? (this.nearPool[near.length] = { speedRatio: 0, throttle: 0, dist: 0, pan: 0, rear: 0, closing: 0 });
         e.speedRatio = Math.abs(forwardSpeed(o.car)) / o.spec.maxSpeed;
         e.throttle = o.lastInput.throttle;
         e.dist = dist;
         e.pan = this.pan(o.car.x, o.car.z);
+        e.rear = this.rear(o.car.x, o.car.z);
         e.closing = closing;
         near.push(e);
       }

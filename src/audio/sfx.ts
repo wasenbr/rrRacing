@@ -1,4 +1,4 @@
-import { audio, duck, type AudioOut } from './context';
+import { audio, duck, SpatialPan, type AudioOut, type Pan } from './context';
 import { playBuffer, sfxBuffer, type SfxName } from './samples';
 
 /**
@@ -22,15 +22,17 @@ function noise(ctx: BaseAudioContext): AudioBuffer {
 const vary = (k = 0.06) => 1 + (Math.random() * 2 - 1) * k;
 
 /**
- * Saída de um efeito: ganho → passa-baixa de distância → pan estéreo → barramento de efeitos.
+ * Saída de um efeito: ganho → passa-baixa de distância → pan (estéreo; em surround divide entre as
+ * caixas da frente e as traseiras) → barramento de efeitos.
  * `near` (0..1, o volume já atenuado pela distância) fecha o passa-baixa de 18 kHz (colado no
  * jogador) até 1,5 kHz (longe): sons distantes ficam abafados, como no ar de verdade.
  */
-function voice(a: AudioOut, vol: number, pan: number, near = 1, thin = 0): GainNode {
+function voice(a: AudioOut, vol: number, pan: Pan, near = 1, thin = 0): GainNode {
   const g = a.ctx.createGain();
   g.gain.value = vol;
-  const p = a.ctx.createStereoPanner();
-  p.pan.value = Math.max(-1, Math.min(1, pan));
+  const side = typeof pan === 'number' ? pan : pan.side;
+  const sp = new SpatialPan(a.ctx, a.out, a.rearOut, side, typeof pan === 'number' ? 0 : pan.rear);
+  const p = sp.input;
   const n = Math.max(0, Math.min(1, near));
   // `thin` (dB, negativo): prateleira abaixo de 140 Hz. Nas batidas o sub-grave das amostras comia a
   // folga do limitador e o estalo (o que se ouve no celular) ficava baixo (rodada 11)
@@ -51,7 +53,6 @@ function voice(a: AudioOut, vol: number, pan: number, near = 1, thin = 0): GainN
     g.connect(lp);
     lp.connect(head);
   } else g.connect(head);
-  p.connect(a.out);
   return g;
 }
 
@@ -208,7 +209,7 @@ function sample(a: AudioOut, out: AudioNode, name: SfxName | SfxName[], o: Sampl
  * Rodada 11: sem o soco sub-grave (150→50 Hz) e com a descarga uma oitava acima: em 0,6x a amostra
  * e o soco viravam um rosnado grave que sumia em alto-falante pequeno.
  */
-export function sfxLaser(vol = 1, pan = 0): void {
+export function sfxLaser(vol = 1, pan: Pan = 0): void {
   const a = audio();
   if (!a || vol < 0.02) return;
   const { ctx } = a;
@@ -302,7 +303,7 @@ export function prepareSfx(): void {
 }
 
 /** Rogue Missile: estouro do lançamento + foguete rasgando o ar. */
-export function sfxMissile(vol = 1, pan = 0): void {
+export function sfxMissile(vol = 1, pan: Pan = 0): void {
   const a = audio();
   if (!a || vol < 0.02) return;
   const { ctx } = a;
@@ -338,7 +339,7 @@ function missileSynth(ctx: BaseAudioContext, out: AudioNode, t: number, p = 1): 
 }
 
 /** Sundog Beam: esfera de energia teleguiada (zumbido pulsante subindo). */
-export function sfxSundog(vol = 1, pan = 0): void {
+export function sfxSundog(vol = 1, pan: Pan = 0): void {
   const a = audio();
   if (!a || vol < 0.02) return;
   const { ctx } = a;
@@ -363,13 +364,13 @@ function sundogSynth(ctx: BaseAudioContext, out: AudioNode, t: number, p = 1): v
 }
 
 /** Disparo frontal conforme a arma do carro. */
-export function sfxFire(kind: string, vol = 1, pan = 0): void {
+export function sfxFire(kind: string, vol = 1, pan: Pan = 0): void {
   if (kind === 'missile') sfxMissile(vol, pan);
   else if (kind === 'sundog') sfxSundog(vol, pan);
   else sfxLaser(vol, pan);
 }
 
-export function sfxExplosion(vol = 1, big = true, pan = 0): void {
+export function sfxExplosion(vol = 1, big = true, pan: Pan = 0): void {
   const a = audio();
   if (!a || vol < 0.02) return;
   const { ctx } = a;
@@ -453,7 +454,7 @@ const explosionSmallSynth: Synth = (c, o, t, p = 1) => explosionSynth(c, o, t, p
 const explosionSmallAlone: Synth = (c, o, t, p = 1) => explosionSynth(c, o, t, p, false, false);
 
 /** Tiro acertando o carro: pancada metálica pesada. */
-export function sfxHit(vol = 1, pan = 0): void {
+export function sfxHit(vol = 1, pan: Pan = 0): void {
   const a = audio();
   if (!a || vol < 0.02) return;
   const { ctx } = a;
@@ -480,7 +481,7 @@ function hitSynth(ctx: BaseAudioContext, out: AudioNode, t: number, p = 1): void
 }
 
 /** Arma traseira: mina (Bear Claw), leque de minas (KO Scatterpack) ou óleo (BF's Slipsauce). */
-export function sfxDrop(vol = 1, kind: string = 'mine', pan = 0): void {
+export function sfxDrop(vol = 1, kind: string = 'mine', pan: Pan = 0): void {
   const a = audio();
   if (!a || vol < 0.02) return;
   const { ctx } = a;
@@ -520,7 +521,7 @@ export function sfxDrop(vol = 1, kind: string = 'mine', pan = 0): void {
 }
 
 /** Assistência: Lightning Nitros (jato de turbina) ou Locust Jump Jets (propulsores para cima). */
-export function sfxAssist(kind: string, vol = 1, pan = 0): void {
+export function sfxAssist(kind: string, vol = 1, pan: Pan = 0): void {
   const a = audio();
   if (!a || vol < 0.02) return;
   const { ctx } = a;
@@ -554,7 +555,7 @@ export function sfxAssist(kind: string, vol = 1, pan = 0): void {
 /* Pista                                                                */
 /* ------------------------------------------------------------------ */
 
-export function sfxPickup(kind: 'money' | 'armor', vol = 1, pan = 0): void {
+export function sfxPickup(kind: 'money' | 'armor', vol = 1, pan: Pan = 0): void {
   const a = audio();
   if (!a) return;
   const { ctx } = a;
@@ -588,7 +589,7 @@ export function sfxPickup(kind: 'money' | 'armor', vol = 1, pan = 0): void {
 }
 
 /** Batida carro com carro: lataria amassando. */
-export function sfxBump(vol = 1, pan = 0): void {
+export function sfxBump(vol = 1, pan: Pan = 0): void {
   const a = audio();
   if (!a || vol < 0.05) return;
   const { ctx } = a;
@@ -610,29 +611,30 @@ export function sfxBump(vol = 1, pan = 0): void {
   subThump(ctx, low, 0.3, ctx.currentTime, 58);
 }
 
-/** Batida na mureta (raspão metálico). */
-export function sfxWall(vol = 1, pan = 0): void {
+/**
+ * Batida na mureta: baque seco e curto de lataria, sem o raspão de chiado sustentado nem a
+ * distorção de antes (achado "muito chato" pelo usuário: repetia a cada roçada, alto e agressivo).
+ * Batida fraca é só um toque; só a forte ganha o estalo metálico e abaixa a música.
+ */
+export function sfxWall(vol = 1, pan: Pan = 0): void {
   const a = audio();
   if (!a || vol < 0.05) return;
   const { ctx } = a;
-  const out = voice(a, vol * 5, pan, 1, -9);
-  const p = vary(0.15);
-  punch(vol, 0.55, 0.4);
-  const has = sample(a, out, 'mureta', { vol: 1, rate: 0.95 * p });
+  const out = voice(a, vol * 2.2, pan, 1, -9);
+  const p = vary(0.12);
+  if (vol > 0.6) punch(vol, 0.3, 0.3);
   const low = grave(ctx, out);
-  sample(a, out, 'batida_soco', { vol: 0.6, rate: 1.1 * p }); // estalo seco do contato
-  sample(a, low, 'batida_grave', { vol: 0.3, rate: 0.8 * p });
-  sample(a, out, ['impacto_metal_a', 'impacto_metal_b'], { vol: 0.7, rate: 1.1 * p });
-  crack(ctx, out, 2.8, 1.1 * p);
-  clank(ctx, out, 0.65, 1.1 * p);
-  // raspão de chapa 1–4 kHz sustentado (~0,25 s; rodada 12: +5,5 dB acima de 200 Hz, meta 6)
-  noiseSrc(ctx, filter(ctx, 'bandpass', 1900 * p, 0.7, env(ctx, dirt(ctx, out, 2), has ? 0.9 : 1.2, 0.002, 0.26)), 0.3);
-  osc(ctx, 'sine', 90 * p, 40, 0.15, env(ctx, low, 0.3, 0.002, 0.15));
-  if (!has) metalRing(ctx, out, 310 * p, 0.3, 0.25);
+  const has = sample(a, low, 'batida_soco', { vol: 0.7, rate: 0.9 * p });
+  sample(a, low, 'batida_grave', { vol: 0.25, rate: 0.85 * p });
+  if (vol > 0.6) sample(a, out, ['impacto_metal_a', 'impacto_metal_b'], { vol: 0.35 * vol, rate: 1.05 * p });
+  // encosto rápido de chapa (~0,08 s), abafado
+  noiseSrc(ctx, filter(ctx, 'lowpass', 1600 * p, 0.7, env(ctx, out, has ? 0.35 : 0.7, 0.002, 0.08)), 0.1);
+  osc(ctx, 'sine', 95 * p, 45, 0.12, env(ctx, low, 0.35, 0.002, 0.12));
+  if (!has) metalRing(ctx, out, 260 * p, 0.12, 0.12);
 }
 
 /** Pouso de um salto: baque surdo da suspensão. */
-export function sfxLand(vol = 1, pan = 0): void {
+export function sfxLand(vol = 1, pan: Pan = 0): void {
   const a = audio();
   if (!a || vol < 0.05) return;
   const { ctx } = a;
@@ -649,7 +651,7 @@ export function sfxLand(vol = 1, pan = 0): void {
 }
 
 /** Carro caindo da pista: assobio descendo e baque distante. */
-export function sfxFall(vol = 1, pan = 0): void {
+export function sfxFall(vol = 1, pan: Pan = 0): void {
   const a = audio();
   if (!a || vol < 0.05) return;
   const { ctx } = a;
@@ -668,7 +670,7 @@ export function sfxFall(vol = 1, pan = 0): void {
  * chiado ~2,6 kHz) com tremor rápido (a borracha "pulando" no asfalto), um tom de pneu cantando
  * que cai de afinação, o "splash" do óleo no começo e um baque grave do carro girando.
  */
-export function sfxSkid(vol = 1, pan = 0): void {
+export function sfxSkid(vol = 1, pan: Pan = 0): void {
   const a = audio();
   if (!a || vol < 0.05) return;
   const { ctx } = a;
@@ -754,6 +756,20 @@ function amp(ctx: BaseAudioContext, out: AudioNode, drive = 8): WaveShaperNode {
 }
 
 /**
+ * Menu: "blip" curto ao mover o cursor com o controle, como no jogo original do SNES. Não passa
+ * pelo abafamento de distância nem abaixa a música.
+ */
+export function sfxMenuMove(): void {
+  const a = audio();
+  if (!a) return;
+  const { ctx } = a;
+  const out = voice(a, 0.5, 0);
+  const t = ctx.currentTime;
+  osc(ctx, 'square', 1320, 1320, 0.05, filter(ctx, 'lowpass', 4000, 0.7, env(ctx, out, 0.5, 0.002, 0.045, t)), t);
+  osc(ctx, 'square', 1980, 1980, 0.03, filter(ctx, 'lowpass', 4000, 0.7, env(ctx, out, 0.2, 0.002, 0.025, t)), t);
+}
+
+/**
  * Bipe da contagem (3-2-1) e largada ("VAI!"): sirene de largada suja, com "clunk" do semáforo
  * acendendo; no VAI, acorde distorcido mais longo com pancada grave e prato.
  */
@@ -809,7 +825,7 @@ export function sfxLap(final: boolean): void {
 }
 
 /** Queimando na lava: fogo rugindo (ruído grave-médio pulsando) com estalos de brasa. */
-export function sfxBurn(vol = 1, pan = 0): void {
+export function sfxBurn(vol = 1, pan: Pan = 0): void {
   const a = audio();
   if (!a || vol < 0.05) return;
   const { ctx } = a;
