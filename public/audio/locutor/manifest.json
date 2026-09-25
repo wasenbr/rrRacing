@@ -43,7 +43,12 @@
       "finishThird_1.mp3"
     ],
     "hammered": [
-      "hammered_0.mp3"
+      "hammered_0.mp3",
+      "hammered_1.mp3",
+      "hammered_2.mp3",
+      "hammered_3.mp3",
+      "hammered_4.mp3",
+      "hammered_5.mp3"
     ],
     "holyToledo": [
       "holyToledo_0.mp3",
@@ -66,7 +71,10 @@
       "launches_0.mp3"
     ],
     "lightsUp": [
-      "lightsUp_0.mp3"
+      "lightsUp_0.mp3",
+      "lightsUp_1.mp3",
+      "lightsUp_2.mp3",
+      "lightsUp_3.mp3"
     ],
     "lost": [
       "lost_0.mp3",

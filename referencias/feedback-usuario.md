@@ -135,3 +135,4 @@ Cada item precisa ser atendido e verificado pelos avaliadores.
 61. Destacar o número da corrida atual / total (ex.: 2/5) na garagem.
 62. Como no original: ao cruzar a chegada, o carro para e escurece (fica fora da disputa).
 63. Link com sala inexistente (ou código inválido): mostrar o erro, pedir o código correto da sala e oferecer voltar ao menu inicial.
+64. Narrador gritado de arena (rodada 12) aprovado de ouvido pelo usuário: manter essa voz; takes de lightsUp e hammered incluídos a pedido.
