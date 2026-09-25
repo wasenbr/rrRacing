@@ -182,3 +182,6 @@ Cada item precisa ser atendido e verificado pelos avaliadores.
 73. O PC manda só estéreo para a TV Samsung (o sistema Dolby fica ligado à TV): opção "Dolby
     Surround" codifica o que vem de trás em matriz no estéreo, para o Pro Logic II do aparelho
     mandar às caixas traseiras.
+74. Surround confirmado de ouvido (2026-09-25) no soundbar LG ligado ao PC pelo HDMI, com o Windows
+    em 7.1: frente, traseiras e lados certos. A matriz Dolby Surround em estéreo não funcionou nesse
+    soundbar (sem Pro Logic II); fica como opção para receivers que decodificam.
