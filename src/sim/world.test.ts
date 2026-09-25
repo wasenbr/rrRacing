@@ -117,6 +117,27 @@ describe('mundo da corrida', () => {
     expect(shooter.armor).toBe(shooter.spec.armor);
   });
 
+  it('cooperativa: tiro, mina e óleo do parceiro não pegam; os do rival pegam', () => {
+    const hitBy = (team: number | undefined) => {
+      const entries: RacerEntry[] = [
+        { name: 'Alvo', color: 0, spec: VEHICLES.marauder, ai: null, team: 1 },
+        { name: 'Atirador', color: 0, spec: VEHICLES.havac, ai: null, team },
+      ];
+      const world = createWorld(track, entries, 4, 1);
+      const [target] = world.racers;
+      const fx = Math.sin(target.car.heading), fz = Math.cos(target.car.heading);
+      world.projectiles.push({ id: 90, kind: 'laser', owner: 1, x: target.car.x - fx * 1, y: target.car.y + 0.7, z: target.car.z - fz * 1, heading: target.car.heading, speed: 1, life: 2, pieceIndex: target.car.pieceIndex });
+      world.hazards.push({ id: 98, kind: 'oil', owner: 1, x: target.car.x, y: target.car.y, z: target.car.z, age: 5 });
+      target.car.vx = fx * 20;
+      target.car.vz = fz * 20;
+      world.started = true;
+      stepWorld(world, {}, DT);
+      return { armor: target.armor < target.spec.armor, spin: target.spinTime > 0 };
+    };
+    expect(hitBy(1)).toEqual({ armor: false, spin: false });
+    expect(hitBy(undefined)).toEqual({ armor: true, spin: true });
+  });
+
   it('elástico da CPU ignora o humano que já terminou', () => {
     const reta = new Track({ id: 'reta', name: 'reta', planet: 'x', theme: 'chem6', laps: 1, layout: 'F ' + 'S '.repeat(20) + 'R S S S R ' + 'S '.repeat(20) + 'R S S S R' });
     const throttleWith = (humanFinished: boolean) => {

@@ -189,10 +189,24 @@ export interface CampaignState {
   raceInProgress?: boolean;
   /** pintura especial comprada no último planeta (CHAMPION_PAINT) */
   paint?: 'champion';
+  /** campanha cooperativa (2 jogadores em tela dividida): o jogador 2 */
+  coop?: CoopPlayer;
 }
 
-export function newCampaign(characterId: string, color: number, difficulty: Difficulty = 'normal'): CampaignState {
-  return {
+/**
+ * Jogador 2 da campanha cooperativa: piloto, carro e dinheiro próprios (cada um gasta o seu na loja).
+ * Planeta, divisão, pontos e estatísticas são da dupla (ficam no estado principal).
+ */
+export interface CoopPlayer {
+  characterId: string;
+  color: number;
+  money: number;
+  car: CarSetup;
+  paint?: 'champion';
+}
+
+export function newCampaign(characterId: string, color: number, difficulty: Difficulty = 'normal', coop?: { characterId: string; color: number }): CampaignState {
+  const s: CampaignState = {
     version: 1,
     id: Math.random().toString(36).slice(2, 10),
     characterId,
@@ -207,6 +221,27 @@ export function newCampaign(characterId: string, color: number, difficulty: Diff
     stats: { races: 0, wins: 0, kills: 0, earnings: 0 },
     difficulty,
   };
+  if (coop) s.coop = { characterId: coop.characterId, color: coop.color, money: START_MONEY, car: newCarSetup('dirtdevil') };
+  return s;
+}
+
+/**
+ * A campanha vista por um jogador (0 = jogador 1, 1 = jogador 2 da cooperativa): o piloto, o carro e o
+ * dinheiro são os dele. É uma cópia rasa: o carro é o mesmo objeto, mas dinheiro, cor e pintura se
+ * gravam no dono (ver coopOwner).
+ */
+export function coopView(s: CampaignState, player: number): CampaignState {
+  const p = player === 1 ? s.coop : undefined;
+  if (!p) return s;
+  const v: CampaignState = { ...s, characterId: p.characterId, color: p.color, money: p.money, car: p.car };
+  if (p.paint) v.paint = p.paint;
+  else delete v.paint;
+  return v;
+}
+
+/** Onde ficam o dinheiro, o carro, a cor e a pintura de um jogador (o estado ou o jogador 2). */
+export function coopOwner(s: CampaignState, player: number): CampaignState | CoopPlayer {
+  return player === 1 && s.coop ? s.coop : s;
 }
 
 export function difficultyOf(s: CampaignState): Difficulty {
@@ -566,8 +601,12 @@ export interface RaceReport {
   playoffLeft: number;
 }
 
-/** Aplica o resultado de uma corrida à campanha (muta o estado). `moneyEarned`: prêmio + pista. */
-export function applyRaceResult(s: CampaignState, place: number, moneyEarned: number, kills: number): RaceReport {
+/**
+ * Aplica o resultado de uma corrida à campanha (muta o estado). `moneyEarned`: prêmio + pista.
+ * Cooperativa: `place` é a melhor colocação da dupla (vale para os pontos e o duelo), `kills` os
+ * abates dos dois e `coopMoney` o prêmio + pista do jogador 2; o bônus do chefe vai para os dois.
+ */
+export function applyRaceResult(s: CampaignState, place: number, moneyEarned: number, kills: number, coopMoney = 0): RaceReport {
   const kind = raceKind(s);
   const won = place === 1;
   // duelo contra o chefe: só a vitória pontua; a repescagem não soma pontos (decide sozinha)
@@ -579,6 +618,10 @@ export function applyRaceResult(s: CampaignState, place: number, moneyEarned: nu
   s.stats.races++;
   s.stats.kills += kills;
   s.stats.earnings += earned;
+  if (s.coop) {
+    s.coop.money += coopMoney + bonus;
+    s.stats.earnings += coopMoney + bonus;
+  }
   if (won) s.stats.wins++;
   const report = (outcome: RaceOutcome): RaceReport => ({ outcome, kind, pointsEarned, moneyEarned: earned, bonus, playoffLeft: s.playoff ?? 0 });
 
@@ -760,10 +803,7 @@ export function validSave(s: CampaignState): boolean {
   if (!isInt(s.race, 0, 14) || typeof s.points !== 'number' || !Number.isFinite(s.points)) return false;
   if (s.difficulty !== undefined && !(s.difficulty in DIFFICULTY)) return false;
   if (s.playoff !== undefined && !isInt(s.playoff, 1, 9)) return false;
-  const car = s.car;
-  if (!car || typeof car !== 'object' || !VEHICLES[car.vehicleId] || !car.upgrades || !car.charges) return false;
-  if (!UPGRADE_KINDS.every((k) => isInt(car.upgrades[k], 0, MAX_UPGRADE))) return false;
-  if (!CHARGE_KINDS.every((k) => isInt(car.charges[k], 0, MAX_CHARGES))) return false;
+  if (!validCar(s.car)) return false;
   if (typeof s.champion !== 'boolean') return false;
   // campeão só na Divisão A do último planeta da dificuldade (saves antigos além do fim: fitRules ajusta)
   if (s.champion && (s.division !== 1 || s.planet < CAMPAIGN_RULES[s.difficulty ?? 'normal'].planets - 1)) return false;
@@ -772,9 +812,21 @@ export function validSave(s: CampaignState): boolean {
   if (s.raceInProgress !== undefined && typeof s.raceInProgress !== 'boolean') return false;
   if (s.paint !== undefined && s.paint !== 'champion') return false;
   if (s.id !== undefined && (typeof s.id !== 'string' || s.id.length > 32)) return false;
+  if (s.coop !== undefined && !validCoop(s.coop)) return false;
   // estatísticas faltando (save antigo) não invalidam: decodeSave completa com zeros
   const st = s.stats;
   return st === undefined || (!!st && typeof st === 'object' && ['races', 'wins', 'kills', 'earnings'].every((k) => Number.isFinite((st as Record<string, unknown>)[k])));
+}
+
+function validCar(car: CarSetup): boolean {
+  if (!car || typeof car !== 'object' || !VEHICLES[car.vehicleId] || !car.upgrades || !car.charges) return false;
+  return UPGRADE_KINDS.every((k) => isInt(car.upgrades[k], 0, MAX_UPGRADE)) && CHARGE_KINDS.every((k) => isInt(car.charges[k], 0, MAX_CHARGES));
+}
+
+function validCoop(p: CoopPlayer): boolean {
+  if (!p || typeof p !== 'object' || !CHARACTERS.some((c) => c.id === p.characterId)) return false;
+  if (!isInt(p.color, 0, 0xffffff) || typeof p.money !== 'number' || !Number.isFinite(p.money) || p.money < 0) return false;
+  return validCar(p.car) && (p.paint === undefined || p.paint === 'champion');
 }
 
 /**

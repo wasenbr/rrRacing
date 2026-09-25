@@ -98,7 +98,8 @@ export function listSlots(): SlotInfo[] {
       slot,
       empty: false,
       savedAt: s.savedAt,
-      pilot: CHARACTERS.find((c) => c.id === st.characterId)?.name ?? st.characterId,
+      // cooperativa: os dois pilotos
+      pilot: [st.characterId, ...(st.coop ? [st.coop.characterId] : [])].map((id) => CHARACTERS.find((c) => c.id === id)?.name ?? id).join(' & '),
       characterId: st.characterId,
       planet: PLANETS[st.planet]?.name ?? '?',
       division: DIVISIONS[st.division] ?? '?',

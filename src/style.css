@@ -935,6 +935,15 @@ h3 {
 .hub-me .upg-list { margin: 0; display: grid; grid-template-columns: 1fr 1fr; column-gap: 12px; }
 .hub-me .upg-list li { font-size: 13px; padding: 2px 0; }
 .hub-me .small-note { margin: 4px 0 0; }
+/* cooperativa: um painel por jogador (4 colunas; 2×2 e 1 coluna nas telas menores) */
+.hub.coop .hub-main { grid-template-columns: 1.1fr 1fr 1fr 1fr; }
+.hub.coop .hub-car .car-img { width: 96px; }
+.hub.coop .hub-me .upg-list { grid-template-columns: 1fr; }
+.hub-money.coop span { display: flex; align-items: baseline; gap: 6px; }
+.hub-money.coop em { font-style: normal; font-size: 11px; letter-spacing: 1px; color: var(--muted); }
+.hub-money.coop b { font-size: 18px; }
+.coop-tabs { margin-bottom: 6px; }
+.hub.coop .hub-actions .row-buttons { flex-wrap: wrap; }
 .hub-actions { display: grid; grid-template-columns: 1.15fr 2fr; grid-template-areas: "go btns" "go cam"; gap: 6px 10px; margin-top: 10px; align-items: center; }
 .hub-actions .go { grid-area: go; margin: 0; height: 100%; min-height: 56px; font-size: 26px; }
 .hub-actions .row-buttons { grid-area: btns; margin: 0; }
@@ -943,6 +952,10 @@ h3 {
 .hub-cam small { font-size: 11px; letter-spacing: 2px; color: var(--muted); }
 .hub-cam .cams { flex: 1; flex-wrap: nowrap; }
 .hub-cam .cam { flex: 1; padding: 5px 6px; font-size: 13px; }
+@media (max-width: 1100px) {
+  .hub.coop .hub-main { grid-template-columns: 1fr 1fr; }
+  .hub.coop .hub-track { grid-row: auto; }
+}
 @media (max-width: 900px) {
   .hub-main { grid-template-columns: 1fr 1fr; }
   .hub-track { grid-row: span 2; }
@@ -952,7 +965,7 @@ h3 {
   .hub-top .race-badge { grid-column: 1 / -1; grid-row: 1; flex-direction: row; gap: 12px; min-width: 0; }
   .race-badge .race-dots { margin-top: 0; }
   .hub-progress { grid-template-columns: 1fr; gap: 4px; }
-  .hub-main { grid-template-columns: 1fr; }
+  .hub-main, .hub.coop .hub-main { grid-template-columns: 1fr; }
   .hub-track { grid-row: auto; }
   .hub-actions { grid-template-columns: 1fr; grid-template-areas: "go" "btns" "cam"; }
 }
@@ -984,6 +997,7 @@ h3 {
   .hub-progress .pr-step.now .planet-img { width: 30px; }
   .hub-progress .pr-step small { display: none; }
   .hub-main { grid-template-columns: 1.1fr 1fr 1fr; gap: 8px; margin-top: 4px; }
+  .hub.coop .hub-main { grid-template-columns: 1.1fr 1fr 1fr 1fr; }
   .hub-track { grid-row: auto; }
   .hub-track .trk-img { max-height: 92px; margin-bottom: 2px; }
   .hub-track .trk-name { margin: 2px 0; font-size: 13px; }
@@ -1386,3 +1400,26 @@ h3 {
 .pad-setup-card .pad-name { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
 .pad-setup-card .pad-action { font-size: 24px; color: #ffd23a; letter-spacing: 1px; }
 .pad-setup-card .row-buttons { display: flex; gap: 8px; width: 100%; margin-top: 8px; }
+
+/* ---------------- tela dividida (2 jogadores) ---------------- */
+.split-help { margin: 2px 0 8px; opacity: 0.85; font-size: 14px; }
+.split-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.split-col { padding: 8px 10px 10px; border-radius: 8px; background: rgba(255, 255, 255, 0.04); border: 2px solid rgba(255, 255, 255, 0.1); min-width: 0; }
+.split-col.p1 { border-color: rgba(47, 123, 255, 0.55); }
+.split-col.p2 { border-color: rgba(224, 40, 40, 0.55); }
+.split-col h3 { margin-top: 0; }
+.split-pad { display: flex; align-items: center; gap: 8px; margin: 4px 0 8px; font-weight: 700; color: #7aff6a; }
+.split-pad svg { width: 26px; height: 26px; flex: none; }
+.split-pad.missing { color: #ffb24a; animation: split-blink 1.2s ease-in-out infinite; }
+@keyframes split-blink { 50% { opacity: 0.5; } }
+.split-cars.cars { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 6px; margin-bottom: 8px; }
+.split-cars .car { padding: 4px; }
+.split-cars .car .car-img { width: 100%; height: auto; }
+.split-cars .car b { display: block; font-size: 12px; }
+.split-col .colors { gap: 8px; }
+.split-col .color { width: 32px; height: 32px; }
+.split-swap { margin-top: 10px; }
+.split-msg { min-height: 1.2em; color: #ffb24a; font-weight: 700; }
+@media (max-width: 700px) {
+  .split-cols { grid-template-columns: 1fr; }
+}

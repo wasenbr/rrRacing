@@ -20,7 +20,7 @@ import { DIFFICULTIES, DIFFICULTY_LABEL, type Difficulty } from '../sim/world';
 import type { SlotInfo } from '../core/storage';
 import { formatTime } from './hud';
 import { isTouchDevice, setTiltSteering, tiltSteeringEnabled, tiltSupported } from '../input/controls';
-import { clearCustomMap, connectedPads, openPadSetup } from '../input/gamepad';
+import { clearCustomMap, connectedPads, openPadSetup, padLabel, splitAssignment } from '../input/gamepad';
 import { startPadNav } from '../input/padnav';
 import { portraitSvg, warmPortraits } from './portraits';
 import { trackOutlineUrl, trackThumbnail } from './trackThumb';
@@ -88,11 +88,29 @@ export interface QuickOptions {
   difficulty: Difficulty;
 }
 
+/** Um jogador da tela dividida. */
+export interface SplitPlayer {
+  vehicleId: string;
+  color: number;
+  characterId: string;
+}
+
+/** Corrida em tela dividida: dois jogadores no mesmo aparelho, um controle cada. */
+export interface SplitOptions {
+  trackId: string;
+  difficulty: Difficulty;
+  players: [SplitPlayer, SplitPlayer];
+  /** inverte os controles (o 2º controle vira o do jogador 1) */
+  swap: boolean;
+}
+
 export interface NewCampaignOptions {
   characterId: string;
   color: number;
   difficulty: Difficulty;
   slot: number;
+  /** campanha cooperativa: o jogador 2 (tela dividida) */
+  coop?: { characterId: string; color: number };
 }
 
 export interface OnlineOptions {
@@ -115,6 +133,7 @@ export interface LobbyView {
 
 export interface MenuActions {
   quickRace(o: QuickOptions): void;
+  splitRace(o: SplitOptions): void;
   /** Escolha da corrida rápida mudou: monta o grid na fila ociosa, antes do clique em CORRER. */
   prewarmQuick?(o: QuickOptions): void;
   newCampaign(o: NewCampaignOptions): void;
@@ -128,7 +147,8 @@ export interface MenuActions {
   /** apaga o slot; devolve se ainda há campanha para CONTINUAR */
   deleteSlot(slot: number): boolean;
   campaignRace(): void;
-  openShop(): void;
+  /** `player`: loja de qual jogador (cooperativa: 1 = jogador 2) */
+  openShop(player?: number): void;
   buyCar(id: string): void;
   buyUpgrade(kind: UpgradeKind): void;
   buyCharge(kind: ChargeKind): void;
@@ -227,6 +247,7 @@ function pingBadge(ms: number | null | undefined): string {
 }
 
 export interface HubData {
+  /** a campanha vista pelo jogador da tela (cooperativa: piloto, carro e dinheiro dele) */
   state: CampaignState;
   planet: PlanetDef;
   track: Track;
@@ -234,6 +255,8 @@ export interface HubData {
   spec: VehicleSpec;
   character: Character;
   vehicles: Record<string, VehicleSpec>;
+  /** campanha cooperativa: jogador da tela (0/1) e o jogador 2 visto por ele mesmo */
+  coop?: { player: number; state: CampaignState; spec: VehicleSpec; character: Character; padReady: boolean };
 }
 
 export interface CampaignReport {
@@ -533,7 +556,21 @@ export class Menus {
   private fsButton: HTMLButtonElement;
   private camera: CameraMode = 'iso';
   private quick: QuickOptions = { trackId: 'chem6-1', characterId: CHARACTERS[1].id, vehicleId: 'marauder', color: COLORS[0], difficulty: 'normal' };
+  private split: SplitOptions = {
+    trackId: 'chem6-1',
+    difficulty: 'normal',
+    players: [
+      { vehicleId: 'marauder', color: COLORS[0], characterId: CHARACTERS[1].id },
+      { vehicleId: 'dirtdevil', color: COLORS[1], characterId: CHARACTERS[2]?.id ?? CHARACTERS[0].id },
+    ],
+    swap: false,
+  };
+  /** atualiza o quadro dos controles enquanto a tela dividida está aberta */
+  private splitTimer = 0;
   private newChar: NewCampaignOptions = { characterId: CHARACTERS[0].id, color: COLORS[0], difficulty: 'normal', slot: 0 };
+  /** nova campanha: cooperativa ligada e o jogador 2 */
+  private newCoopOn = false;
+  private newCoop = { characterId: CHARACTERS[2]?.id ?? CHARACTERS[0].id, color: COLORS[1] };
   private shopTab: 'cars' | 'upgrades' | 'weapons' = 'upgrades';
   /** planeta aberto na corrida rápida (abas) */
   private quickPlanet = '';
@@ -696,6 +733,7 @@ export class Menus {
           ${hasSave ? `<button class="go" data-act="continue">CONTINUAR</button>` : ''}
           <button class="${hasSave ? (quickWide ? 'wide' : '') : 'go'}" data-act="new">Nova campanha</button>
           <button data-act="quick"${hasSave ? '' : quickWide}>Corrida rápida</button>
+          <button data-act="split">${icon('gamepad')} 2 jogadores (tela dividida)</button>
           <button data-act="online">${icon('globe')} Online com amigos</button>
           <button data-act="load">${icon('folder')} Carregar jogo</button>
           <button data-act="settings">${icon('gear')} Som e opções</button>
@@ -741,7 +779,7 @@ export class Menus {
       <summary>Controles</summary>
       <p><b>Teclado:</b> ↑/W acelera · ↓/S freia/ré · ←→/A D vira · Q/E derrapar (freio de mão) · Ctrl esq./Espaço atira · \ ou X arma traseira · Shift assistência (nitro/pulo) · C câmera · Esc pausa · M som</p>
       <p><b>Controle Xbox:</b> RT ou A acelera · LT freia · analógico ou direcional vira · LB derrapar · X ou RB atira · B arma traseira · L3/R3 assistência · Y câmera · Start pausa.</p>
-      <p><b>Controle PlayStation:</b> R2 acelera · L2 freia · analógico ou direcional vira · L1 derrapar · ✕ atira · □ assistência (turbo/pulo) · ○ arma traseira · R1 câmera · Options pausa. Nos menus: direcional escolhe, A/✕ confirma, B/○ volta. Controle USB genérico: configure os botões em “Som e opções”.</p>
+      <p><b>Controle PlayStation:</b> R2 acelera · L2 freia · analógico ou direcional vira · L1 derrapar · ✕ atira · △ assistência (turbo/pulo) · ○ arma traseira · □ câmera · Options pausa. Nos menus: direcional escolhe, A/✕ confirma, B/○ volta. Controle USB genérico: configure os botões em “Som e opções”.</p>
       <p><b>Celular:</b> polegar esquerdo no volante: toque à esquerda ou à direita da faixa para virar, como as setas do teclado (arrastando para cima, atira sem soltar a direção) e tem TIRO, a arma traseira (mina/óleo) e a assistência (nitro/pulo) logo acima, cada botão com o ícone da arma atual; polegar direito acelera, freia e tem o botão DERRAPAR (deslizando do ACEL até o TIRO logo acima, atira sem soltar o gás). Em “Som e opções”: aceleração automática (o polegar direito ganha um TIRO) e direção por inclinação.</p>
       <p>Armas e nitro recarregam a cada volta. Dinheiro e blindagem aparecem pela pista.</p>
     </details>`;
@@ -797,6 +835,71 @@ export class Menus {
         <button class="go" data-act="quick-start">CORRER!</button>
         <button data-act="main">← Voltar</button>
       </div>`);
+  }
+
+  /* ---------------- tela dividida ---------------- */
+
+  private showSplit(): void {
+    const planets = [...new Set(this.tracks.map((t) => t.planet))];
+    this.quick.trackId = this.split.trackId;
+    this.quickPlanet = this.tracks.find((t) => t.id === this.split.trackId)?.planet ?? planets[0];
+    const col = (k: 0 | 1) => `<div class="split-col p${k + 1}" data-sp="${k}">
+        <h3>Jogador ${k + 1}</h3>
+        <div class="split-pad" data-padslot="${k}"></div>
+        <div class="cars split-cars">${this.splitCars(k)}</div>
+        ${this.splitColors(k)}
+      </div>`;
+    this.show(`
+      <div class="card wide quick split-setup">
+        <h2>2 JOGADORES · TELA DIVIDIDA</h2>
+        <p class="split-help">Cada jogador usa um controle (feito para dois DualSense do PS5). Com um controle só, o jogador 1 joga no teclado.</p>
+        <div class="split-cols">${col(0)}${col(1)}</div>
+        <button data-act="split-swap" class="split-swap">⇄ Trocar os controles</button>
+        <h3>Pista</h3>
+        <div class="tabs planet-tabs">${planets.map((p) => `<button class="tab" data-qplanet="${esc(p)}">${planetImg(PLANET_THEME[p] ?? this.tracks.find((t) => t.planet === p)?.theme, 64)}<span>${esc(p)}</span></button>`).join('')}</div>
+        <div class="tracks track-row">${this.quickTracks()}</div>
+        <h3>Rivais</h3>${this.difficultyPicker('split')}
+        <p class="split-msg" aria-live="polite"></p>
+        <button class="go" data-act="split-start">CORRER!</button>
+        <button data-act="main">← Voltar</button>
+      </div>`);
+    this.splitPadsView();
+    // o navegador só mostra o controle depois que um botão dele é apertado: acompanha enquanto a tela está aberta
+    clearInterval(this.splitTimer);
+    this.splitTimer = window.setInterval(() => {
+      if (!this.el.querySelector('.split-setup') || this.el.style.display === 'none') clearInterval(this.splitTimer);
+      else this.splitPadsView();
+    }, 500);
+  }
+
+  private splitCars(k: 0 | 1): string {
+    const color = this.split.players[k].color;
+    return this.allCars.map((v) => `<button class="car" data-svehicle="${v.id}" data-sp="${k}">${carImg(v.id, color)}<b>${v.name}</b></button>`).join('');
+  }
+
+  private splitColors(k: 0 | 1): string {
+    return `<div class="colors">${COLORS.map((c) => `<button class="color" data-scolor="${c}" data-sp="${k}" style="background:${hex(c)}" aria-label="cor do jogador ${k + 1}"></button>`).join('')}</div>`;
+  }
+
+  /** Quadro dos controles: qual controle é de qual jogador. Só mexe no DOM quando muda. */
+  private splitPadsView(): void {
+    const a = splitAssignment(this.split.swap);
+    const pads = connectedPads().length;
+    const text = [a.p1 ? padLabel(a.p1) : 'Teclado', a.p2 ? padLabel(a.p2) : 'Conecte o controle e aperte um botão'];
+    this.el.querySelectorAll<HTMLElement>('.split-pad').forEach((el) => {
+      const k = Number(el.dataset.padslot);
+      const html = `${icon(k === 0 && !a.p1 ? 'key' : 'gamepad')}<span>${esc(text[k])}</span>`;
+      if (el.dataset.v !== html) {
+        el.dataset.v = html;
+        el.innerHTML = html;
+      }
+      el.classList.toggle('missing', k === 1 && !a.p2);
+    });
+    const swap = this.el.querySelector<HTMLButtonElement>('.split-swap');
+    if (swap) swap.disabled = pads < 2;
+    // CORRER fica sempre clicável: sem o controle do jogador 2, o clique explica o que falta
+    const msg = this.el.querySelector('.split-msg');
+    if (msg && a.p2 && msg.textContent?.startsWith('Conecte')) msg.textContent = '';
   }
 
   /** Pistas do planeta aberto na corrida rápida. */
@@ -859,8 +962,8 @@ export class Menus {
   }
 
   /** Grade de pilotos (Nova campanha e Corrida rápida): destaque grande + retratos com placa metálica do nome. */
-  private charPick(group: 'new' | 'quick'): string {
-    const cur = group === 'quick' ? (this.quick.characterId ?? CHARACTERS[1].id) : this.newChar.characterId;
+  private charPick(group: 'new' | 'quick' | 'coop'): string {
+    const cur = group === 'quick' ? (this.quick.characterId ?? CHARACTERS[1].id) : group === 'coop' ? this.newCoop.characterId : this.newChar.characterId;
     return `<div class="char-pick" data-cgroup="${group}">
           <div class="char-feature">${this.charFeature(cur)}</div>
           <div class="chars">${CHARACTERS.filter((c) => !c.secret || this.olafUnlocked).map(
@@ -879,10 +982,17 @@ export class Menus {
         <p class="sub center">Comece em ${esc(PLANETS[0].name)}, Divisão B, com ${money(START_MONEY)}. Some pontos para subir de divisão
           (1º: ${POINTS[0]} pts · 2º: ${POINTS[1]} · 3º: ${POINTS[2]}). A Divisão A de cada planeta fecha com um duelo contra o chefe local;
           se faltar ponto, a repescagem é um duelo contra ele. A dificuldade decide até onde vai a galáxia.</p>
-        <h3>Escolha seu piloto</h3>
+        <h3>Jogadores</h3>
+        <div class="diffs coop-pick">
+          <button class="diff coopsel" data-coopsel="0"><b>1 jogador</b><small>A campanha clássica.</small></button>
+          <button class="diff coopsel" data-coopsel="1"><b>${icon('gamepad')} 2 jogadores</b><small>Cooperativa em tela dividida, um controle cada. Os pontos são da dupla (vale a melhor colocação); cada um tem carro e dinheiro próprios.</small></button>
+        </div>
+        <h3>${this.newCoopOn ? 'Piloto do jogador 1' : 'Escolha seu piloto'}</h3>
         ${this.charPick('new')}
         <p class="pw-msg secret-msg"></p>
-        <h3>Cor do carro</h3>${this.colorPicker('new')}
+        <h3>Cor do carro${this.newCoopOn ? ' do jogador 1' : ''}</h3>${this.colorPicker('new')}
+        ${this.newCoopOn ? `<h3>Piloto do jogador 2</h3>${this.charPick('coop')}<h3>Cor do carro do jogador 2</h3>${this.colorPicker('coop')}` : ''}
+        <p class="coop-msg pw-msg" aria-live="polite"></p>
         <h3>Dificuldade</h3>${this.difficultyPicker('new')}
         <h3>Salvar no slot</h3>
         <div class="slot-pick">${slots
@@ -932,7 +1042,6 @@ export class Menus {
     const div = DIVISIONS[s.division];
     const season = seasonInfo(s);
     const pct = Math.min(100, (s.points / season.promote) * 100);
-    const u = s.car.upgrades;
     const early = canAdvanceEarly(s);
     const kind = raceKind(s);
     const boss = d.planet.local;
@@ -950,19 +1059,25 @@ export class Menus {
       s.division === 1
         ? `Você já tem os pontos! Continue correndo para ganhar dinheiro ou <button class="inline-go" data-act="advance">desafiar ${esc(boss)} agora ${icon('arrowRight')}</button>`
         : `Você já tem os pontos! Continue correndo aqui para ganhar dinheiro ou <button class="inline-go" data-act="advance">subir agora ${icon('arrowRight')}</button>`;
-    const car = this.vehicles[s.car.vehicleId];
+    const co = d.coop;
+    const padWarn = co && !co.padReady ? `<div class="notice retry">${icon('gamepad')} Conecte o controle do jogador 2 e aperte um botão dele: a cooperativa precisa de um controle para cada jogador (o jogador 1 também pode usar o teclado).</div>` : '';
     this.show(`
-      <div class="card wide hub">
+      <div class="card wide hub${co ? ' coop' : ''}">
         <div class="hub-top">
           <div class="hub-planet">${planetImg(d.planet.theme, 72)}<span><small>PLANETA ${s.planet + 1}/${planetCount(s)}</small><b>${esc(d.planet.name)}</b><em>Divisão ${div}</em></span></div>
           ${this.raceBadge(s)}
-          <div class="hub-money"><small>DINHEIRO</small><b class="gold">${money(s.money)}</b>${moneyCapped(s) ? CAPPED_SEAL : ''}</div>
+          ${
+            co
+              ? `<div class="hub-money coop"><small>DINHEIRO</small><span><em>J1</em> <b class="gold">${money(s.money)}</b></span><span><em>J2</em> <b class="gold">${money(co.state.money)}</b></span></div>`
+              : `<div class="hub-money"><small>DINHEIRO</small><b class="gold">${money(s.money)}</b>${moneyCapped(s) ? CAPPED_SEAL : ''}</div>`
+          }
         </div>
         <div class="hub-progress">
           ${planetRoute(s.planet, s.champion, planetCount(s))}
           <div class="points"><span>Pontos: <b>${s.points}</b> / ${season.promote} para subir${s.division === 1 && !s.champion ? ` e vencer ${esc(boss)}` : ''}</span><div class="bar"><i style="width:${pct}%"></i></div></div>
         </div>
         ${notice ? `<div class="notice">${iconizeHtml(notice)}</div>` : ''}
+        ${padWarn}
         ${duel}
         ${early ? `<div class="notice promoted">${earlyText}</div>` : ''}
         <div class="hub-main">
@@ -980,20 +1095,13 @@ export class Menus {
               )
               .join('')}</ul>
           </div>
-          <div class="panel hub-me">
-            <h3>Você</h3>
-            <div class="me-row">${portraitSvg(d.character.id, 56)}<div><b>${esc(d.character.name)}</b><div class="skills">${this.bonusText(d.character)}</div></div></div>
-            <div class="hub-car">${carImg(s.car.vehicleId, s.color, 160, 'transparent', true)}<b>${esc(car?.name ?? d.spec.name)}</b></div>
-            <ul class="upg-list">
-              ${UPGRADE_KINDS.filter((k) => upgradeAvailable(s.car.vehicleId, k)).map((k) => `<li><span>${upgradeLabel(s.car.vehicleId, k)}</span> ${pips(u[k], MAX_UPGRADE)}</li>`).join('')}
-            </ul>
-            <p class="small-note">${d.spec.frontCharges}× ${weaponFull(d.spec.front)} · ${d.spec.rearCharges}× ${weaponFull(d.spec.rear)} · ${d.spec.nitroCharges}× ${weaponFull(d.spec.assist)}</p>
-          </div>
+          ${this.hubMe(co ? 'Jogador 1' : 'Você', s, d.spec, d.character)}
+          ${co ? this.hubMe('Jogador 2', co.state, co.spec, co.character) : ''}
         </div>
         <div class="hub-actions">
           <button class="go" data-act="hub-race">CORRER!</button>
           <div class="row-buttons">
-            <button data-act="shop">${icon('cart')} Loja</button>
+            ${co ? `<button data-shopp="0">${icon('cart')} Loja J1</button><button data-shopp="1">${icon('cart')} Loja J2</button>` : `<button data-act="shop">${icon('cart')} Loja</button>`}
             <button data-act="save">${icon('save')} Salvar</button>
             <button data-act="settings">${icon('gear')} Opções</button>
             <button data-act="main">Menu</button>
@@ -1006,6 +1114,21 @@ export class Menus {
     makeThumb(trackKey(d.track.def, 320, 200));
     // planeta atual e próximo na frente dos carros (cabeçalho e rota nunca ficam esperando)
     warmPlanetThumbs(s.planet);
+  }
+
+  /** Painel de um jogador na garagem: piloto, carro, melhorias e cargas. */
+  private hubMe(title: string, s: CampaignState, spec: VehicleSpec, character: Character): string {
+    const u = s.car.upgrades;
+    const car = this.vehicles[s.car.vehicleId];
+    return `<div class="panel hub-me">
+            <h3>${title}</h3>
+            <div class="me-row">${portraitSvg(character.id, 56)}<div><b>${esc(character.name)}</b><div class="skills">${this.bonusText(character)}</div></div></div>
+            <div class="hub-car">${carImg(s.car.vehicleId, s.color, 160, 'transparent', true)}<b>${esc(car?.name ?? spec.name)}</b></div>
+            <ul class="upg-list">
+              ${UPGRADE_KINDS.filter((k) => upgradeAvailable(s.car.vehicleId, k)).map((k) => `<li><span>${upgradeLabel(s.car.vehicleId, k)}</span> ${pips(u[k], MAX_UPGRADE)}</li>`).join('')}
+            </ul>
+            <p class="small-note">${spec.frontCharges}× ${weaponFull(spec.front)} · ${spec.rearCharges}× ${weaponFull(spec.rear)} · ${spec.nitroCharges}× ${weaponFull(spec.assist)}</p>
+          </div>`;
   }
 
   /**
@@ -1163,7 +1286,8 @@ export class Menus {
     }
     this.show(`
       <div class="card wide">
-        <div class="shop-head"><h2>LOJA</h2><b class="gold">${money(s.money)}</b></div>
+        <div class="shop-head"><h2>LOJA${d.coop ? ` · JOGADOR ${d.coop.player + 1}` : ''}</h2><b class="gold">${money(s.money)}</b></div>
+        ${d.coop ? `<div class="tabs coop-tabs">${[0, 1].map((k) => `<button class="tab" data-shopp="${k}">Jogador ${k + 1}</button>`).join('')}</div>` : ''}
         ${notice ? `<div class="notice">${iconizeHtml(notice)}</div>` : ''}
         ${tabs}
         <div class="shop-body">${body}</div>
@@ -1511,6 +1635,8 @@ export class Menus {
     const net = typeof online === 'object' ? online : null;
     const best = lapTimes.length ? Math.min(...lapTimes) : 0;
     const me = rows.find((r) => r.me);
+    // tela dividida: dois jogadores deste aparelho (o título diz quem venceu; ganhos e voltas são de cada um)
+    const duo = rows.filter((r) => r.me).length > 1;
     // venceu o duelo (chefe ou repescagem): o título é a vitória sobre o chefe; a promoção vira subtítulo
     const bossWin = !!report && report.kind !== 'normal' && (report.bonus > 0 || me?.place === 1);
     const title =
@@ -1520,9 +1646,13 @@ export class Menus {
           ? 'CHEFE DERROTADO!'
           : report?.outcome === 'promoted'
             ? 'PROMOVIDO!'
-            : me && me.place === 1
-              ? 'VITÓRIA!'
-              : 'RESULTADO';
+            : duo
+              ? rows[0].me
+                ? `${rows[0].name.toUpperCase()} VENCEU!`
+                : 'RESULTADO'
+              : me && me.place === 1
+                ? 'VITÓRIA!'
+                : 'RESULTADO';
     const subtitle = report?.outcome === 'promoted' && bossWin ? `<p class="res-sub center" style="margin:-6px 0 8px;font-weight:700;letter-spacing:.08em;opacity:.85">PROMOVIDO</p>` : '';
     const tries = (n: number) => (n === 1 ? '<b>última chance</b>' : `restam <b>${n}</b> tentativas`);
     const campaignBlock = report
@@ -1559,8 +1689,8 @@ export class Menus {
         ${subtitle}
         ${campaignBlock}
         <div class="res-list">${podium}</div>
-        ${lapTimes.length ? `<table>${lapTimes.map((t, i) => `<tr class="${t === best ? 'best' : ''}"><td>Volta ${i + 1}</td><td>${formatTime(t)}</td></tr>`).join('')}</table>` : ''}
-        ${me && !online ? `<p class="money">Ganho nesta corrida (prêmio + pista): <b>${money(me.money)}</b></p>` : ''}
+        ${lapTimes.length && !duo ? `<table>${lapTimes.map((t, i) => `<tr class="${t === best ? 'best' : ''}"><td>Volta ${i + 1}</td><td>${formatTime(t)}</td></tr>`).join('')}</table>` : ''}
+        ${me && !online && !duo ? `<p class="money">Ganho nesta corrida (prêmio + pista): <b>${money(me.money)}</b></p>` : ''}
         ${net?.note ? `<div class="notice retry">${esc(net.note)}</div>` : ''}
         ${net && !net.final ? '<p class="small-note center">Placar parcial: atualiza conforme os pilotos cruzam a linha.</p>' : ''}
         ${
@@ -1582,15 +1712,19 @@ export class Menus {
     sel('.cam', (b) => b.dataset.cam === this.camera);
     sel('.car[data-vehicle]', (b) => b.dataset.vehicle === this.quick.vehicleId);
     sel('.trk', (b) => b.dataset.track === this.quick.trackId);
-    sel('.char', (b) => b.dataset.char === (b.dataset.cgroup === 'quick' ? this.quick.characterId : this.newChar.characterId));
+    sel('.char', (b) => b.dataset.char === (b.dataset.cgroup === 'quick' ? this.quick.characterId : b.dataset.cgroup === 'coop' ? this.newCoop.characterId : this.newChar.characterId));
     sel('.tab[data-tab]', (b) => b.dataset.tab === this.shopTab);
     sel('.tab[data-qplanet]', (b) => b.dataset.qplanet === this.quickPlanet);
     sel('.slotsel', (b) => Number(b.dataset.slotsel) === this.newChar.slot);
     sel('.pwsel', (b) => Number(b.dataset.pwslot) === this.pwSlot);
-    sel('.color', (b) => Number(b.dataset.color) === (b.dataset.group === 'new' ? this.newChar.color : this.quick.color));
-    sel('.diff', (b) => b.dataset.diff === (b.dataset.group === 'new' ? this.newChar.difficulty : this.quick.difficulty));
+    sel('.color[data-color]', (b) => Number(b.dataset.color) === (b.dataset.group === 'new' ? this.newChar.color : b.dataset.group === 'coop' ? this.newCoop.color : this.quick.color));
+    sel('.coopsel', (b) => (b.dataset.coopsel === '1') === this.newCoopOn);
+    sel('.tab[data-shopp]', (b) => Number(b.dataset.shopp) === (this.lastHub?.coop?.player ?? 0));
+    sel('.diff', (b) => b.dataset.diff === (b.dataset.group === 'new' ? this.newChar.difficulty : b.dataset.group === 'split' ? this.split.difficulty : this.quick.difficulty));
+    sel('.car[data-svehicle]', (b) => b.dataset.svehicle === this.split.players[Number(b.dataset.sp)].vehicleId);
+    sel('.color[data-scolor]', (b) => Number(b.dataset.scolor) === this.split.players[Number(b.dataset.sp)].color);
     // tela de corrida rápida na frente: o grid da escolha atual já vai sendo montado na fila ociosa
-    if (this.el.querySelector('.quick')) this.actions.prewarmQuick?.(this.quick);
+    if (this.el.querySelector('.quick:not(.split-setup)')) this.actions.prewarmQuick?.(this.quick);
   }
 
   /** Segundo toque confirma: o primeiro troca o texto do botão pela pergunta. */
@@ -1632,8 +1766,31 @@ export class Menus {
       this.actions.setCamera(this.camera);
     }
     if (d.vehicle) this.quick.vehicleId = d.vehicle;
-    if (d.track) this.quick.trackId = d.track;
-    if (d.char && d.cgroup === 'quick') {
+    if (d.track) this.quick.trackId = this.split.trackId = d.track;
+    if (d.svehicle) this.split.players[Number(d.sp)].vehicleId = d.svehicle;
+    if (d.scolor) {
+      const k = Number(d.sp) as 0 | 1;
+      this.split.players[k].color = Number(d.scolor);
+      // só as miniaturas daquele jogador trocam de cor
+      const cars = this.el.querySelector<HTMLElement>(`.split-col[data-sp="${k}"] .split-cars`);
+      if (cars) {
+        cars.innerHTML = this.splitCars(k);
+        fillThumbs(cars);
+      }
+    }
+    if (d.coopsel) {
+      this.newCoopOn = d.coopsel === '1';
+      return this.showNewCampaign();
+    }
+    if (d.shopp && this.lastHub) {
+      this.actions.openShop(Number(d.shopp));
+      return;
+    }
+    if (d.char && d.cgroup === 'coop') {
+      this.newCoop.characterId = d.char;
+      const feat = this.el.querySelector('.char-pick[data-cgroup="coop"] .char-feature');
+      if (feat) feat.innerHTML = this.charFeature(d.char);
+    } else if (d.char && d.cgroup === 'quick') {
       this.quick.characterId = d.char;
       const feat = this.el.querySelector('.char-pick[data-cgroup="quick"] .char-feature');
       if (feat) feat.innerHTML = this.charFeature(d.char);
@@ -1650,7 +1807,7 @@ export class Menus {
         }
       }
       this.newChar.characterId = d.char;
-      const feat = this.el.querySelector('.char-feature');
+      const feat = this.el.querySelector('.char-pick[data-cgroup="new"] .char-feature');
       if (feat) feat.innerHTML = this.charFeature();
     }
     if (d.slotsel) {
@@ -1667,10 +1824,12 @@ export class Menus {
         // a rota mostra só os planetas da dificuldade escolhida (Fácil 3, Normal 5, Difícil 6)
         const route = this.el.querySelector('.new-route');
         if (route) route.innerHTML = planetRoute(0, false, CAMPAIGN_RULES[this.newChar.difficulty].planets);
-      } else this.quick.difficulty = d.diff as Difficulty;
+      } else if (d.group === 'split') this.split.difficulty = d.diff as Difficulty;
+      else this.quick.difficulty = d.diff as Difficulty;
     }
     if (d.color) {
       if (d.group === 'new') this.newChar.color = Number(d.color);
+      else if (d.group === 'coop') this.newCoop.color = Number(d.color);
       else {
         // corrida rápida e online: só as miniaturas dos carros trocam (sem refazer o menu)
         this.quick.color = Number(d.color);
@@ -1742,13 +1901,38 @@ export class Menus {
       case 'new-start': {
         const slot = this.newChar.slot;
         const busy = this.actions.listSlots().some((x) => x.slot === slot && !x.empty);
+        if (this.newCoopOn && this.newCoop.color === this.newChar.color) {
+          const msg = this.el.querySelector('.coop-msg');
+          if (msg) msg.textContent = 'Escolham cores diferentes para os dois carros.';
+          return;
+        }
         if (busy && !this.confirmClick(t, `Substituir o slot ${slot + 1}?`)) return;
-        return this.actions.newCampaign({ ...this.newChar });
+        return this.actions.newCampaign({ ...this.newChar, coop: this.newCoopOn ? { ...this.newCoop } : undefined });
       }
       case 'quick':
         return this.showQuick();
       case 'quick-start':
         return this.actions.quickRace({ ...this.quick });
+      case 'split':
+        return this.showSplit();
+      case 'split-swap':
+        this.split.swap = !this.split.swap;
+        this.splitPadsView();
+        return;
+      case 'split-start': {
+        const [a, b] = this.split.players;
+        const msg = this.el.querySelector('.split-msg')!;
+        if (a.color === b.color) {
+          msg.textContent = 'Escolham cores diferentes para os dois carros.';
+          return;
+        }
+        if (!splitAssignment(this.split.swap).p2) {
+          msg.textContent = 'Conecte o controle do jogador 2 e aperte um botão dele.';
+          return;
+        }
+        clearInterval(this.splitTimer);
+        return this.actions.splitRace({ ...this.split, players: [{ ...a }, { ...b }] });
+      }
       case 'load':
         return this.showSlots('load');
       case 'save':

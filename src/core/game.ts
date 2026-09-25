@@ -9,13 +9,14 @@ import { sfxAssist, sfxBump, sfxBurn, sfxCountdown, sfxDrop, sfxExplosion, sfxFa
 import { trackById, TRACKS } from '../data/tracks';
 import { VEHICLES } from '../data/vehicles';
 import {
-  advanceEarly, campaignChargePrice, CHAMPION_PAINT, paintPrice, moneyCapped, currentPlanet, markRaceStarted, planetNews, resolveAbandonedRace, moneyScale, planetCount, shopLevel, difficultyOf, currentTrackId, decodeSave, newCampaign, opponentsFor, PLANETS, playerSpec, prizesFor,
+  advanceEarly, campaignChargePrice, coopOwner, coopView, CHAMPION_PAINT, paintPrice, moneyCapped, currentPlanet, markRaceStarted, planetNews, resolveAbandonedRace, moneyScale, planetCount, shopLevel, difficultyOf, currentTrackId, decodeSave, newCampaign, opponentsFor, PLANETS, playerSpec, prizesFor,
   type CampaignState,
 } from '../sim/campaign';
 import { afterLeave, behindNotice, campaignLabel, exportSave, leaveNotice, resolveLeave, sceneAfter, settleFinish, type AfterLeave, type SettledRace } from '../sim/campaignFlow';
 import { buildSpec, carSwapCost, CHARACTERS, newCarSetup, upgradePrice } from '../sim/garage';
 import { deleteSlot, listSlots, loadCampaign, loadFromSlot, loadPrefs, saveCampaign, savePrefs, saveToSlot, slotChangedElsewhere } from './storage';
 import { canInstall, fullscreenSupported, initPwa, initViewport, isFullscreen, isInstalled, isIos, onFullscreenChange, onInstallChange, promptInstall, quitGame, toggleFullscreen } from '../ui/pwa';
+import { splitAssignment } from '../input/gamepad';
 import { Controls, createTouchControls, isTouchDevice, setTouchAutoThrottle, setTouchWeapons } from '../input/controls';
 import { CAMERA_LABELS, CameraRig, type CameraMode } from '../render/cameras';
 import { createCarMesh, prewarmCarMesh, type CarVisual } from '../render/cars';
@@ -40,7 +41,7 @@ import { Hud, ICONS, formatTime, type HudCar, type HudData } from '../ui/hud';
 import { icon } from '../ui/icons';
 import { idleJob, idleJobsUrgent, setIdlePaused } from '../ui/idleQueue';
 import { releaseThumbRenderer } from '../render/thumbnails';
-import { COLORS, Menus, WEAPON_LABEL, type CampaignReport, type HubData, type LobbyView, type NewCampaignOptions, type OnlineOptions, type OnlineResults, type QuickOptions, type ResultRow } from '../ui/menus';
+import { COLORS, Menus, WEAPON_LABEL, type CampaignReport, type HubData, type LobbyView, type NewCampaignOptions, type OnlineOptions, type OnlineResults, type QuickOptions, type ResultRow, type SplitOptions } from '../ui/menus';
 import { DROP_MS, NetClient, NetHost, netErrorText, normalizeCode } from '../net/peer';
 import { applyProg, applySnapshot, decodeSnapMsg, encodeSnapMsg, isImportant, MAX_PLAYERS, parseHello, parseLobbyPlayers, parseProg, parseStart, pickColor, progEntry, progKey, takeSnapshot, validateSnap, cleanName, type ClientMsg, type HostMsg, type IdEvent, type LobbyPlayer, type OnlineRace, type ProgMsg, type SnapMsg, type WorldSnap } from '../net/sync';
 import { CMDS_PER_MSG, InputQueue, parseInputMsg, TapCounter, type NetCmd } from '../net/inputs';
@@ -293,6 +294,8 @@ interface RaceSetup {
   pilot: string;
   /** corrida online: grid montado pelo host e o carro deste jogador */
   online?: { race: OnlineRace; you: number };
+  /** tela dividida: o jogador 2 e o controle (Gamepad.index) de cada um (p1 null = teclado) */
+  second?: { name: string; color: number; spec: VehicleSpec; pilot: string; pads: { p1: number | null; p2: number } };
 }
 
 interface CarView {
@@ -450,6 +453,16 @@ export class Game {
   private pendingNoFlash = false;
   private pendingNoShadow = false;
   /** entradas reaproveitadas por passo (sem alocar) */
+  /** tela dividida: carro do jogador 2 (-1 = fora dela) */
+  private p2 = -1;
+  /** câmera, HUD e motor do jogador 2 (criados na primeira corrida em tela dividida) */
+  private readonly rig2 = new CameraRig();
+  private hud2: Hud | null = null;
+  private engine2: EngineSound | null = null;
+  private shake2 = 0;
+  private prevAssistBtn2 = false;
+  private hudData2: HudData | null = null;
+  private readonly playerPoseTmp2 = { x: 0, y: 0, z: 0, heading: 0 };
   private readonly soloInputs: Record<number, ControlInput> = {};
   private soloInputsId = -1;
   private readonly playerPoseTmp = { x: 0, y: 0, z: 0, heading: 0 };
@@ -641,7 +654,7 @@ export class Game {
     if (this.touch) this.touchEl = createTouchControls(root, this.controls);
     this.controls.autoThrottle = this.touch && this.prefs.autoThrottle;
     setTouchAutoThrottle(this.touchEl, this.controls.autoThrottle);
-    this.rig.mode = this.prefs.camera;
+    this.rig.mode = this.rig2.mode = this.prefs.camera;
     this.menus = new Menus(root, this.menuActions(), VEHICLES, TRACKS);
     this.menus.setCameraChoice(this.prefs.camera);
     this.campaign = loadCampaign();
@@ -675,6 +688,10 @@ export class Game {
 
     this.controls.onUiAction((a) => {
       if (a === 'camera' && this.phase !== 'menu') this.setCamera(this.rig.cycle());
+      if (a === 'camera2' && this.phase !== 'menu' && this.p2 >= 0) {
+        this.hud2?.showToast(`🎥 ${CAMERA_LABELS[this.rig2.cycle()]}`);
+        this.resize();
+      }
       if (a === 'pause') this.togglePause();
       if (a === 'mute') this.hud.showToast(toggleMute() ? '🔇 Som desligado' : '🔊 Som ligado');
       if (a === 'fullscreen') void toggleFullscreen();
@@ -839,12 +856,35 @@ export class Game {
     };
   }
 
-  private campaignSetup(c: CampaignState): RaceSetup {
+  /** Tela dividida: corrida rápida com o jogador 2 no grid (mesmo nível de melhorias dos dois). */
+  private splitSetup(o: SplitOptions): RaceSetup {
+    const [a, b] = o.players;
+    const setup = this.quickSetup({ trackId: o.trackId, characterId: a.characterId, vehicleId: a.vehicleId, color: a.color, difficulty: o.difficulty });
+    const car = newCarSetup(b.vehicleId);
+    // mesmo nível de melhorias do jogador 1 (ver quickSetup)
+    const planet = Math.max(0, PLANETS.findIndex((p) => p.theme === trackById(o.trackId).theme));
+    const level = Math.min(3, Math.floor((planet * 2 + 1) / 3));
+    car.upgrades = { engine: level, tires: level, shocks: level, armor: level };
+    const pads = splitAssignment(o.swap);
     return {
+      ...setup,
+      playerName: 'Jogador 1',
+      second: {
+        name: 'Jogador 2',
+        color: b.color,
+        spec: buildSpec(VEHICLES[b.vehicleId], car),
+        pilot: b.characterId,
+        pads: { p1: pads.p1?.index ?? null, p2: pads.p2?.index ?? -1 },
+      },
+    };
+  }
+
+  private campaignSetup(c: CampaignState): RaceSetup {
+    const setup: RaceSetup = {
       mode: 'campaign',
       trackId: currentTrackId(c),
       opponents: opponentsFor(c, VEHICLES),
-      playerName: 'Você',
+      playerName: c.coop ? 'Jogador 1' : 'Você',
       playerColor: c.color,
       playerSpec: playerSpec(c, VEHICLES),
       prizes: prizesFor(c),
@@ -852,6 +892,18 @@ export class Game {
       moneyScale: moneyScale(c),
       pilot: c.characterId,
     };
+    // cooperativa: o jogador 2 no grid, com o carro dele, em tela dividida
+    if (c.coop) {
+      const pads = splitAssignment(false);
+      setup.second = {
+        name: 'Jogador 2',
+        color: c.coop.color,
+        spec: playerSpec(coopView(c, 1), VEHICLES),
+        pilot: c.coop.characterId,
+        pads: { p1: pads.p1?.index ?? null, p2: pads.p2?.index ?? -1 },
+      };
+    }
+    return setup;
   }
 
   /** Monta o grid: os 3 rivais largam na frente, o jogador por último (como no original). */
@@ -1083,7 +1135,7 @@ export class Game {
       this.playerId = setup.online.you;
       this.world = createWorld(this.track, race.entries.map((e) => ({ ...e })), race.laps, race.seed, setup.prizes, setup.difficulty);
     } else {
-      const used = new Set([setup.playerColor]);
+      const used = new Set([setup.playerColor, ...(setup.second ? [setup.second.color] : [])]);
       const spare = [0xe02828, 0xf2c318, 0xb040e0, 0x2f7bff, 0xf0f0f0, 0x2fc840];
       const entries: RacerEntry[] = setup.opponents.map((o) => {
         let color = o.color;
@@ -1093,18 +1145,23 @@ export class Game {
       });
       // ?autopilot na URL: o carro do jogador é pilotado pela IA (demonstração/testes)
       const autopilot = new URLSearchParams(location.search).has('autopilot') ? { skill: 0.85, aggression: 0.8, lane: 0.5 } : null;
-      entries.push({ name: setup.playerName, color: setup.playerColor, spec: setup.playerSpec, ai: autopilot });
+      // campanha cooperativa: a dupla é uma equipe (sem fogo amigo); na corrida rápida em tela dividida, rivais
+      const team = setup.mode === 'campaign' && setup.second ? 1 : undefined;
+      entries.push({ name: setup.playerName, color: setup.playerColor, spec: setup.playerSpec, ai: autopilot, team });
       this.playerId = entries.length - 1;
+      const second = setup.second;
+      if (second) entries.push({ name: second.name, color: second.color, spec: second.spec, ai: autopilot, team });
       // ?laps=N na URL muda o número de voltas (útil para testar)
       const laps = Number(new URLSearchParams(location.search).get('laps')) || this.track.def.laps;
       this.world = createWorld(this.track, entries, laps, (Date.now() & 0xffff) + 1, setup.prizes, setup.difficulty, setup.moneyScale);
     }
 
+    this.setSplit(!setup.online && setup.second ? this.playerId + 1 : -1);
     const old = this.views;
     this.views = this.world.racers.map((r, i) => {
       const visual = createCarMesh(r.spec.id, r.color, this.shadows);
       this.scene.add(visual.root);
-      const label = i !== this.playerId ? new RivalTag(r.name, r.color) : null;
+      const label = i !== this.playerId && i !== this.p2 ? new RivalTag(r.name, r.color) : null;
       if (label) this.scene.add(label.sprite);
       const shadow = new THREE.Mesh(
         this.shadowGeo,
@@ -1137,6 +1194,71 @@ export class Game {
     const sp = this.player.spec;
     const item = (id: string, fb: string) => ({ svg: ICONS[id] ?? ICONS[fb], label: WEAPON_LABEL[id] ?? fb });
     setTouchWeapons(this.touchEl ?? null, { fire: item(sp.front, 'laser'), drop: item(sp.rear, 'mine'), nitro: item(sp.assist, 'nitro') });
+  }
+
+  /**
+   * Liga (id do carro do jogador 2) ou desliga (-1) a tela dividida: controles de cada jogador,
+   * HUD do jogador 2 na metade direita e as entradas da prova.
+   */
+  private setSplit(p2: number): void {
+    for (const k of Object.keys(this.soloInputs)) delete this.soloInputs[Number(k)];
+    this.soloInputsId = -1;
+    this.p2 = p2;
+    this.shake2 = 0;
+    this.prevAssistBtn2 = false;
+    const on = p2 >= 0;
+    this.controls.setSplit(on ? this.setup.second!.pads : null);
+    this.hud.el.classList.toggle('split-a', on);
+    if (on && !this.hud2) {
+      // dentro da HUD do jogador 1: aparece e some junto com ela
+      this.hud2 = new Hud(this.hud.el);
+      this.hud2.el.classList.add('split-b');
+    }
+    // J1 / J2 no canto de baixo de cada metade
+    for (const [hud, tag] of [[this.hud, 'J1'], [this.hud2, 'J2']] as const) {
+      if (hud && !hud.el.querySelector(':scope > .rh-player')) hud.el.insertAdjacentHTML('beforeend', `<div class="rh-player">${tag}</div>`);
+    }
+    if (this.hud2) {
+      this.hud2.setVisible(on);
+      this.hud2.clearToasts();
+      this.hud2.clearMessage();
+      if (on) this.hud2.setTrack(this.track);
+    }
+    if (!on) this.engine2?.stop();
+    this.rig2.snap();
+  }
+
+  /** Tela dividida desenhada agora (corrida em tela dividida fora do menu). */
+  private get splitView(): boolean {
+    return this.p2 >= 0 && this.phase !== 'menu' && !this.showcase;
+  }
+
+  /** Mensagem central nas HUDs de todos os jogadores (contagem, largada). */
+  private messageAll(text: string, duration: number, cls: string): void {
+    this.hud.message(text, duration, cls);
+    if (this.p2 >= 0) this.hud2?.message(text, duration, cls);
+  }
+
+  /** O carro é de um jogador deste aparelho? */
+  private isLocal(id: number): boolean {
+    return id === this.playerId || (this.p2 >= 0 && id === this.p2);
+  }
+
+  /** HUD do jogador dono do carro (o jogador 1 para os demais). */
+  private hudOf(id: number): Hud {
+    return id === this.p2 && this.p2 >= 0 && this.hud2 ? this.hud2 : this.hud;
+  }
+
+  /** Tremor da câmera do jogador dono do carro. */
+  private shakeOf(id: number, amount: number): void {
+    if (id === this.p2 && this.p2 >= 0) this.shake2 = Math.max(this.shake2, amount);
+    else this.shake = Math.max(this.shake, amount);
+  }
+
+  /** Todos os jogadores deste aparelho já cruzaram a chegada? */
+  private localsFinished(): boolean {
+    const r = this.world.racers;
+    return !!r[this.playerId]?.finishPlace && (this.p2 < 0 || !!r[this.p2]?.finishPlace);
   }
 
   /**
@@ -1200,6 +1322,7 @@ export class Game {
     // câmera encaixada no carro e HUD zerado já no primeiro quadro do preparo (antes, a tela
     // mostrava a câmera e os números da corrida anterior até a contagem andar)
     this.rig.snap();
+    this.rig2.snap();
     // sem contexto WebGL não desenha nem compila (o teto de 4 s libera a contagem)
     if (!this.glLost) {
       this.render(1, 0, false, 0);
@@ -1214,8 +1337,9 @@ export class Game {
     this.menus.hideAll();
     this.hud.setVisible(true);
     this.hud.setLap(1, this.world.laps);
+    if (this.p2 >= 0) this.hud2?.setLap(1, this.world.laps);
     if (!midRace) {
-      this.hud.message('3', 0, 'count');
+      this.messageAll('3', 0, 'count');
       sfxCountdown(false);
     }
     this.music.play(this.track.def.theme, 'race');
@@ -1225,6 +1349,7 @@ export class Game {
     this.endShowroom();
     this.phase = 'menu';
     this.engine.stop();
+    this.engine2?.stop();
     this.rivalEngines.stop();
     this.announcer.stop();
     this.hud.setVisible(false);
@@ -1263,6 +1388,7 @@ export class Game {
       this.phaseBeforePause = this.phase;
       this.phase = 'paused';
       this.engine.stop();
+      this.engine2?.stop();
       this.rivalEngines.stop();
       this.announcer.stop();
       this.music.setMood('pause');
@@ -1324,9 +1450,13 @@ export class Game {
       const rc = this.renderer.domElement.getBoundingClientRect();
       setTagCanvasRect(rc.left, rc.top, rc.width, rc.height);
     }
-    this.rig.resize(w, h);
+    // tela dividida: uma metade (lado a lado) para cada jogador, sem retrovisor
+    const split = this.splitView;
+    const half = Math.floor(w / 2);
+    this.rig.resize(split ? half : w, h);
+    if (split) this.rig2.resize(w - half, h);
     const mirror = this.mirrorRect();
-    this.hud.setMirror(this.rig.mode === 'cockpit' && this.phase !== 'menu', mirror);
+    this.hud.setMirror(this.rig.mode === 'cockpit' && this.phase !== 'menu' && !split, mirror);
     this.rig.mirror.aspect = mirror.w / mirror.h;
     this.rig.mirror.updateProjectionMatrix();
   }
@@ -1639,14 +1769,15 @@ export class Game {
   }
 
   /** Preenche os dados da HUD no mesmo objeto a cada quadro (sem lixo para o coletor). */
-  private fillHud(r: Racer, speed: number): HudData {
+  private fillHud(r: Racer, speed: number, second = false): HudData {
     const pc = r.car;
     const sp = r.spec;
-    const d = (this.hudData ??= {
+    const fresh = (): HudData => ({
       time: 0, best: null, speedKmh: 0, place: 1, total: 1, armor: 1, money: 0,
       front: { label: '', icon: '', n: 0, max: 0 }, rear: { label: '', icon: '', n: 0, max: 0 }, assist: { label: '', icon: '', n: 0, max: 0, active: false },
       cars: [], carCount: 0,
     });
+    const d = second ? (this.hudData2 ??= fresh()) : (this.hudData ??= fresh());
     const world = this.world;
     d.time = world.raceTime;
     const laps = r.progress.lapTimes;
@@ -1679,7 +1810,7 @@ export class Game {
       c.z = o.car.z;
       c.heading = o.car.heading;
       c.color = this.hexOf(o.color);
-      c.me = o.id === this.playerId;
+      c.me = o.id === r.id;
       n++;
     }
     d.carCount = n;
@@ -1728,7 +1859,7 @@ export class Game {
     this.countdown = Math.max(this.countdown - extra, Math.min(this.countdown, 0.01));
     if (Math.ceil(this.countdown) !== shown) {
       sfxCountdown(false);
-      this.hud.message(String(Math.ceil(this.countdown)), 0, 'count');
+      this.messageAll(String(Math.ceil(this.countdown)), 0, 'count');
     }
   }
 
@@ -1740,6 +1871,11 @@ export class Game {
     if (!guest) for (let i = 0; i < this.views.length; i++) snapInto(this.views[i].prev, this.world.racers[i].car);
     let input: ControlInput = this.controls.read();
     if (this.net?.menuOpen) input = IDLE_INPUT;
+    let input2: ControlInput | null = this.p2 >= 0 ? this.controls.readSecond() : null;
+    const me2 = this.p2 >= 0 ? this.world.racers[this.p2] : null;
+    if (input2 && me2 && input2.nitro && !this.prevAssistBtn2 && this.phase === 'racing' && me2.alive && me2.car.nitroCharges === 0)
+      this.hud2?.showToast(me2.spec.assist === 'jump' ? 'Sem pulo — recarrega na próxima volta' : 'Sem turbo — recarrega na próxima volta');
+    this.prevAssistBtn2 = !!input2?.nitro;
     // assistência sem carga: avisa (senão parece que o botão falhou)
     const me = this.world.racers[this.playerId];
     if (input.nitro && !this.prevAssistBtn && this.phase === 'racing' && me?.alive && me.car.nitroCharges === 0)
@@ -1756,12 +1892,13 @@ export class Game {
         this.world.started = true;
         // campanha: a corrida em andamento vai para o save (fechar ou recarregar agora conta como desistência)
         if (this.setup.mode === 'campaign' && this.campaign && markRaceStarted(this.campaign)) saveCampaign(this.campaign);
-        this.hud.message('VAI!', 1, 'go');
+        this.messageAll('VAI!', 1, 'go');
         this.commentary.start();
       } else {
-        this.hud.message(String(Math.ceil(this.countdown)), 0, 'count');
+        this.messageAll(String(Math.ceil(this.countdown)), 0, 'count');
       }
       input = IDLE_INPUT;
+      if (input2) input2 = IDLE_INPUT;
     }
 
     const net = this.net;
@@ -1769,7 +1906,9 @@ export class Game {
     else {
       if (net?.host) this.hostInputs(net);
       if (pf) t0 = this.lap('step:entrada', t0);
-      stepWorld(this.world, net ? { ...net.inputs, [this.playerId]: input } : this.soloInput(input), dt);
+      const solo = net ? null : this.soloInput(input);
+      if (solo && input2) solo[this.p2] = input2;
+      stepWorld(this.world, net ? { ...net.inputs, [this.playerId]: input } : solo!, dt);
       if (pf) t0 = this.lap('step:stepWorld', t0);
       if (net?.host) this.hostSend(net);
     }
@@ -1786,6 +1925,7 @@ export class Game {
 
     const p = this.player;
     if (this.phase === 'racing' && p.progress.wrongWayTime > 1) this.hud.message('CONTRAMÃO!', 0.2, 'warn');
+    if (me2 && (this.phase === 'racing' || this.phase === 'finished') && !me2.finishPlace && me2.progress.wrongWayTime > 1) this.hud2?.message('CONTRAMÃO!', 0.2, 'warn');
 
     // locutor: liderança, último lugar, blindagem baixa, rajadas, abates, contramão...
     // (com os resultados na tela o locutor fica calado, também no online, em que a prova segue rodando)
@@ -1812,6 +1952,18 @@ export class Game {
     }
     if (car.wallImpact > 4) this.shake = Math.max(this.shake, clamp(car.wallImpact / 30, 0, 0.5));
     if (guest) car.landingImpact = car.wallImpact = 0; // já tratados: o próximo estado traz os novos
+    if (me2) {
+      // jogador 2: pouso e mureta com som e tremor na câmera dele
+      const c2 = me2.car;
+      if (c2.landingImpact > 4) sfxLand(clamp(c2.landingImpact / 16, 0.3, 1));
+      if (c2.wallImpact > 4 && this.wallSoundCd <= 0) {
+        sfxWall(clamp(c2.wallImpact / 22, 0.3, 1));
+        this.wallSoundCd = 0.25;
+      }
+      if (c2.landingImpact > 2) this.shake2 = Math.max(this.shake2, clamp(c2.landingImpact / 25, 0, 0.6));
+      if (c2.wallImpact > 4) this.shake2 = Math.max(this.shake2, clamp(c2.wallImpact / 30, 0, 0.5));
+      this.shake2 *= Math.exp(-dt * 6);
+    }
     this.bounceVel += (-this.bounce * 300 - this.bounceVel * 18) * dt;
     this.bounce += this.bounceVel * dt;
     this.shake *= Math.exp(-dt * 6);
@@ -1822,13 +1974,18 @@ export class Game {
   /** Volume de um som conforme a distância até o jogador. */
   private vol(x: number, z: number): number {
     const c = this.player.car;
+    // tela dividida: vale o jogador mais perto do som
+    const c2 = this.p2 >= 0 ? this.world.racers[this.p2]?.car : null;
+    const d = Math.min(Math.hypot(x - c.x, z - c.z), c2 ? Math.hypot(x - c2.x, z - c2.z) : Infinity);
     // queda suave (quadrática): perto soa forte, longe some sem corte brusco
-    const t = clamp(1 - Math.hypot(x - c.x, z - c.z) / 90, 0, 1);
+    const t = clamp(1 - d / 90, 0, 1);
     return t * t * 0.7 + t * 0.3;
   }
 
   /** Posição do som na tela, de -1 (esquerda) a +1 (direita), para o pan estéreo. */
   private pan(x: number, z: number): number {
+    // tela dividida: duas câmeras, sem um lado certo para o som
+    if (this.p2 >= 0) return 0;
     // lado pelo vetor "direita" da câmera (project() inverte o x de fontes atrás da câmera)
     const cam = this.rig.active;
     const right = this.panVec.set(1, 0, 0).applyQuaternion(cam.quaternion);
@@ -1849,7 +2006,9 @@ export class Game {
     if (this.net && this.isGuestRace() && (e.type === 'fire' || e.type === 'drop' || e.type === 'assist') && e.racer === me) {
       if (this.net.echo.echo(e.type === 'fire' ? 0 : e.type === 'drop' ? 1 : 2, performance.now())) return;
     }
-    const name = (id: number) => (id === me ? 'Você' : racers[id].name);
+    // tela dividida: cada aviso vai para a HUD (e a câmera) do jogador dono do carro
+    const local = (id: number) => this.isLocal(id);
+    const name = (id: number) => (id === me && this.p2 < 0 ? 'Você' : racers[id].name);
     switch (e.type) {
       case 'fire':
         sfxFire(e.kind, this.vol(e.x, e.z), this.pan(e.x, e.z));
@@ -1869,11 +2028,11 @@ export class Game {
           this.effects.explosion(e.x, e.y - 0.8, e.z, false);
           sfxExplosion(this.vol(e.x, e.z), false, this.pan(e.x, e.z));
         }
-        if (e.target === me) {
-          this.shake = Math.max(this.shake, e.kind === 'laser' ? 0.25 : 0.7);
+        if (local(e.target)) {
+          this.shakeOf(e.target, e.kind === 'laser' ? 0.25 : 0.7);
           // quem acertou (o plasma é frequente: só avisa das armas fortes ou de quem ainda não tinha acertado)
-          const by = e.by >= 0 && e.by !== me ? this.world.racers[e.by] : null;
-          if (by && (e.kind !== 'laser' || this.lastHitBy !== e.by)) this.hud.showToast(`💥 ${by.name} te acertou (${WEAPON_LABEL[e.kind] ?? e.kind})`);
+          const by = e.by >= 0 && e.by !== e.target ? this.world.racers[e.by] : null;
+          if (by && (e.kind !== 'laser' || this.lastHitBy !== e.by)) this.hudOf(e.target).showToast(`💥 ${by.name} te acertou (${WEAPON_LABEL[e.kind] ?? e.kind})`);
           this.lastHitBy = e.by;
         }
         break;
@@ -1886,8 +2045,8 @@ export class Game {
         }
         break;
       case 'spin':
-        if (e.racer === me) {
-          this.hud.showToast('Óleo! 🌀');
+        if (local(e.racer)) {
+          this.hudOf(e.racer).showToast('Óleo! 🌀');
           sfxSkid(1);
         } else {
           const sc = racers[e.racer].car;
@@ -1896,67 +2055,73 @@ export class Game {
         break;
       case 'explode': {
         this.effects.explosion(e.x, e.y, e.z, true, racers[e.racer].color);
-        sfxExplosion(e.racer === me ? 1 : this.vol(e.x, e.z), true, this.pan(e.x, e.z));
-        if (e.racer === me) {
-          this.shake = 1.2;
-          this.hud.message('DESTRUÍDO!', 2, 'warn');
-        } else if (e.by === me) {
-          this.hud.showToast(`💥 Você destruiu ${racers[e.racer].name}! +$${e.bounty.toLocaleString('pt-BR')}`);
-        } else {
+        sfxExplosion(local(e.racer) ? 1 : this.vol(e.x, e.z), true, this.pan(e.x, e.z));
+        if (local(e.racer)) {
+          this.shakeOf(e.racer, 1.2);
+          this.hudOf(e.racer).message('DESTRUÍDO!', 2, 'warn');
+        }
+        if (local(e.by) && e.by !== e.racer) {
+          this.hudOf(e.by).showToast(`💥 Você destruiu ${racers[e.racer].name}! +$${e.bounty.toLocaleString('pt-BR')}`);
+        } else if (!local(e.racer)) {
           this.hud.showToast(`💥 ${name(e.racer)} explodiu!`);
         }
         break;
       }
       case 'pickup':
-        if (e.racer === me) {
+        if (local(e.racer)) {
           sfxPickup(e.kind);
-          this.hud.showToast(e.kind === 'money' ? '+ $1.000' : '+ Blindagem');
+          this.hudOf(e.racer).showToast(e.kind === 'money' ? '+ $1.000' : '+ Blindagem');
         }
         break;
       case 'bump':
-        if (e.a === me || e.b === me) {
-          const other = racers[e.a === me ? e.b : e.a].car;
+        if (local(e.a) || local(e.b)) {
+          const mine = local(e.a) ? e.a : e.b;
+          const other = racers[mine === e.a ? e.b : e.a].car;
           sfxBump(clamp(e.strength / 15, 0, 1), this.pan(other.x, other.z));
-          this.shake = Math.max(this.shake, clamp(e.strength / 40, 0, 0.3));
+          for (const id of [e.a, e.b]) if (local(id)) this.shakeOf(id, clamp(e.strength / 40, 0, 0.3));
         }
         break;
       case 'lap':
-        if (e.racer === me) {
+        if (local(e.racer)) {
           const laps = this.world.laps;
-          this.hud.setLap(e.lap, laps);
-          const times = this.player.progress.lapTimes;
-          this.hud.message(e.lap === laps ? 'VOLTA FINAL!' : `VOLTA ${e.lap}`, 0.8, 'lap');
-          this.hud.showToast(`Volta: ${formatTime(times[times.length - 1])} · armas recarregadas`);
+          const hud = this.hudOf(e.racer);
+          hud.setLap(e.lap, laps);
+          const times = racers[e.racer].progress.lapTimes;
+          hud.message(e.lap === laps ? 'VOLTA FINAL!' : `VOLTA ${e.lap}`, 0.8, 'lap');
+          hud.showToast(`Volta: ${formatTime(times[times.length - 1])} · armas recarregadas`);
           sfxLap(e.lap === laps);
         }
         break;
       case 'finish':
-        if (e.racer === me) {
-          this.phase = 'finished';
-          this.hud.message(e.place === 1 ? 'VITÓRIA!' : `${e.place}º LUGAR`, 3, 'go');
-          this.resultsTimer = 3;
-          this.settleCampaignFinish();
+        if (local(e.racer)) {
+          this.hudOf(e.racer).message(e.place === 1 ? 'VITÓRIA!' : `${e.place}º LUGAR`, this.p2 >= 0 ? 0 : 3, 'go');
+          // tela dividida: os resultados esperam os dois jogadores cruzarem a chegada
+          if (this.localsFinished()) {
+            this.phase = 'finished';
+            this.resultsTimer = 3;
+            this.settleCampaignFinish();
+          }
         }
         break;
       case 'burn':
-        if (e.racer === me) sfxBurn(0.8);
+        if (local(e.racer)) sfxBurn(0.8);
         break;
       case 'lapped':
-        if (e.racer === me) sfxPickup('money');
-        if (e.racer === me) this.hud.showToast(`Você abriu uma volta sobre ${racers[e.victim].name}! +$${e.bonus.toLocaleString('pt-BR')} se vencer`);
-        else if (e.victim === me) this.hud.showToast(`${racers[e.racer].name} abriu uma volta sobre você!`);
+        if (local(e.racer)) sfxPickup('money');
+        if (local(e.racer)) this.hudOf(e.racer).showToast(`Você abriu uma volta sobre ${racers[e.victim].name}! +$${e.bonus.toLocaleString('pt-BR')} se vencer`);
+        if (local(e.victim)) this.hudOf(e.victim).showToast(`${racers[e.racer].name} abriu uma volta sobre você!`);
         break;
       case 'assist': {
         const ac = racers[e.racer].car;
         if (e.kind === 'jump') this.effects.jumpJet(ac.x, ac.y, ac.z);
         else this.effects.nitroBurst(ac.x - Math.sin(ac.heading) * 2, ac.y, ac.z - Math.cos(ac.heading) * 2);
-        sfxAssist(e.kind, e.racer === me ? 1 : this.vol(ac.x, ac.z) * 0.7, this.pan(ac.x, ac.z));
+        sfxAssist(e.kind, local(e.racer) ? 1 : this.vol(ac.x, ac.z) * 0.7, this.pan(ac.x, ac.z));
         break;
       }
       case 'fall':
         this.effects.fall(e.x, THEMES[this.track.def.theme].groundLevel, e.z, THEMES[this.track.def.theme].groundStyle);
-        sfxFall(e.racer === me ? 1 : this.vol(e.x, e.z) * 0.6, this.pan(e.x, e.z));
-        if (e.racer === me) this.hud.message('CAIU!', 1.2, 'warn');
+        sfxFall(local(e.racer) ? 1 : this.vol(e.x, e.z) * 0.6, this.pan(e.x, e.z));
+        if (local(e.racer)) this.hudOf(e.racer).message('CAIU!', 1.2, 'warn');
         break;
       case 'respawn':
         break;
@@ -1970,6 +2135,7 @@ export class Game {
     if (this.net) this.net.menuOpen = false;
     // motores e locutor calam já, com ou sem rede (no online a prova segue rodando atrás, mas muda)
     this.engine.stop();
+    this.engine2?.stop();
     this.rivalEngines.stop();
     this.announcer.stop();
     // a prova congela atrás dos resultados (ver frame)
@@ -1983,8 +2149,8 @@ export class Game {
       kills: r.kills,
       prize: this.world.prizes[r.place - 1] ?? 0,
       money: r.money,
-      me: r.id === this.playerId,
-      pilot: r.id === this.playerId ? this.setup.pilot : r.name,
+      me: this.isLocal(r.id),
+      pilot: r.id === this.playerId ? this.setup.pilot : r.id === this.p2 && this.setup.second ? this.setup.second.pilot : r.name,
       vehicleId: r.spec.id,
     }));
     let report: CampaignReport | null = null;
@@ -1992,11 +2158,13 @@ export class Game {
       // o resultado já foi contado e salvo na chegada (settleCampaignFinish); aqui só é mostrado
       const done = this.settled ?? this.settleCampaignFinish();
       // dinheiro e abates do jogador: os creditados na chegada (não o que mudou depois dela)
-      const mine = rows.find((r) => r.me);
+      const mine = rows[order.findIndex((r) => r.id === this.playerId)];
+      const second = this.p2 >= 0 ? rows[order.findIndex((r) => r.id === this.p2)] : undefined;
       if (done && mine) {
         mine.money = done.money;
-        mine.kills = done.kills;
+        if (!second) mine.kills = done.kills;
       }
+      if (done && second) second.money = done.coopMoney;
       if (done) {
         const res = done.report;
         report = {
@@ -2031,7 +2199,10 @@ export class Game {
     const c = this.campaign;
     if (this.setup.mode !== 'campaign' || !c || this.settled) return this.settled;
     const p = this.player;
-    this.settled = settleFinish(c, p.finishPlace || p.place, p.money, p.kills);
+    // cooperativa: vale a melhor colocação da dupla; cada um leva o próprio dinheiro
+    const p2 = c.coop && this.p2 >= 0 ? this.world.racers[this.p2] : null;
+    const place = Math.min(p.finishPlace || p.place, p2 ? p2.finishPlace || p2.place : Infinity);
+    this.settled = settleFinish(c, place, p.money, p.kills + (p2?.kills ?? 0), p2?.money ?? 0);
     const scene = sceneAfter(c, this.settled.fromPlanet, this.settled.report);
     // subiu de planeta: o "Continuar" dos resultados mostra a viagem até o novo planeta
     this.warpFrom = scene === 'warp' ? this.settled.fromPlanet : -1;
@@ -2044,16 +2215,28 @@ export class Game {
     return campaignLabel(this.campaign!);
   }
 
-  private hubData(): HubData {
+  /** Dados da garagem/loja vistos por um jogador (cooperativa: 1 = jogador 2). */
+  private hubData(player = 0): HubData {
     const c = this.campaign!;
+    const v = coopView(c, player);
+    const second = c.coop ? coopView(c, 1) : null;
     return {
-      state: c,
+      state: v,
       planet: currentPlanet(c),
       track: new Track(trackById(currentTrackId(c))),
       opponents: opponentsFor(c, VEHICLES),
-      spec: playerSpec(c, VEHICLES),
-      character: CHARACTERS.find((ch) => ch.id === c.characterId) ?? CHARACTERS[0],
+      spec: playerSpec(v, VEHICLES),
+      character: CHARACTERS.find((ch) => ch.id === v.characterId) ?? CHARACTERS[0],
       vehicles: VEHICLES,
+      coop: second
+        ? {
+            player: c.coop ? player : 0,
+            state: second,
+            spec: playerSpec(second, VEHICLES),
+            character: CHARACTERS.find((ch) => ch.id === second.characterId) ?? CHARACTERS[0],
+            padReady: !!splitAssignment(false).p2,
+          }
+        : undefined,
     };
   }
 
@@ -2071,6 +2254,7 @@ export class Game {
     // (a viagem só sai do save no fim da cena, em warpDone: fechar no meio dela a mostra de novo)
     this.phase = 'menu';
     this.engine.stop();
+    this.engine2?.stop();
     this.rivalEngines.stop();
     this.hud.setVisible(false);
     this.menus.showPlanetWarp({ from, to: currentPlanet(c), planets: planetCount(c), vehicleId: c.car.vehicleId, color: c.color, news: planetNews(c, VEHICLES) });
@@ -2155,7 +2339,9 @@ export class Game {
     if (this.setup.mode !== 'campaign' || !c) return null;
     const p = this.player;
     const hadMark = !!c.raceInProgress;
-    const o = resolveLeave(c, { started: this.world.started, finished: !!this.settled, resolved: this.resultsShown, videoLostNow: this.glLost }, this.settled, p.finishPlace || p.place);
+    const p2 = this.p2 >= 0 ? this.world.racers[this.p2] : null;
+    const place = Math.min(p.finishPlace || p.place, p2 ? p2.finishPlace || p2.place : Infinity);
+    const o = resolveLeave(c, { started: this.world.started, finished: !!this.settled, resolved: this.resultsShown, videoLostNow: this.glLost }, this.settled, place);
     if (o.kind !== 'none') this.resultsShown = true; // a corrida está resolvida: nada de contar de novo
     if (o.kind === 'forfeit' || (hadMark && !c.raceInProgress)) saveCampaign(c);
     return afterLeave(c, action, o);
@@ -2202,6 +2388,7 @@ export class Game {
     const c = this.campaign!;
     this.phase = 'menu';
     this.engine.stop();
+    this.engine2?.stop();
     this.rivalEngines.stop();
     this.announcer.stop();
     this.hud.setVisible(false);
@@ -2213,14 +2400,18 @@ export class Game {
     this.menus.showHub(this.hubData(), notice);
   }
 
+  /** Jogador da loja aberta (cooperativa: cada um compra com o próprio dinheiro). */
+  private shopPlayer = 0;
+
   private buy(price: number | null, apply: () => void, label: string): void {
     const c = this.campaign!;
-    if (price === null || price > c.money) return;
-    c.money -= price;
+    const owner = coopOwner(c, this.shopPlayer);
+    if (price === null || price > owner.money) return;
+    owner.money -= price;
     apply();
     saveCampaign(c);
     sfxPickup('money');
-    this.menus.showShop(this.hubData(), `✔ ${label} comprado(a)!`);
+    this.menus.showShop(this.hubData(this.shopPlayer), `✔ ${label} comprado(a)!`);
   }
 
   private audioSettings() {
@@ -2254,6 +2445,12 @@ export class Game {
       quickRace: (o: QuickOptions) => {
         beginAudio();
         this.setup = this.quickSetup(o);
+        this.startRace();
+      },
+      splitRace: (o: SplitOptions) => {
+        beginAudio();
+        (this.engine2 ??= new EngineSound()).start();
+        this.setup = this.splitSetup(o);
         this.startRace();
       },
       /**
@@ -2295,10 +2492,14 @@ export class Game {
       },
       newCampaign: (o: NewCampaignOptions) => {
         beginAudio();
-        const c = newCampaign(o.characterId, o.color, o.difficulty);
+        const c = newCampaign(o.characterId, o.color, o.difficulty, o.coop);
         this.campaign = c;
         saveToSlot(o.slot, c);
-        this.toHub(`Bem-vindo a ${this.campaignLabel()}! Você tem um Dirt Devil e $10.000 — passe na loja.`);
+        this.toHub(
+          c.coop
+            ? `Bem-vindos a ${this.campaignLabel()}! Cada jogador tem um Dirt Devil e $10.000 — passem na loja. Os pontos são da dupla: vale a melhor colocação.`
+            : `Bem-vindo a ${this.campaignLabel()}! Você tem um Dirt Devil e $10.000 — passe na loja.`,
+        );
       },
       continueCampaign: () => {
         beginAudio();
@@ -2317,31 +2518,45 @@ export class Game {
         return true;
       },
       campaignRace: () => {
+        const c = this.campaign!;
+        if (c.coop) {
+          // cooperativa: sem o controle do jogador 2 a corrida não larga
+          if (!splitAssignment(false).p2) return this.toHub('Conecte o controle do jogador 2 e aperte um botão dele para correr em dupla.');
+          // controles de agora (o grid só remonta se mudaram desde a garagem)
+          this.setup = this.campaignSetup(c);
+        }
         beginAudio();
+        if (c.coop) (this.engine2 ??= new EngineSound()).start();
         this.startRace();
       },
-      openShop: () => this.menus.showShop(this.hubData()),
+      openShop: (player = 0) => {
+        this.shopPlayer = this.campaign?.coop ? player : 0;
+        this.menus.showShop(this.hubData(this.shopPlayer));
+      },
       buyCar: (id: string) => {
-        const c = this.campaign!;
+        const o = coopOwner(this.campaign!, this.shopPlayer);
         // preço do novo menos a revenda do atual (negativo: a diferença volta para o jogador)
-        this.buy(carSwapCost(c.car, id), () => (c.car = newCarSetup(id)), VEHICLES[id].name);
+        this.buy(carSwapCost(o.car, id), () => (o.car = newCarSetup(id)), VEHICLES[id].name);
       },
       buyUpgrade: (kind: 'engine' | 'tires' | 'shocks' | 'armor') => {
         const c = this.campaign!;
+        const o = coopOwner(c, this.shopPlayer);
         // a loja só vende peças até o nível liberado neste planeta
-        this.buy(c.car.upgrades[kind] < shopLevel(c) ? upgradePrice(c.car, kind) : null, () => c.car.upgrades[kind]++, 'Melhoria');
+        this.buy(o.car.upgrades[kind] < shopLevel(c) ? upgradePrice(o.car, kind) : null, () => o.car.upgrades[kind]++, 'Melhoria');
       },
       buyCharge: (kind: 'front' | 'rear' | 'nitro') => {
         const c = this.campaign!;
+        const o = coopOwner(c, this.shopPlayer);
         // preço da campanha (planeta × dificuldade), o mesmo mostrado na loja
-        this.buy(campaignChargePrice(c, kind), () => c.car.charges[kind]++, 'Carga extra');
+        this.buy(campaignChargePrice(c, kind, o.car), () => o.car.charges[kind]++, 'Carga extra');
       },
       buyPaint: () => {
         const c = this.campaign!;
+        const o = coopOwner(c, this.shopPlayer);
         // gasto opcional do último planeta: a cor muda na loja, na garagem e na corrida
-        this.buy(paintPrice(c), () => {
-          c.paint = 'champion';
-          c.color = CHAMPION_PAINT.color;
+        this.buy(paintPrice(coopView(c, this.shopPlayer)), () => {
+          o.paint = 'champion';
+          o.color = CHAMPION_PAINT.color;
         }, 'Pintura de campeão');
       },
       showPassword: () => this.menus.showPassword(exportSave(this.campaign!)),
@@ -2420,6 +2635,7 @@ export class Game {
           if (closing) return;
           this.music.setMood('pause');
           this.engine.stop();
+          this.engine2?.stop();
           this.rivalEngines.stop();
           this.menus.showGoodbye();
         });
@@ -2838,6 +3054,7 @@ export class Game {
     this.endShowroom();
     this.phase = 'menu';
     this.engine.stop();
+    this.engine2?.stop();
     this.announcer.stop();
     this.hud.setVisible(false);
     net.inLobby = true;
@@ -2914,6 +3131,7 @@ export class Game {
       this.endShowroom();
       this.phase = 'menu';
       this.engine.stop();
+      this.engine2?.stop();
       this.rivalEngines.stop();
       this.announcer.stop();
       this.hud.setVisible(false);
@@ -3668,6 +3886,7 @@ export class Game {
     this.endShowroom();
     this.phase = 'menu';
     this.engine.stop();
+    this.engine2?.stop();
     this.announcer.stop();
     this.hud.setVisible(false);
     this.screen = 'main';
@@ -3715,6 +3934,8 @@ export class Game {
     const world = this.world;
     let playerPose: { x: number; y: number; z: number; heading: number } | null = null;
     const poseOut = this.playerPoseTmp;
+    const split = this.splitView;
+    const p2 = split ? this.p2 : -1;
 
     // laço simples (sem closure por quadro)
     for (let i = 0; i < world.racers.length; i++) {
@@ -3737,7 +3958,7 @@ export class Game {
       visual.root.position.set(x, y, z);
       visual.root.rotation.set(-lerp(p.pitch, v.pitch, Math.min(al, 1)), heading, lerp(p.roll, v.roll, Math.min(al, 1)), 'YXZ');
       visual.animate({ spin: v.wheelSpin, steer: v.steer, speed: forwardSpeed(v), time: this.clock, grounded: v.grounded, roll: view.susp.roll, pitch: view.susp.pitch });
-      this.suspension(view, r, frameDt, i === this.playerId);
+      this.suspension(view, r, frameDt, i === this.playerId || i === p2);
       // chamas do nitro: apagadas no carro que já chegou (escurecido); coladas na câmera
       // (perseguição/cockpit, < 6 m) encolhem para não estourar a tela
       // (também os rivais: as turbinas do Havac à frente viravam discos brancos no cockpit)
@@ -3754,7 +3975,8 @@ export class Game {
       view.shadow.rotation.y = heading;
       (view.shadow.material as THREE.MeshBasicMaterial).opacity = clamp(1 - lift / 4, 0, 1);
       view.shadow.scale.setScalar(1 + lift * 0.08);
-      if (i === this.playerId) this.effects.markPlayer(x, ground, z, heading, r.alive && !this.showcase && this.rig.mode !== 'cockpit', this.rig.mode !== 'iso');
+      // (tela dividida: o anel vai para baixo do carro de cada jogador na hora de desenhar a metade dele)
+      if (i === this.playerId && !split) this.effects.markPlayer(x, ground, z, heading, r.alive && !this.showcase && this.rig.mode !== 'cockpit', this.rig.mode !== 'iso');
       if (view.label) {
         // no cockpit e bem de perto na perseguição, a etiqueta taparia a visão
         const near = this.rig.mode !== 'iso' && Math.hypot(x - this.rig.active.position.x, z - this.rig.active.position.z) < 9;
@@ -3801,6 +4023,14 @@ export class Game {
         const bz = z - forwardZ(heading) * 2.4 * CAR_SCALE;
         this.effects.nitro(bx, y + 0.55 * CAR_SCALE, bz, heading, forwardSpeed(v));
       }
+      if (i === p2) {
+        visual.steeringWheel.rotation.z = v.steer * 1.6;
+        const o2 = this.playerPoseTmp2;
+        o2.x = x;
+        o2.y = y;
+        o2.z = z;
+        o2.heading = heading;
+      }
       if (i === this.playerId) {
         visual.body.position.y = clamp(this.bounce, -0.25, 0.15);
         if (this.rig.mode === 'cockpit') visual.body.rotation.set(0, 0, 0);
@@ -3830,7 +4060,27 @@ export class Game {
       },
       frameDt,
     );
-    this.chaseOcclusion(pose, frameDt);
+    if (split) {
+      const pv2 = this.views[p2].visual;
+      const pose2 = this.playerPoseTmp2;
+      const c2 = this.world.racers[p2].car;
+      pv2.root.updateMatrixWorld();
+      this.rig2.update(
+        {
+          position: this.poseTmp.position.set(pose2.x, pose2.y, pose2.z),
+          quaternion: pv2.root.quaternion,
+          heading: pose2.heading,
+          velocity: this.poseTmp.velocity.set(c2.vx, c2.vy, c2.vz),
+          shake: this.shake2,
+          eye: pv2.eye,
+          track: this.track,
+          pieceIndex: c2.pieceIndex,
+        },
+        frameDt,
+      );
+      // (sem o carro fantasma da perseguição: o rival que some numa metade apareceria na outra)
+      this.rig.chaseLift = this.rig2.chaseLift = 0;
+    } else this.chaseOcclusion(pose, frameDt);
     if (pf) t0 = this.lap('render:carros', t0);
     // convidado: os tiros dele saem do carro previsto (à frente do estado do host): desenha os
     // projéteis dele adiantados pelo mesmo tanto, senão nasciam atrás do carro
@@ -3861,11 +4111,21 @@ export class Game {
       // resultados na tela (também no online, em que a prova segue rodando): motores calados
       const engineOn = !this.resultsShown;
       if (engineOn) this.engine.update(clamp(Math.abs(speed) / r.spec.maxSpeed, 0, 1.3), r.alive ? r.lastInput.throttle : 0, pc.nitroTime > 0, slip);
+      if (split) {
+        // jogador 2: HUD e motor próprios
+        const r2 = world.racers[p2];
+        const c2 = r2.car;
+        const speed2 = forwardSpeed(c2);
+        this.hud2?.update(frameDt, this.fillHud(r2, speed2, true));
+        const lat2 = Math.abs(c2.vx * Math.cos(c2.heading) - c2.vz * Math.sin(c2.heading));
+        const slip2 = !r2.alive || !c2.grounded ? 0 : r2.spinTime > 0 ? 1 : clamp((lat2 - 3) / 8, 0, 1);
+        if (engineOn) this.engine2?.update(clamp(Math.abs(speed2) / r2.spec.maxSpeed, 0, 1.3), r2.alive ? r2.lastInput.throttle : 0, c2.nitroTime > 0, slip2);
+      }
       // rivais audíveis: os mais próximos, com pan e Doppler pela velocidade de aproximação
       const near = this.nearList;
       near.length = 0;
       for (const o of engineOn ? world.racers : []) {
-        if (o.id === this.playerId || !o.alive) continue;
+        if (o.id === this.playerId || o.id === p2 || !o.alive) continue;
         const dx = o.car.x - pc.x;
         const dz = o.car.z - pc.z;
         const dist = Math.hypot(dx, dz);
@@ -3887,8 +4147,15 @@ export class Game {
 
     const w = this.width;
     const h = this.height;
+    if (split) {
+      this.renderSplit(w, h, pose);
+      if (pf) this.lap('render:gpu', t0);
+      return;
+    }
     this.renderer.setScissorTest(false);
     this.renderer.setViewport(0, 0, w, h);
+    // (a tela dividida troca a cabine do carro por quadro: aqui volta ao que a câmera do jogador 1 pede)
+    this.cockpitLook(this.playerId, this.rig.mode === 'cockpit');
     const cam = this.showcase?.cam ?? this.rig.active;
     if (this.showcase) {
       this.showcase.cam.aspect = w / h;
@@ -3917,5 +4184,75 @@ export class Game {
       this.renderer.setScissorTest(false);
     }
     if (pf) this.lap('render:gpu', t0);
+  }
+
+  /**
+   * Tela dividida: cada jogador na sua metade (lado a lado), com a câmera, o cockpit, o anel sob o
+   * carro, as etiquetas dos rivais e o sol dele. Sem bloom (o pós-processamento é da tela inteira).
+   */
+  private renderSplit(w: number, h: number, pose1: { x: number; y: number; z: number; heading: number }): void {
+    const half = Math.floor(w / 2);
+    const pose2 = this.playerPoseTmp2;
+    const r1 = this.world.racers[this.playerId];
+    const r2 = this.world.racers[this.p2];
+    // perto um do outro, uma sombra só (centrada entre os dois) serve para as duas metades
+    const shared = Math.hypot(pose1.x - pose2.x, pose1.z - pose2.z) < 40;
+    const shadowsOn = this.sun.castShadow && this.sun.shadow.intensity > 0;
+    if (shared) {
+      this.sun.position.set((pose1.x + pose2.x) / 2, (pose1.y + pose2.y) / 2, (pose1.z + pose2.z) / 2);
+      this.sun.target.position.copy(this.sun.position);
+      this.sun.position.addScaledVector(SUN_DIR, 90);
+      if (shadowsOn && (this.onBattery ? this.drawn % ECO_SHADOW_EVERY === 0 : this.clock - this.shadowAt >= 0.024 || this.clock < this.shadowAt)) {
+        this.renderer.shadowMap.needsUpdate = true;
+        this.shadowAt = this.clock;
+      }
+    }
+    this.renderer.setScissorTest(true);
+    for (let k = 0; k < 2; k++) {
+      const rig = k ? this.rig2 : this.rig;
+      const pose = k ? pose2 : pose1;
+      const me = k ? r2 : r1;
+      const x0 = k ? half : 0;
+      const vw = k ? w - half : half;
+      // cockpit: só o carro dono desta metade troca a cabine pelo painel
+      this.cockpitLook(this.playerId, !k && rig.mode === 'cockpit');
+      this.cockpitLook(this.p2, !!k && rig.mode === 'cockpit');
+      const ground = this.track.query(pose.x, pose.z, me.car.pieceIndex).height;
+      this.effects.markPlayer(pose.x, ground, pose.z, pose.heading, me.alive && rig.mode !== 'cockpit', rig.mode !== 'iso');
+      this.splitTags(rig, me);
+      if (!shared) {
+        this.sun.position.set(pose.x, pose.y, pose.z).addScaledVector(SUN_DIR, 90);
+        this.sun.target.position.set(pose.x, pose.y, pose.z);
+        if (shadowsOn) this.renderer.shadowMap.needsUpdate = true;
+      }
+      this.sky?.position.copy(rig.active.position);
+      this.renderer.setViewport(x0, 0, vw, h);
+      this.renderer.setScissor(x0, 0, vw, h);
+      this.renderer.render(this.scene, rig.active);
+    }
+    this.renderer.setScissorTest(false);
+    this.renderer.setViewport(0, 0, w, h);
+  }
+
+  /** Mostra o painel (cockpit) ou a cabine de um carro. */
+  private cockpitLook(id: number, cockpit: boolean): void {
+    const view = this.views[id];
+    if (!view || view.visual.cockpit.visible === cockpit) return;
+    view.visual.cockpit.visible = cockpit;
+    for (const c of view.visual.cabin) c.visible = !cockpit;
+  }
+
+  /** Etiquetas dos rivais na metade de um jogador (some no cockpit, colada na câmera ou no carro dele). */
+  private splitTags(rig: CameraRig, me: Racer): void {
+    const cam = rig.active.position;
+    for (let i = 0; i < this.views.length; i++) {
+      const label = this.views[i].label;
+      if (!label) continue;
+      const r = this.world.racers[i];
+      const pos = label.sprite.position;
+      const near = rig.mode !== 'iso' && Math.hypot(pos.x - cam.x, pos.z - cam.z) < 9;
+      const onMe = Math.hypot(pos.x - me.car.x, pos.z - me.car.z) < 3;
+      label.sprite.visible = r.alive && !r.finishPlace && rig.mode !== 'cockpit' && !near && !onMe;
+    }
   }
 }

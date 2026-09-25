@@ -267,3 +267,31 @@ body:has(.touch) .rh-note { left: 50%; bottom: max(8px, env(safe-area-inset-bott
   pointer-events: none;
   background: radial-gradient(ellipse at 50% 55%, rgba(0, 0, 0, 0) 58%, rgba(0, 0, 0, 0.32) 100%);
 }
+
+/* tela dividida: a HUD do jogador 1 fica na metade esquerda e a do jogador 2 (dentro dela) na direita */
+.rh.split-a { right: 50%; }
+.rh.split-b { inset: 0 -100% 0 100%; }
+.rh.split-a::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -2px;
+  width: 4px;
+  background: linear-gradient(180deg, #000, #3a3a44 50%, #000);
+  box-shadow: 0 0 6px rgba(0, 0, 0, 0.8);
+}
+.rh.split-b::after { content: none; }
+/* o mesmo painel em meia tela: um pouco menor, e o número do jogador no canto de baixo */
+.rh.split-a > .rh-left, .rh.split-b > .rh-left { transform: scale(0.82); transform-origin: top left; }
+.rh.split-a > .rh-right, .rh.split-b > .rh-right { transform: scale(0.82); transform-origin: top right; }
+.rh.split-a > .rh-center, .rh.split-b > .rh-center { font-size: 48px; }
+.rh-player {
+  position: absolute;
+  bottom: max(10px, env(safe-area-inset-bottom));
+  right: 14px;
+  font: italic 900 18px/1 'Arial Black', 'Trebuchet MS', sans-serif;
+  color: #fff;
+  text-shadow: 0 2px 0 #000, 0 0 6px #000;
+}
+.rh:not(.split-a):not(.split-b) > .rh-player { display: none; }

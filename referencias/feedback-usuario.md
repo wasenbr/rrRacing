@@ -150,3 +150,10 @@ Cada item precisa ser atendido e verificado pelos avaliadores.
     para navegar nos menus (direcional escolhe, confirmar/voltar), com opção de configurar os botões.
 68. Controle de PlayStation 5: R2 acelera, L2 freia, R1 muda a câmera, ✕ atira, □ solta o turbo e
     ○ solta a arma traseira (L1 continua derrapando).
+
+# Retorno do usuário (2026-09-25, tela dividida)
+
+69. Modo de 2 jogadores em tela dividida, para jogar com dois controles de PlayStation 5: cada
+    jogador com seu carro, sua câmera e sua HUD, no mesmo aparelho.
+70. Controle de PlayStation: △ solta o turbo e □ muda a distância da câmera (substitui o item 68
+    nesses dois botões).

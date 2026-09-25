@@ -4,7 +4,7 @@ import { VEHICLES } from '../data/vehicles';
 import {
   advanceEarly, applyRaceResult, bossBonus, bossOf, campaignChargePrice, CAMPAIGN_RULES, CHARGE_ROOM, chargeScale, canAdvanceEarly, carComingSoon, carsForSale, CHAMPION_BONUS, currentPlanet, currentTrackId, decodeSave, encodeSave,
   forfeitCosts, forfeitRace, HOARD_CAP, HOARD_MONEY, hoardFactor, BOSS_BONUS, buyPaint, CAMPAIGN_PRIZES, CHAMPION_PAINT, paintPrice, prizeScale, racesIn, markRaceStarted, moneyScale, resolveAbandonedRace, shopHeadroom, newCampaign, opponentsFor, PLANET_MONEY, planetCount, planetForLevel, PLANETS, planetTracks, playerSpec, POINTS, prizesFor, raceKind, RIVAL_LEVEL,
-  rivalAggression, rivalEngine, rivalExtraCharges, rivalLevel, rivalPace, RIVALS, seasonInfo, seasonSchedule, shopLevel, START_MONEY, tier, type CampaignState,
+  coopOwner, coopView, rivalAggression, rivalEngine, rivalExtraCharges, rivalLevel, rivalPace, RIVALS, seasonInfo, seasonSchedule, shopLevel, START_MONEY, tier, type CampaignState,
 } from './campaign';
 import {
   attributeTags, buildSpec, CAR_PRICES, carAttributes, carSwapCost, CHARGE_KINDS, chargePrice, maxedSetup, maxExtraCharges, newCarSetup, tradeInFor, tradeInValue, UPGRADE_KINDS, upgradeAvailable, upgradeLabel, upgradeName,
@@ -1049,6 +1049,60 @@ describe('save: pendências e coerência', () => {
     expect(e.raceInProgress).toBeUndefined();
     // marca com tipo errado invalida o save
     const bad = { ...newCampaign('jake', 0, 'normal'), raceInProgress: 'sim' } as unknown as CampaignState;
+    expect(decodeSave(encodeSave(bad))).toBeNull();
+  });
+});
+
+describe('campanha cooperativa', () => {
+  const coop = () => newCampaign('jake', 0xe02828, 'normal', { characterId: 'tarquinn', color: 0x2f7bff });
+
+  it('o jogador 2 começa com carro e dinheiro próprios', () => {
+    const c = coop();
+    expect(c.coop).toMatchObject({ characterId: 'tarquinn', color: 0x2f7bff, money: START_MONEY });
+    expect(c.coop!.car).not.toBe(c.car);
+    expect(newCampaign('jake', 0).coop).toBeUndefined();
+  });
+
+  it('coopView mostra a campanha pelos olhos do jogador 2 (o carro é o mesmo objeto)', () => {
+    const c = coop();
+    c.coop!.money = 1234;
+    const v = coopView(c, 1);
+    expect(v.money).toBe(1234);
+    expect(v.characterId).toBe('tarquinn');
+    expect(v.car).toBe(c.coop!.car);
+    expect(v.planet).toBe(c.planet);
+    expect(coopView(c, 0)).toBe(c);
+    expect(coopOwner(c, 1)).toBe(c.coop);
+    expect(coopOwner(newCampaign('jake', 0), 1)).not.toHaveProperty('characterId', 'tarquinn');
+  });
+
+  it('pontos pela melhor colocação da dupla; cada um leva o próprio dinheiro', () => {
+    const c = coop();
+    const r = applyRaceResult(c, 1, 5000, 3, 2000);
+    expect(r.pointsEarned).toBe(POINTS[0]);
+    expect(c.money).toBe(START_MONEY + 5000);
+    expect(c.coop!.money).toBe(START_MONEY + 2000);
+    expect(c.stats.earnings).toBe(7000);
+    expect(c.stats.kills).toBe(3);
+  });
+
+  it('o bônus do chefe vai para os dois', () => {
+    const c = coop();
+    c.division = 1;
+    c.race = racesIn(c) - 1;
+    c.points = 10000;
+    expect(raceKind(c)).toBe('boss');
+    const bonus = bossBonus(c);
+    applyRaceResult(c, 1, 0, 0, 0);
+    expect(c.money).toBe(START_MONEY + bonus);
+    expect(c.coop!.money).toBe(START_MONEY + bonus);
+  });
+
+  it('a senha leva o jogador 2 e recusa um jogador 2 inválido', () => {
+    const c = coop();
+    c.coop!.car.upgrades.engine = 2;
+    expect(decodeSave(encodeSave(c))?.coop).toEqual(c.coop);
+    const bad = { ...coop(), coop: { characterId: 'ninguem', color: 0, money: 0, car: newCarSetup('dirtdevil') } } as CampaignState;
     expect(decodeSave(encodeSave(bad))).toBeNull();
   });
 });

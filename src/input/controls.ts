@@ -1,7 +1,7 @@
 import { clamp } from '../sim/math';
 import { emptyInput, type ControlInput } from '../sim/input';
 import { icon } from '../ui/icons';
-import { padSetupActive, readPads } from './gamepad';
+import { connectedPads, padSetupActive, readPads, readPadsFrom, type PadState } from './gamepad';
 import { fullscreenSupported, iosInstallSteps, isInstalled, isIos } from '../ui/pwa';
 
 const TILT_KEY = 'rnrr3d-tilt';
@@ -74,8 +74,8 @@ export async function setTiltSteering(on: boolean): Promise<boolean> {
   return on;
 }
 
-/** Ações de interface (não vão para a simulação). */
-export type UiAction = 'camera' | 'pause' | 'mute' | 'fullscreen';
+/** Ações de interface (não vão para a simulação). `camera2`: câmera do jogador 2 na tela dividida. */
+export type UiAction = 'camera' | 'pause' | 'mute' | 'fullscreen' | 'camera2';
 
 /**
  * Junta teclado, controle (Gamepad API) e botões de toque num único ControlInput.
@@ -86,6 +86,13 @@ export class Controls {
   private listeners: ((a: UiAction) => void)[] = [];
   private prevPadCamera = false;
   private prevPadPause = false;
+  private prevPad2Camera = false;
+  private prevPad2Pause = false;
+  /**
+   * Tela dividida: controle (Gamepad.index) de cada jogador. O jogador 1 também usa o teclado
+   * (p1 = null: só o teclado). Fora dela (null), todos os controles valem para o único jogador.
+   */
+  private split: { p1: number | null; p2: number } | null = null;
   /** direção analógica do volante de toque (-1..1), 0 = solto */
   private touchSteer = 0;
   /** volante de toque arrastado até o fim da faixa: curva fechada */
@@ -157,23 +164,52 @@ export class Controls {
     return input;
   }
 
+  /** Liga a tela dividida com o controle de cada jogador (null desliga). */
+  setSplit(split: { p1: number | null; p2: number } | null): void {
+    this.split = split;
+    this.prevPad2Camera = this.prevPad2Pause = false;
+  }
+
+  /** Controles de um jogador da tela dividida (pelo índice do navegador). */
+  private splitPads(index: number | null): Gamepad[] {
+    return index === null ? [] : connectedPads().filter((p) => p.index === index);
+  }
+
+  /** Comandos do jogador 2 (tela dividida): só o controle dele. */
+  readSecond(): ControlInput {
+    const input = emptyInput();
+    const pad = padSetupActive || !this.split ? null : readPadsFrom(this.splitPads(this.split.p2));
+    if (!pad) return input;
+    applyPad(input, pad);
+    if (pad.camera && !this.prevPad2Camera) this.emit('camera2');
+    if (pad.pause && !this.prevPad2Pause) this.emit('pause');
+    this.prevPad2Camera = pad.camera;
+    this.prevPad2Pause = pad.pause;
+    return input;
+  }
+
   private readGamepad(input: ControlInput): void {
-    const pad = padSetupActive ? null : readPads();
+    const pad = padSetupActive ? null : this.split ? readPadsFrom(this.splitPads(this.split.p1)) : readPads();
     if (!pad) return;
-    if (pad.steer) input.steer = clamp(input.steer + pad.steer, -1, 1);
-    input.throttle = Math.max(input.throttle, pad.throttle);
-    input.brake = Math.max(input.brake, pad.brake);
-    input.fire ||= pad.fire;
-    input.drop ||= pad.drop;
-    // LB/L1: curva fechada (freio de mão)
-    input.sharp ||= pad.sharp;
-    input.nitro ||= pad.nitro;
+    applyPad(input, pad);
     // borda de subida para ações de interface
     if (pad.camera && !this.prevPadCamera) this.emit('camera');
     if (pad.pause && !this.prevPadPause) this.emit('pause');
     this.prevPadCamera = pad.camera;
     this.prevPadPause = pad.pause;
   }
+}
+
+/** Soma o estado de um controle aos comandos (teclado e toque já lidos). */
+function applyPad(input: ControlInput, pad: PadState): void {
+  if (pad.steer) input.steer = clamp(input.steer + pad.steer, -1, 1);
+  input.throttle = Math.max(input.throttle, pad.throttle);
+  input.brake = Math.max(input.brake, pad.brake);
+  input.fire ||= pad.fire;
+  input.drop ||= pad.drop;
+  // LB/L1: curva fechada (freio de mão)
+  input.sharp ||= pad.sharp;
+  input.nitro ||= pad.nitro;
 }
 
 export function isTouchDevice(): boolean {

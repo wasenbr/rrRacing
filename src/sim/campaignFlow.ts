@@ -16,17 +16,19 @@ export interface SettledRace {
   /** dinheiro e abates do jogador creditados na chegada (a tela de resultados mostra estes, congelados) */
   money: number;
   kills: number;
+  /** cooperativa: dinheiro creditado ao jogador 2 */
+  coopMoney: number;
 }
 
 /**
  * O jogador cruzou a chegada: o resultado vale na hora (antes valia só na tela de resultados, 3 s
  * depois; recarregar ou fechar nesse meio contava como último). Muta a campanha; salvar é do chamador.
  */
-export function settleFinish(c: CampaignState, place: number, money: number, kills: number): SettledRace {
+export function settleFinish(c: CampaignState, place: number, money: number, kills: number, coopMoney = 0): SettledRace {
   const fromPlanet = c.planet;
   const promote = promoteGoal(c);
   const boss = currentPlanet(c).local;
-  return { report: applyRaceResult(c, place, money, kills), fromPlanet, promote, boss, money, kills };
+  return { report: applyRaceResult(c, place, money, kills, coopMoney), fromPlanet, promote, boss, money, kills, coopMoney };
 }
 
 /** Cena que vem depois de uma corrida contada: o final (título), a viagem (subiu de planeta) ou nenhuma. */

@@ -45,8 +45,8 @@ const STANDARD: PadMap = {
 };
 
 /**
- * PlayStation (DualSense/DualShock) no mapeamento "standard": R2 acelera, L2 freia, R1 câmera,
- * ✕ atira, □ turbo, ○ arma traseira, L1 derrapar.
+ * PlayStation (DualSense/DualShock) no mapeamento "standard": R2 acelera, L2 freia, □ câmera,
+ * ✕ atira, △ turbo, ○ arma traseira, L1 derrapar.
  */
 const PLAYSTATION: PadMap = {
   confirm: btns(0),
@@ -56,8 +56,8 @@ const PLAYSTATION: PadMap = {
   fire: btns(0),
   drop: btns(1),
   sharp: btns(4),
-  nitro: btns(2, 10, 11),
-  camera: btns(5),
+  nitro: btns(3, 10, 11),
+  camera: btns(2),
   pause: btns(9),
 };
 
@@ -187,7 +187,11 @@ export interface PadState {
 
 /** Estado de corrida de todos os controles juntos (null = nenhum controle). */
 export function readPads(): PadState | null {
-  const pads = connectedPads();
+  return readPadsFrom(connectedPads());
+}
+
+/** Estado de corrida de um grupo de controles (tela dividida: um controle por jogador). */
+export function readPadsFrom(pads: Gamepad[]): PadState | null {
   if (!pads.length) return null;
   let steer = 0;
   let digital = 0;
@@ -209,6 +213,35 @@ export function readPads(): PadState | null {
     camera: actionValue(pads, 'camera') > 0.5,
     pause: actionValue(pads, 'pause') > 0.5,
   };
+}
+
+/**
+ * Controles da tela dividida, na ordem dos jogadores: PlayStation primeiro (o modo é pensado para
+ * dois DualSense), depois os demais, cada grupo na ordem em que o navegador os conectou.
+ */
+export function splitPadOrder(): Gamepad[] {
+  const pads = connectedPads();
+  return [...pads.filter((p) => padKind(p) === 'ps'), ...pads.filter((p) => padKind(p) !== 'ps')];
+}
+
+/**
+ * Controle de cada jogador da tela dividida. Com dois ou mais, os dois primeiros (`swap` inverte);
+ * com um só, ele é do jogador 2 e o jogador 1 fica no teclado.
+ */
+export function splitAssignment(swap: boolean): { p1: Gamepad | null; p2: Gamepad | null } {
+  const pads = splitPadOrder();
+  if (pads.length < 2) return { p1: null, p2: pads[0] ?? null };
+  return swap ? { p1: pads[1], p2: pads[0] } : { p1: pads[0], p2: pads[1] };
+}
+
+/** Nome curto do controle para os menus. */
+export function padLabel(pad: Gamepad): string {
+  const id = pad.id.toLowerCase();
+  if (/dualsense|0ce6|0df2/.test(id)) return 'DualSense (PS5)';
+  if (/dualshock|05c4|09cc/.test(id)) return 'DualShock (PS4)';
+  if (padKind(pad) === 'ps') return 'Controle PlayStation';
+  if (/xbox|xinput|045e/.test(id)) return 'Controle Xbox';
+  return 'Controle USB';
 }
 
 export interface PadMenuState {

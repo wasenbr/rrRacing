@@ -88,6 +88,8 @@ export interface RacerEntry {
   spec: VehicleSpec;
   /** null = humano */
   ai: AiProfile | null;
+  /** equipe (campanha cooperativa): tiros, minas e óleo não pegam nos parceiros */
+  team?: number;
 }
 
 export interface Racer extends RacerEntry {
@@ -315,6 +317,13 @@ function updatePlaces(world: World): void {
   order.forEach((r, i) => (r.place = i + 1));
 }
 
+/** Parceiros de equipe (dois carros diferentes com a mesma equipe). */
+function allies(world: World, a: number, b: number): boolean {
+  if (a === b || a < 0 || b < 0) return false;
+  const t = world.racers[a]?.team;
+  return t !== undefined && t === world.racers[b]?.team;
+}
+
 function damage(world: World, target: Racer, by: number, amount: number, bountyOk = true): void {
   if (!target.alive || target.invuln > 0 || target.finishPlace) return;
   target.armor -= target.ai ? amount : amount * DIFFICULTY[world.difficulty].damageToHuman;
@@ -424,7 +433,7 @@ function stepProjectiles(world: World, dt: number): void {
       let best: Racer | null = null;
       let bestD = p.kind === 'missile' ? 45 : 60;
       for (const r of world.racers) {
-        if (r.id === p.owner || !r.alive || r.finishPlace) continue;
+        if (r.id === p.owner || !r.alive || r.finishPlace || allies(world, r.id, p.owner)) continue;
         const dx = r.car.x - p.x;
         const dz = r.car.z - p.z;
         const d = Math.hypot(dx, dz);
@@ -457,7 +466,7 @@ function stepProjectiles(world: World, dt: number): void {
     }
     if (!dead) {
       for (const r of world.racers) {
-        if (r.id === p.owner || !r.alive || r.finishPlace) continue;
+        if (r.id === p.owner || !r.alive || r.finishPlace || allies(world, r.id, p.owner)) continue;
         if (Math.hypot(r.car.x - p.x, r.car.z - p.z) < CAR_RADIUS + 0.5 && Math.abs(r.car.y + 0.7 - p.y) < 1.8) {
           const w = WEAPONS[p.kind];
           if (r.invuln <= 0) {
@@ -499,7 +508,7 @@ function stepHazards(world: World, dt: number): void {
       if (h.age > w.life || nearFinished(world, h.x, h.z)) dead = true;
       else if (h.age > w.armTime) {
         for (const r of world.racers) {
-          if (!r.alive || !r.car.grounded || r.finishPlace || ((h.spared ?? 0) & (1 << r.id)) !== 0) continue;
+          if (!r.alive || !r.car.grounded || r.finishPlace || ((h.spared ?? 0) & (1 << r.id)) !== 0 || allies(world, r.id, h.owner)) continue;
           if (Math.hypot(r.car.x - h.x, r.car.z - h.z) < w.radius) {
             if (r.invuln <= 0) {
               r.car.grounded = false;
@@ -529,7 +538,7 @@ function stepHazards(world: World, dt: number): void {
       if (h.age > WEAPONS.oil.life) dead = true;
       else {
         for (const r of world.racers) {
-          if (!r.alive || r.finishPlace) continue;
+          if (!r.alive || r.finishPlace || allies(world, r.id, h.owner)) continue;
           const spin = oilSpinTime(r, r.spec, r.id, !r.ai && world.difficulty !== 'hard', h);
           if (spin > 0) {
             startSpin(r, spin);
