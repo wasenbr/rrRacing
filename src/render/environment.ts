@@ -86,7 +86,18 @@ function skyMaterial(top: number, horizon: number, sun: number, stars: number, m
         // de dia (New Mojave, sem estrelas) o disco fica abaixo do limiar do bloom, que abria um
         // halo gigante recortado em volta dele
         float disc = smoothstep(0.99930, 0.99975, s) * (stars > 0.5 ? 4.0 : 1.3);
-        col += sunColor * (exp((s - 1.0) * 70.0) * 0.3 + exp((s - 1.0) * 9.0) * (stars > 0.5 ? 0.05 : 0.08) + disc);
+        col += sunColor * (exp((s - 1.0) * 70.0) * 0.3 + exp((s - 1.0) * 9.0) * (stars > 0.5 ? 0.05 : 0.035) + disc);
+        if (stars < 0.5) {
+          // céu de dia (New Mojave): gradiente mais suave perto do horizonte e silhuetas distantes
+          // de mesas/rochas em azul-acinzentado de névoa (o horizonte era uma linha lisa)
+          float az = atan(d.z, d.x);
+          float ridge = fbm2(vec2(az * 2.2, 1.7));
+          float mesa = 0.012 + 0.05 * smoothstep(0.48, 0.62, ridge) + 0.014 * fbm2(vec2(az * 14.0, 4.0));
+          float far = 0.006 + 0.022 * fbm2(vec2(az * 5.0 + 7.0, 2.3));
+          vec3 haze = mix(horizon, top, 0.25);
+          col = mix(col, haze * 0.82, smoothstep(far + 0.004, far, d.y) * 0.6);
+          col = mix(col, haze * 0.55, smoothstep(mesa + 0.003, mesa, d.y) * step(-0.05, d.y));
+        }
         // Nho: sol baixo, halo largo e quente no horizonte
         if (mood > 1.5 && mood < 2.5) col += sunColor * pow(s, 6.0) * 0.18 * exp(-max(d.y, 0.0) * 5.0);
         col *= mix(0.4, 1.0, smoothstep(-0.3, 0.02, d.y));

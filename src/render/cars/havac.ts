@@ -156,22 +156,28 @@ export function createHavac(color: number, shadows: boolean): CarVisual {
 
   // ---- LISTRAS BRANCAS DIAGONAIS no topo, atrás da cabine (com contorno preto) ----
   // quatro faixas largas e inclinadas, lidas de longe na câmera aérea
+  // (bem inclinadas: ~37° em relação ao eixo do carro, como na referência)
   for (let i = 0; i < 4; i++) {
-    const x = -0.48 + i * 0.32;
-    const ax = x - 0.2;
-    const bx = x + 0.2;
-    const az = 0.1;
-    const bz = -0.86;
-    k.add(ribbon(ax, az + 0.04, bx, bz - 0.04, 0.3, 0.01), ink, 0, 0, 0);
-    k.add(ribbon(ax, az, bx, bz, 0.22, 0.02), white, 0, 0, 0);
+    const x = -0.5 + i * 0.3;
+    const ax = x - 0.26;
+    const bx = x + 0.26;
+    const az = -0.18;
+    const bz = -0.98;
+    k.add(ribbon(ax, az + 0.04, bx, bz - 0.04, 0.28, 0.01), ink, 0, 0, 0);
+    k.add(ribbon(ax, az, bx, bz, 0.2, 0.02), white, 0, 0, 0);
   }
 
-  // ---- CABINE: bolha escura na frente, com moldura ----
-  const CZ = 0.72;
-  // cúpula baixa e achatada (não uma bolha alta)
-  const canopy = k.add(new THREE.SphereGeometry(0.5, 28, 12, 0, Math.PI * 2, 0, Math.PI / 2), k.glass, 0, hullY(0, CZ) - 0.08, CZ);
-  canopy.scale.set(0.8, 0.42, 1.0);
-  k.add(new THREE.TorusGeometry(0.5, 0.04, 8, 32).rotateX(Math.PI / 2), k.trim, 0, hullY(0, CZ) - 0.07, CZ).scale.set(0.81, 1, 1.01);
+  // ---- CABINE: para-brisa inclinado na frente, teto curto e traseira caída, com moldura escura ----
+  const cabin = (d: number): THREE.Shape =>
+    polyShape([
+      [1.2 + d, 0.8],
+      [0.6 + d * 0.5, 1.18 + d],
+      [0.2, 1.2 + d],
+      [-0.08 - d, 1.02 + d * 0.5],
+      [-0.12 - d, 0.8],
+    ]);
+  k.add(sideProfile(cabin(0.05), 0.9, 0.06, 4), k.trim, 0, -0.03, 0);
+  k.add(sideProfile(cabin(0), 0.8, 0.08, 4), k.glass, 0, 0, 0);
 
   // emissor Sundog no bico: canhão curto apontado para a frente, com lente acesa bem à vista
   const SZ = 1.62;
@@ -179,32 +185,22 @@ export function createHavac(color: number, shadows: boolean): CarVisual {
   k.add(new THREE.TorusGeometry(0.2, 0.05, 8, 20), k.chrome, 0, 0.78, SZ + 0.08);
   const sun = k.add(new THREE.SphereGeometry(0.17, 16, 10), k.sundogGlow, 0, 0.78, SZ + 0.1);
   sun.scale.set(1, 1, 0.55);
-  // KO Scatterpack na traseira, entre os pilares das turbinas
-  k.scatterpack(0, 0.84, -1.4);
+  // KO Scatterpack baixo na popa, atrás das turbinas (não fica entre elas)
+  k.scatterpack(0, 0.64, -1.66);
 
   // ---- DUAS TURBINAS: dutos cilíndricos profundos e carenados, sobre suportes largos ----
   const fans: THREE.Group[] = [];
-  const FR = 0.36; // raio interno (área da hélice)
-  const FO = 0.52; // raio externo da carenagem
-  const FL = 0.32; // meia-profundidade do duto (~0,64 m)
-  const FY = 1.42;
-  const FZ = -1.22;
-  const FX = 0.56;
-  const duct = ductGeo(FR, FO, FL, 0.09);
+  // ~25% menores que antes, erguidas em suportes finos à mostra (o vão por baixo aparece)
+  const FR = 0.27; // raio interno (área da hélice)
+  const FO = 0.39; // raio externo da carenagem
+  const FL = 0.24; // meia-profundidade do duto (~0,48 m)
+  const FY = 1.46;
+  const FZ = -1.24;
+  const FX = 0.5;
+  const duct = ductGeo(FR, FO, FL, 0.07);
   const ductMat = new THREE.MeshPhysicalMaterial({ color: 0x1a1b20, metalness: 0.5, roughness: 0.35, clearcoat: 0.6 });
-  // suporte largo: lâmina trapezoidal do convés até a barriga do duto
-  const pylon = sideProfile(
-    polyShape([
-      [FZ - 0.42, 0],
-      [FZ + 0.42, 0],
-      [FZ + 0.26, FY - 0.62 - FO + 0.1],
-      [FZ - 0.3, FY - 0.62 - FO + 0.1],
-    ]),
-    0.2,
-    0.04,
-    4,
-  );
-  const ribGeo = new THREE.BoxGeometry(0.07, 0.06, FL * 2 - 0.1);
+  const ribGeo = new THREE.BoxGeometry(0.06, 0.05, FL * 2 - 0.08);
+  const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
   for (const sx of [-FX, FX]) {
     k.add(duct, ductMat, sx, FY, FZ);
     // parede interna escura e fosca (dá profundidade)
@@ -221,9 +217,11 @@ export function createHavac(color: number, shadows: boolean): CarVisual {
     // estator na saída: cubo + três braços
     for (let r = 0; r < 3; r++) k.add(new THREE.BoxGeometry(FR * 2, 0.04, 0.04), k.steel, sx, FY, FZ - FL + 0.06).rotation.z = (r / 3) * Math.PI + 0.25;
     k.add(new THREE.CylinderGeometry(0.08, 0.1, 0.14, 12).rotateX(Math.PI / 2), k.gunMetal, sx, FY, FZ - FL + 0.08);
-    // suporte largo na cor do casco, com sapata escura
-    k.add(pylon, gloss, sx, 0.62, 0);
-    k.add(new THREE.BoxGeometry(0.34, 0.08, 0.95), k.gunMetal, sx, 0.66, FZ);
+    // suportes à mostra: duas escoras em A do convés até a barriga do duto, sobre uma sapata escura
+    const foot = hullY(sx, FZ) > DECK_TOP ? hullY(sx, FZ) : DECK_TOP;
+    k.add(new THREE.BoxGeometry(0.26, 0.06, 0.6), k.gunMetal, sx, foot + 0.02, FZ);
+    for (const dz of [-0.24, 0.24]) k.tube(V(sx, foot + 0.03, FZ + dz), V(sx, FY - FO + 0.02, FZ + dz * 0.3), 0.04, k.chrome);
+    k.add(new THREE.BoxGeometry(0.12, 0.08, 0.3), k.gunMetal, sx, FY - FO - 0.01, FZ);
     // ventoinha no fundo do duto: cubo + pás (gira)
     const fan = new THREE.Group();
     fan.position.set(sx, FY, FZ + 0.06);
@@ -247,8 +245,8 @@ export function createHavac(color: number, shadows: boolean): CarVisual {
     }
     fans.push(fan);
   }
-  // viga larga ligando as duas turbinas
-  k.add(new THREE.BoxGeometry(FX * 2 - FO * 2 + 0.2, 0.14, 0.5), gloss, 0, FY - 0.08, FZ);
+  // barra fina ligando as duas turbinas (sem bloco entre elas)
+  k.tube(V(-FX + FO - 0.02, FY, FZ), V(FX - FO + 0.02, FY, FZ), 0.035, k.gunMetal);
 
   // número de corrida no convés do bico, ao lado do emissor
   k.decalOn(deck, 0.42, 0.42, 0.5, 1.28, 'number');

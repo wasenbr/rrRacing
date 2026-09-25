@@ -110,8 +110,10 @@ const BLACK: RGB = [0, 0, 0];
 
 const chemLand = ramp([[0, '#2a1208'], [0.35, '#6a2c10'], [0.6, '#a84a18'], [0.85, '#d0782a'], [1, '#e8a050']]);
 const drakBase = ramp([[0, '#140a26'], [0.4, '#3a1a5e'], [0.7, '#62309a'], [1, '#9458d0']]);
-const bogSea = ramp([[0, '#04124a'], [0.6, '#0a2a86'], [1, '#1a52b8']]);
-const bogLand = ramp([[0, '#6a4a22'], [0.3, '#4a6a22'], [0.7, '#2a5a1c'], [1, '#6a5a3a']]);
+/** água parada do pântano: lodo verde-oliva escuro, quase marrom */
+const bogSea = ramp([[0, '#141a08'], [0.5, '#26300e'], [1, '#3e4a18']]);
+/** terra do pântano: lama marrom, musgo e mato verde-escuro */
+const bogLand = ramp([[0, '#3a2a12'], [0.3, '#5a4a1c'], [0.55, '#4a6420'], [0.8, '#2e4a16'], [1, '#6a6a3a']]);
 const mojave = ramp([[0, '#6a2a0c'], [0.35, '#a8501a'], [0.6, '#d8802a'], [0.85, '#eca858'], [1, '#f6d09a']]);
 const nhoIce = ramp([[0, '#3a6aa8'], [0.35, '#8ab4e0'], [0.65, '#d4e4f6'], [1, '#f6faff']]);
 const crust = ramp([[0, '#0c0404'], [0.5, '#2a0c08'], [1, '#4a1a10']]);
@@ -145,17 +147,21 @@ const LOOKS: Record<ThemeId, PlanetLook> = {
       o.h = n * 0.6 + r * 0.4;
     },
   },
-  // oceano azul com ilhas de terra e mato
+  // pântano: charcos de lodo verde-oliva, ilhas de lama e musgo, névoa esverdeada e fogos-fátuos
   bogmire: {
-    atmo: 0x60a8ff, nebula: '#081a44', tilt: 0.4, spin: 4.0, bump: 1.6, roughness: 0.4,
-    clouds: { color: 0xffffff, cover: 0.58, opacity: 0.8 },
-    paint(n, r, _d, _p, o) {
-      const land = smooth(0.54, 0.56, n);
-      const shore = smooth(0.5, 0.54, n) * (1 - land);
-      o.c = mix(bogSea(sat(n * 1.6)), bogLand(sat((n - 0.55) * 4 + r * 0.2)), land);
-      o.c = mix(o.c, hexRgb('#2a7ab8'), shore * 0.6);
-      o.e = BLACK;
-      o.h = land ? 0.4 + (n - 0.55) * 2 : 0.3;
+    atmo: 0x9ac070, nebula: '#12200a', tilt: 0.4, spin: 4.0, bump: 2, roughness: 0.75,
+    clouds: { color: 0xc8d8b0, cover: 0.5, opacity: 0.42 },
+    paint(n, r, d, _p, o) {
+      const land = smooth(0.48, 0.53, n);
+      const reed = smooth(0.72, 0.86, r) * land;
+      o.c = mix(bogSea(sat(n * 1.8)), bogLand(sat((n - 0.5) * 3.2 + r * 0.25)), land);
+      // margens de lama escura e juncos
+      o.c = mix(o.c, hexRgb('#2a1e0c'), smooth(0.44, 0.5, n) * (1 - land) * 0.7);
+      o.c = mix(o.c, hexRgb('#6a8a2a'), reed * 0.5);
+      // brilho fraco do lodo e fogos-fátuos nos charcos
+      o.e = mix(BLACK, [30, 50, 8], (1 - land) * 0.5);
+      if (d > 0.975 && land < 0.5) o.e = [150, 230, 90];
+      o.h = land ? 0.35 + (n - 0.5) * 1.6 + reed * 0.15 : 0.28;
     },
   },
   // deserto laranja com crateras e cânions

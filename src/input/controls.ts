@@ -1,6 +1,7 @@
 import { clamp } from '../sim/math';
 import { emptyInput, type ControlInput } from '../sim/input';
 import { icon } from '../ui/icons';
+import { fullscreenSupported, iosInstallSteps, isInstalled, isIos } from '../ui/pwa';
 
 const TILT_KEY = 'rnrr3d-tilt';
 /** Graus de inclinação para esterçar tudo. */
@@ -194,6 +195,13 @@ export function isTouchDevice(): boolean {
  * preciso soltar o acelerador nem o volante para atirar.
  */
 export function createTouchControls(root: HTMLElement, controls: Controls): HTMLElement {
+  // tela cheia só onde o navegador deixa; no iPhone fora do app instalado o botão ensina a instalar
+  const iosHelp = !fullscreenSupported() && isIos() && !isInstalled();
+  const fsButton = fullscreenSupported()
+    ? `<button data-ui="fullscreen" class="fs-btn" aria-label="Tela cheia">${icon('fullscreen')}</button>`
+    : iosHelp
+      ? `<button class="fs-btn fs-help" aria-label="Como jogar em tela cheia">${icon('fullscreen')}</button>`
+      : '';
   const el = document.createElement('div');
   el.className = 'touch';
   el.innerHTML = `
@@ -221,8 +229,9 @@ export function createTouchControls(root: HTMLElement, controls: Controls): HTML
     <div class="touch-top">
       <button data-ui="pause" aria-label="Pausar">${icon('pause')}</button>
       <button data-ui="camera" aria-label="Trocar câmera">${icon('camera')}</button>
-      <button data-ui="fullscreen" class="fs-btn" aria-label="Tela cheia">${icon('fullscreen')}</button>
-    </div>`;
+      ${fsButton}
+    </div>
+    ${iosHelp ? `<div class="install-tip" hidden><div><h3>JOGAR EM TELA CHEIA</h3>${iosInstallSteps()}<button class="tip-close">Entendi</button></div></div>` : ''}`;
   root.appendChild(el);
   if (tiltOn) {
     el.classList.add('tilt');
@@ -391,6 +400,16 @@ export function createTouchControls(root: HTMLElement, controls: Controls): HTML
       controls.emit(btn.dataset.ui as UiAction);
     });
   });
+  const tip = el.querySelector<HTMLElement>('.install-tip');
+  el.querySelector<HTMLButtonElement>('.fs-help')?.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    if (!tip) return;
+    // pausa a corrida (se estiver rodando) e mostra o passo a passo por cima da pausa
+    const overlay = root.querySelector<HTMLElement>('.overlay');
+    if (overlay && overlay.style.display === 'none') controls.emit('pause');
+    tip.hidden = false;
+  });
+  tip?.querySelector('.tip-close')?.addEventListener('click', () => (tip.hidden = true));
   el.addEventListener('contextmenu', (e) => e.preventDefault());
   return el;
 }

@@ -332,3 +332,44 @@ Feito na rodada 11 (9 agentes em paralelo):
   gritado; rivais audíveis; hino no final; plasma seco.
 - Online: placar não some; recarregar reentra; previsão com poças/óleo; leave confiável; conexão
   instável; retorno local do tiro; testes de fluxo e previsão.
+
+# Rodada 12 (2026-09-25) — todos os grupos, volta 3/3
+
+Notas: Visual 6,9 · Carros 6,6 · Jogabilidade 6,2 · Pistas 7,4 · Campanha 7,3 · Interface 7,6 ·
+Desempenho 6,4 · Som 7 · Online 7 · QA 7,8 (nenhum aprovado; nenhum bloqueante).
+
+Pendências altas: CPU muito mais lenta que um jogador (piloto trivial vence 32/36) e calibração
+contra CPU 0,8; mina não acerta o perseguidor (armTime 0,9); inversão de dificuldade (Difícil mais
+lento que Normal em New Mojave/Nho); teto de dinheiro esvazia o prêmio do chefe final; miniatura do
+planeta vazia na garagem do chefe; rivais invisíveis na iso (só etiquetas) em algumas capturas;
+Battle Trak e Air Blade longe dos alvos; sem captura de nitro; piso de Bogmire parece madeira;
+explosão branca em Chem VI; bloom das turbinas/gelo; bogmire-2 sem laço e inferno-4 sem atalho;
+engasgo de ~2 s no alto; resolução dinâmica/queda sem prova; motor sem corpo na corrida; locutor
+por processamento; picote sem prova no aparelho; previsão online sem vácuo.
+
+Feito na rodada 12 (última; sem nova avaliação, a pedido do usuário):
+- IA: ritmo pelo raio real da curva, freia tarde, DERRAPAR; sem duelo roteirizado (ultrapassagem por
+  vácuo e saída lateral); piloto de referência (referenceInput) e LOCAL_PACE recalibrado contra ele
+  (vitórias Fácil ~77%, Normal ~36%, Difícil ~14%); Fácil ≤ Normal ≤ Difícil; mina arma em 0,2 s
+  (acerto no visado 31–33%); 0–100 em 1,37–1,80 s; vácuo só na mesma direção e nível.
+- Campanha/QA: 1º, duelo e chefe pagam cheio; pintura de campeão no último planeta; regra única do
+  vídeo perdido; afterLeave em campaignFlow; resultados congelados na chegada; evento storage.
+- Visual: rivais invisíveis corrigidos (ghost.ts com teste); piso de Bogmire em aço e poças; explosão
+  sem estouro; bloom contido; vinheta; Drakonis/Nho; etiquetas; New Mojave.
+- Carros: Battle Trak prata com cunha, torreta sextavada e esteiras de placas; Air Blade com convés
+  largo e rebaixado; Havac com turbinas menores e cabine inclinada; capturas de nitro; vitrine de estúdio.
+- Pistas: bogmire-2 retranscrita (laço como desvio); bifurcação real em inferno-4; saltos capturados
+  em corrida; cruzamento de nho-2 com zebras; rampa J com divisas.
+- Interface: miniatura do planeta nunca vazia; Bogmire como pântano; tela cheia no iPhone; loja e
+  corrida rápida compactas no celular; vão real do volante ≥32 px.
+- Desempenho: eventos de desempenho registrados; PostFx sem realocar por degrau; AutoDegrade testável;
+  etiquetas sem layout por quadro; arena do locutor pré-criada; contagem sem câmera lenta.
+- Som: loops de motor em 3 rotações (corpo +4 dB na corrida); efeitos audíveis em alto-falante
+  pequeno; cauda da explosão; 5 falas do locutor regravadas; fala de campeão no final.
+- Online: vácuo na previsão; tiro à frente; folga adaptativa; estado binário < 1200 B; CPU no host
+  oculto; reentrada sem repetir a largada; eventos com id; aba duplicada recusada.
+- Item 63 (novo): link de sala inexistente ou inválido mostra o erro, pede o código correto e oferece
+  voltar ao menu inicial.
+
+Pendências conhecidas (não avaliadas): falas lightsUp/hammered sem take aprovado; ramos de desvio
+fora do minimapa do HUD; online precisa de teste real com 2 aparelhos; picote sem medição em tablet.

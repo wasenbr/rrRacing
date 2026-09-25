@@ -21,6 +21,19 @@ function hudBlocks(): DOMRect[] {
   }
   return hudRects;
 }
+/**
+ * Retângulo do canvas na página, guardado pelo jogo no resize(): ler getBoundingClientRect() por
+ * rival dentro do desenho forçava layout síncrono logo depois de o HUD escrever no DOM.
+ */
+const canvasRect = { left: 0, top: 0, width: 1, height: 1 };
+export function setTagCanvasRect(left: number, top: number, width: number, height: number): void {
+  canvasRect.left = left;
+  canvasRect.top = top;
+  canvasRect.width = Math.max(1, width);
+  canvasRect.height = Math.max(1, height);
+  // o HUD também mudou de lugar: relê na próxima etiqueta
+  hudRectsAt = -1;
+}
 const NDC = new THREE.Vector3();
 const VIEW = new THREE.Vector3();
 const UP1 = new THREE.Vector3();
@@ -50,7 +63,8 @@ export class RivalTag {
   private canvas = document.createElement('canvas');
   private ctx: CanvasRenderingContext2D;
   private tex: THREE.CanvasTexture;
-  private key = '';
+  private key = -1;
+  private note = '';
 
   constructor(
     private name: string,
@@ -99,8 +113,8 @@ export class RivalTag {
         for (let i = 0; i < placedN; i++) {
           const o = placed[i];
           const dy = NDC.y + lift - o.y;
-          if (Math.abs(NDC.x - o.x) < (hx + o.hx) * 0.8 && Math.abs(dy) < (hy + o.hy) * 0.8) {
-            lift += (hy + o.hy) * 0.8 - dy;
+          if (Math.abs(NDC.x - o.x) < (hx + o.hx) * 0.95 && Math.abs(dy) < (hy + o.hy) * 0.95) {
+            lift += (hy + o.hy) * 0.95 - dy;
             moved = true;
           }
         }
@@ -118,11 +132,16 @@ export class RivalTag {
         o.hx = hx;
         o.hy = hy;
       }
-      const el = renderer.domElement.getBoundingClientRect();
+      const el = canvasRect;
       const x = el.left + ((NDC.x + 1) / 2) * el.width;
       const y = el.top + ((1 - NDC.y) / 2) * el.height;
       const pad = 40;
-      const under = hudBlocks().some((r) => x > r.left - pad && x < r.right + pad && y > r.top - pad && y < r.bottom + pad);
+      const blocks = hudBlocks();
+      let under = false;
+      for (let i = 0; i < blocks.length && !under; i++) {
+        const r = blocks[i];
+        under = x > r.left - pad && x < r.right + pad && y > r.top - pad && y < r.bottom + pad;
+      }
       this.sprite.material.opacity = under ? 0.12 : 1;
     };
   }
@@ -131,9 +150,11 @@ export class RivalTag {
   update(armorRatio: number, place: number, note = ''): void {
     const dots = 6;
     const lit = Math.max(0, Math.ceil(armorRatio * dots - 0.01));
-    const key = `${lit}|${place}|${note}`;
-    if (key === this.key) return;
+    // chave numérica + a nota comparada à parte (sem montar uma string por rival a cada quadro)
+    const key = lit * 64 + place;
+    if (key === this.key && note === this.note) return;
     this.key = key;
+    this.note = note;
     const ctx = this.ctx;
     ctx.clearRect(0, 0, 256, 112);
     ctx.textAlign = 'center';

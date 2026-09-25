@@ -11,7 +11,21 @@ export const SFX_FILES = [
 export type SfxName = (typeof SFX_FILES)[number];
 
 /** Loops de motor gravado (public/audio/motor), do mais lento ao mais rápido. */
-export const ENGINE_LOOPS = ['motor_lenta', 'motor_0', 'motor_1'] as const;
+export const ENGINE_LOOPS = ['motor_lenta', 'motor_0', 'motor_1', 'motor_2', 'motor_3', 'motor_4'] as const;
+
+/**
+ * Trecho útil (s) de um loop decodificado de MP3: sem o atraso do codificador no começo nem o
+ * enchimento no fim (alguns navegadores não os removem e o loop "soluça" na emenda).
+ */
+export function loopBounds(b: AudioBuffer): [number, number] {
+  const d = b.getChannelData(0);
+  let a = 0;
+  while (a < d.length && Math.abs(d[a]) < 1e-4) a++;
+  let z = d.length;
+  while (z > a && Math.abs(d[z - 1]) < 1e-4) z--;
+  if (z - a < b.sampleRate * 0.5) return [0, b.duration];
+  return [a / b.sampleRate, z / b.sampleRate];
+}
 
 const buffers = new Map<string, AudioBuffer>();
 const pending = new Map<string, Promise<AudioBuffer | null>>();

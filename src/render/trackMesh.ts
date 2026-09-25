@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { createRng, forwardX, forwardZ, leftX, leftZ, wrapAngle } from '../sim/math';
-import { JUMP_HEIGHT, JUMP_LIP, JUMP_RAMP_START, TILE, type CenterPoint, type Track } from '../sim/track';
+import { JUMP_HEIGHT, JUMP_LIP, JUMP_RAMP_START, TILE, type CenterPoint, type Piece, type Track } from '../sim/track';
 import type { Theme } from './themes';
 import { addTrackFeatures, roadMaps, wallMaps } from './trackFeatures';
 import { concreteNormal, fbm } from './textures';
@@ -259,13 +259,24 @@ export function buildTrackMesh(track: Track, theme: Theme, shadows: boolean): TH
   const G = theme.groundLevel;
   // trechos contínuos (vãos G e cruzamentos X interrompem; ver Track.meshRuns)
   for (const pts of track.meshRuns(0.5)) buildRun(group, pts, theme, W, G, shadows);
+  addJunctions(group, track, theme, W, G, shadows);
   addStartLine(group, track);
   addJumpMarks(group, track);
   addTrackFeatures(group, track, theme, shadows);
   return group;
 }
 
-function buildRun(group: THREE.Group, pts: CenterPoint[], theme: Theme, W: number, G: number, shadows: boolean): void {
+/** Opções de um trecho: lados com mureta/paredão, com ou sem piso e piso levemente erguido (placas sobrepostas). */
+interface RunOptions {
+  sides?: readonly (1 | -1)[];
+  floor?: boolean;
+  lift?: number;
+}
+
+function buildRun(group: THREE.Group, pts: CenterPoint[], theme: Theme, W: number, G: number, shadows: boolean, opt: RunOptions = {}): void {
+  const sides = opt.sides ?? SIDES;
+  const floor = opt.floor ?? true;
+  const lift = opt.lift ?? 0;
 
   // Piso
   const rm = roadMaps(theme);
@@ -288,12 +299,15 @@ function buildRun(group: THREE.Group, pts: CenterPoint[], theme: Theme, W: numbe
   // a mesma textura cobre (2W x 2W) metros; o piso vai um pouco além para encostar na mureta
   // malhas contínuas com menos pontos nas retas (o posicionamento de enfeites usa todos)
   const gp = simplifyRun(pts, roadDetailHigh() ? 1 : 2);
-  const road = new THREE.Mesh(sweep(gp, [{ l: W + 0.05, y: 0 }, { l: -W - 0.05, y: 0 }], W * 2, W * 2), roadMat);
-  road.receiveShadow = shadows;
-  group.add(road);
+  if (floor) {
+    const road = new THREE.Mesh(sweep(gp, [{ l: W + 0.05, y: lift }, { l: -W - 0.05, y: lift }], W * 2, W * 2), roadMat);
+    road.receiveShadow = shadows;
+    group.add(road);
+  }
 
-  addWalls(group, pts, gp, theme, W, G, shadows);
-  addRails(group, pts, gp, theme, W, shadows);
+  addWalls(group, pts, gp, theme, W, G, shadows, sides);
+  addRails(group, pts, gp, theme, W, shadows, sides);
+  if (!floor) return;
 
   // fundo do bloco (aparece na câmera de perseguição durante saltos)
   const under = new THREE.Mesh(
@@ -305,7 +319,9 @@ function buildRun(group: THREE.Group, pts: CenterPoint[], theme: Theme, W: numbe
 
 /* ------------------------------------------------------------------ */
 
-function addWalls(group: THREE.Group, pts: CenterPoint[], gp: CenterPoint[], theme: Theme, W: number, G: number, shadows: boolean): void {
+const SIDES = [1, -1] as const;
+
+function addWalls(group: THREE.Group, pts: CenterPoint[], gp: CenterPoint[], theme: Theme, W: number, G: number, shadows: boolean, sides: readonly (1 | -1)[] = SIDES): void {
   const wm = wallMaps(theme);
   const mat = new THREE.MeshStandardMaterial({
     map: wm.map,
@@ -319,7 +335,7 @@ function addWalls(group: THREE.Group, pts: CenterPoint[], gp: CenterPoint[], the
     mat.emissive = new THREE.Color(0xffffff);
     mat.emissiveIntensity = theme.walls === 'demonic' ? 1.6 : 1.2;
   }
-  for (const side of [1, -1] as const) {
+  for (const side of sides) {
     const wall = new THREE.Mesh(wallGeometry(gp, side * (W + WALL_OFFSET), G - 0.5, side), mat);
     wall.receiveShadow = shadows;
     group.add(wall);
@@ -332,7 +348,7 @@ function addWalls(group: THREE.Group, pts: CenterPoint[], gp: CenterPoint[], the
   if (theme.walls === 'pipes') {
     // Chem VI: fileira de cilindros prateados de pé, encostados no paredão
     const r = 0.46;
-    for (const side of [1, -1]) {
+    for (const side of sides) {
       for (let i = 0; i < pts.length - 1; i += 2) {
         const p = pts[i];
         const d = side * (W + WALL_OFFSET + r * 0.75);
@@ -360,7 +376,7 @@ function addWalls(group: THREE.Group, pts: CenterPoint[], gp: CenterPoint[], the
     group.add(caps);
   } else if (theme.walls === 'icerock') {
     // Nho: pilares azuis de gelo a cada poucos metros
-    for (const side of [1, -1]) {
+    for (const side of sides) {
       for (let i = 0; i < pts.length - 1; i += 7) {
         const p = pts[i];
         const d = side * (W + WALL_OFFSET + 0.25);
@@ -369,9 +385,20 @@ function addWalls(group: THREE.Group, pts: CenterPoint[], gp: CenterPoint[], the
         list.push(new THREE.Matrix4().compose(new THREE.Vector3(p.x + leftX(p.heading) * d, G + hgt / 2, p.z + leftZ(p.heading) * d), q, new THREE.Vector3(1, hgt, 1)));
       }
     }
+    // gelo translúcido azul-acinzentado, escuro na base e claro no topo (antes: barra azul chapada)
+    const pillar = new THREE.BoxGeometry(0.55, 1, 0.8);
+    const py = pillar.getAttribute('position');
+    const cols = new Float32Array(py.count * 3);
+    for (let v = 0; v < py.count; v++) {
+      const t = py.getY(v) + 0.5;
+      cols[v * 3] = 0.45 + 0.55 * t;
+      cols[v * 3 + 1] = 0.5 + 0.5 * t;
+      cols[v * 3 + 2] = 0.6 + 0.4 * t;
+    }
+    pillar.setAttribute('color', new THREE.BufferAttribute(cols, 3));
     const inst = new THREE.InstancedMesh(
-      new THREE.BoxGeometry(0.55, 1, 0.8),
-      new THREE.MeshStandardMaterial({ color: theme.wallAccent, emissive: 0x0a1a60, roughness: 0.2, metalness: 0.3 }),
+      pillar,
+      new THREE.MeshStandardMaterial({ color: 0x7a94b0, vertexColors: true, emissive: 0x0a1424, roughness: 0.35, metalness: 0.1, transparent: true, opacity: 0.82 }),
       list.length,
     );
     list.forEach((m, k) => inst.setMatrixAt(k, m));
@@ -381,7 +408,7 @@ function addWalls(group: THREE.Group, pts: CenterPoint[], gp: CenterPoint[], the
 }
 
 /** Mureta: um estilo por planeta, tudo instanciado (poucas chamadas de desenho). */
-function addRails(group: THREE.Group, pts: CenterPoint[], gp: CenterPoint[], theme: Theme, W: number, shadows: boolean): void {
+function addRails(group: THREE.Group, pts: CenterPoint[], gp: CenterPoint[], theme: Theme, W: number, shadows: boolean, sides: readonly (1 | -1)[] = SIDES): void {
   const q = new THREE.Quaternion();
   const one = new THREE.Vector3(1, 1, 1);
   const segs = Math.floor(pts.length / 2.5);
@@ -389,7 +416,7 @@ function addRails(group: THREE.Group, pts: CenterPoint[], gp: CenterPoint[], the
   const second = new THREE.Color(theme.rail[1]);
   const along = (spacing: number, fn: (p: CenterPoint, side: 1 | -1, k: number) => void) => {
     const step = Math.max(1, Math.round(spacing / 0.5));
-    for (const side of [1, -1] as const) for (let i = 0; i < pts.length - 1; i += step) fn(pts[i], side, i / step);
+    for (const side of sides) for (let i = 0; i < pts.length - 1; i += step) fn(pts[i], side, i / step);
   };
   const at = (p: CenterPoint, off: number, y: number) => new THREE.Vector3(p.x + leftX(p.heading) * off, p.h + y, p.z + leftZ(p.heading) * off);
   const instanced = (geo: THREE.BufferGeometry, mat: THREE.Material, mats: THREE.Matrix4[], cast = true) => {
@@ -401,7 +428,7 @@ function addRails(group: THREE.Group, pts: CenterPoint[], gp: CenterPoint[], the
     return inst;
   };
   const tube = (off: number, lift: number, r: number, mat: THREE.Material) => {
-    for (const side of [1, -1]) {
+    for (const side of sides) {
       const curve = edgeCurve(pts, side * off, lift);
       const m = new THREE.Mesh(new THREE.TubeGeometry(curve, segs, r, 8, curve.closed), mat);
       m.castShadow = shadows;
@@ -420,7 +447,7 @@ function addRails(group: THREE.Group, pts: CenterPoint[], gp: CenterPoint[], the
     curbMat.emissive = new THREE.Color(0xffffff);
     curbMat.emissiveIntensity = 1.2;
   }
-  for (const side of [1, -1] as const) {
+  for (const side of sides) {
     const m = new THREE.Mesh(sweepSmooth(gp, curbProfile(W, side, C), 3), curbMat);
     m.castShadow = shadows;
     m.receiveShadow = shadows;
@@ -492,6 +519,48 @@ function addRails(group: THREE.Group, pts: CenterPoint[], gp: CenterPoint[], the
   }
 }
 
+/** Pontos da linha central de uma peça entre s0 e s1 (metros), como os de Track.meshRuns. */
+function piecePoints(track: Track, p: Piece, s0: number, s1: number, step = 0.5): CenterPoint[] {
+  const out: CenterPoint[] = [];
+  const count = Math.max(1, Math.ceil((s1 - s0) / step));
+  for (let i = 0; i <= count; i++) {
+    const s = s0 + ((s1 - s0) * i) / count;
+    const pt = track.pointOn(p, s);
+    out.push({ x: pt.x, z: pt.z, h: track.heightOn(p, s), heading: pt.heading, dist: p.startDist + s * p.distScale, pieceIndex: p.index });
+  }
+  return out;
+}
+
+/**
+ * Casas de junção dos desvios (placa em T): a reta e a curva dividem a casa. O piso das duas
+ * cobre a casa; a mureta da reta some do lado por onde a curva entra/sai (só volta depois da boca
+ * da curva) e a curva só tem a mureta de dentro — a de fora atravessaria a reta.
+ */
+function addJunctions(group: THREE.Group, track: Track, theme: Theme, W: number, G: number, shadows: boolean): void {
+  const R = TILE / 2;
+  for (const b of track.branches) {
+    for (const [ia, ib, fork] of [[b.from, b.first, true], [b.to, b.last, false]] as const) {
+      const pa = track.pieces[ia];
+      const pb = track.pieces[ib];
+      const straight = pa.turn === 0 ? pa : pb.turn === 0 ? pb : null;
+      const curve = straight === pa ? pb : pa;
+      if (!straight || curve.turn === 0) {
+        // duas retas (ou duas curvas) na mesma casa: cada uma com o seu trecho completo
+        buildRun(group, piecePoints(track, pa, 0, pa.length), theme, W, G, shadows);
+        buildRun(group, piecePoints(track, pb, 0, pb.length), theme, W, G, shadows, { lift: 0.003 });
+        continue;
+      }
+      const side = curve.turn as 1 | -1;
+      const L = straight.length;
+      const mouth = Math.min(L, R + W + WALL_OFFSET * 0.5);
+      buildRun(group, piecePoints(track, straight, 0, L), theme, W, G, shadows, { sides: [-side as 1 | -1] });
+      const [s0, s1] = fork ? [mouth, L] : [0, L - mouth];
+      if (s1 - s0 > 0.4) buildRun(group, piecePoints(track, straight, s0, s1), theme, W, G, shadows, { sides: [side], floor: false });
+      buildRun(group, piecePoints(track, curve, 0, curve.length), theme, W, G, shadows, { sides: [side], lift: 0.003 });
+    }
+  }
+}
+
 function addStartLine(group: THREE.Group, track: Track): void {
   const p = track.pieces[0];
   const W = track.halfWidth;
@@ -512,6 +581,9 @@ function addJumpMarks(group: THREE.Group, track: Track): void {
   zebra.repeat.set((W * 2) / 2.2, 1);
   const zebraMat = new THREE.MeshStandardMaterial({ map: zebra, roughness: 0.6, polygonOffset: true, polygonOffsetFactor: -2 });
   const slope = Math.atan2(JUMP_HEIGHT, (JUMP_LIP - JUMP_RAMP_START) * TILE);
+  let rampMat: THREE.MeshStandardMaterial | null = null;
+  let wedgeMat: THREE.MeshStandardMaterial | null = null;
+  const wedgeTex = hazardStripeTexture();
   for (const p of track.pieces) {
     if (p.code !== 'J') continue;
     for (const lat of [-W * 0.45, W * 0.45]) {
@@ -530,5 +602,49 @@ function addJumpMarks(group: THREE.Group, track: Track): void {
     edge.rotateX(-Math.PI / 2 - slope);
     edge.position.set(p.x0 + forwardX(p.heading0) * s, p.h0 + h + 0.03, p.z0 + forwardZ(p.heading0) * s);
     group.add(edge);
+    // face da rampa em faixa clara com divisas escuras (lê de longe, na câmera aérea)
+    const sa = p.length * JUMP_RAMP_START;
+    const sb = p.length * JUMP_LIP - len;
+    const faceLen = (sb - sa) / Math.cos(slope);
+    rampMat ??= new THREE.MeshStandardMaterial({ map: rampFaceTexture(), transparent: true, roughness: 0.55, polygonOffset: true, polygonOffsetFactor: -2 });
+    const face = new THREE.Mesh(new THREE.PlaneGeometry(W * 2, faceLen), rampMat);
+    const sm = (sa + sb) / 2;
+    face.rotation.set(0, p.heading0, 0, 'YXZ');
+    face.rotateX(-Math.PI / 2 - slope);
+    face.position.set(p.x0 + forwardX(p.heading0) * sm, p.h0 + (JUMP_HEIGHT * (sm / p.length - JUMP_RAMP_START)) / (JUMP_LIP - JUMP_RAMP_START) + 0.03, p.z0 + forwardZ(p.heading0) * sm);
+    group.add(face);
+    // laterais da cunha: triângulo zebrado nos dois lados, por fora da mureta
+    const lip = p.length * JUMP_LIP;
+    for (const side of [1, -1]) {
+      const off = side * (W + WALL_OFFSET + 0.03);
+      const pt = (s2: number, y: number) => [p.x0 + forwardX(p.heading0) * s2 + leftX(p.heading0) * off, p.h0 + y, p.z0 + forwardZ(p.heading0) * s2 + leftZ(p.heading0) * off];
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute([...pt(sa, 0.3), ...pt(lip, JUMP_HEIGHT + 0.3), ...pt(lip, 0.3)], 3));
+      geo.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, (lip - sa) / 2.2, 1, (lip - sa) / 2.2, 0], 2));
+      geo.computeVertexNormals();
+      wedgeMat ??= new THREE.MeshStandardMaterial({ map: wedgeTex, roughness: 0.6, side: THREE.DoubleSide });
+      group.add(new THREE.Mesh(geo, wedgeMat));
+    }
   }
+}
+
+/** Face da rampa J: faixa clara com divisas escuras apontando para o salto. */
+function rampFaceTexture(): THREE.CanvasTexture {
+  return canvasTexture(128, 128, (ctx) => {
+    ctx.fillStyle = 'rgba(236,232,214,0.62)';
+    ctx.fillRect(0, 0, 128, 128);
+    ctx.fillStyle = 'rgba(20,18,16,0.8)';
+    // topo do canvas = trás da rampa (plano girado como a faixa do lábio): a ponta fica embaixo
+    for (const y of [18, 70]) {
+      ctx.beginPath();
+      ctx.moveTo(8, y);
+      ctx.lineTo(64, y + 36);
+      ctx.lineTo(120, y);
+      ctx.lineTo(100, y);
+      ctx.lineTo(64, y + 22);
+      ctx.lineTo(28, y);
+      ctx.closePath();
+      ctx.fill();
+    }
+  });
 }

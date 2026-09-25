@@ -30,12 +30,15 @@ sintetizados em `src/audio/sfx.ts` (só reaproveitam as explosões Kenney CC0 ac
 
 | Arquivo | Origem | Autor | Licença |
 |---|---|---|---|
-| motor_lenta, motor_0, motor_1 | "Chevrolet Caprice (motor at different speeds & driving away)", https://freesound.org/people/romanholtwick/sounds/391671/ | romanholtwick | CC0 1.0 |
+| motor_lenta, motor_0, motor_1, motor_2, motor_3, motor_4 | "Chevrolet Caprice (motor at different speeds & driving away)", https://freesound.org/people/romanholtwick/sounds/391671/ | romanholtwick | CC0 1.0 |
 
 Trechos estáveis da gravação (marcha lenta ~650 rpm e ~870 rpm) recortados em loops sem emenda
-audível; motor_1 é o loop de ~870 rpm 1,4x acima (ffmpeg rubberband, formantes preservados). Cada
-loop toca no máximo ±25% fora do próprio tom: a gravação cobre a lenta e o giro baixo e, acima disso,
-a síntese de ciclos de V8 do projeto assume (`src/audio/engine.ts`). Os rivais usam os mesmos loops.
+audível; motor_1, motor_2, motor_3 e motor_4 são o loop de ~870 rpm (~58 Hz de queima) levado a ~81,
+~120, ~170 e ~240 Hz (ffmpeg rubberband, formantes preservados; rodada 12: o loop repetido 3x é
+afinado e o período do meio vira o novo loop, com emenda de 40 ms). Cada loop toca no máximo ±30% fora
+do próprio tom: a gravação cobre da lenta ao corte (~310 Hz) e só o nitro fica com a síntese de ciclos
+de V8 do projeto (`src/audio/engine.ts`). O jogo toca só o trecho útil de cada MP3 (loopStart/loopEnd
+sem o atraso do codificador). Os rivais usam os mesmos loops.
 (Gravações livres de motor em rotação alta testadas — Red Library/archive.org, BMW 120d, Opel Astra —
 eram de motores e timbres diferentes ou só variações de tom do mesmo trecho.)
 
@@ -61,6 +64,13 @@ licença **CC-BY 4.0**). Escolhidas por `scripts/locutor/gerar.py refazer`: text
 esforço vocal (2–4 kHz vs 300–800 Hz) e sílabas/s comparados aos trechos gritados da referência, F0 mediano
 até 265 Hz antes do `tratar.py` (que baixa de tom o que passa de 225 Hz; nada é afinado para cima).
 Eco do tratamento de arena encurtado para uma repetição de 28 ms (os ecos de 45/110 ms borravam as sílabas).
+
+Rodada 12: largada, "hot fury", "wiped out", "Holy Toledo" e vitória (`start`, `hotFury`, `wipedOut`,
+`holyToledo`, `finishFirst`) trocadas por takes da mesma voz de ringue (klankbeeld, CC-BY 4.0; takes
+novos com exagero 1,4–1,9) que passam em todos os critérios de grito de `gerar.py refazer`: texto fiel,
+faixa de F0 ≥ 8 semitons, loudness momentâneo máximo ≥ −15 LUFS e ≥ 4,5 sílabas/s (medidos com o
+tratamento de arena). O tratamento de arena ficou mais leve (presença +2 dB, sem saturação): a emoção
+vem do take. `lightsUp`, `hammered` e as demais falas ficaram as anteriores (nenhum take passou).
 
 ## Música
 

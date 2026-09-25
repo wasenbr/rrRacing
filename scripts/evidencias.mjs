@@ -84,9 +84,14 @@ async function telas() {
     ['inferno-5', 12, 'iso', 'warps_lava'],
     ['bogmire-1', 6, 'iso', 'poca'],
     ['inferno-1', 7, 'chase', 'salto'],
+    // cruzamento no mesmo nível (placa X xadrez, sem mureta atravessando), viaduto e desvios (placa em T)
+    ['nho-2', 13, 'iso', 'cruzamento_x'],
+    ['bogmire-5', 8, 'iso', 'viaduto'],
+    ['bogmire-2', 16, 'iso', 'desvio_laco'],
+    ['inferno-4', 18, 'iso', 'desvio_atalho'],
   ];
-  // saltos (itens 22 e 35): o carro corre até a rampa J e a tela é tirada, com a prova congelada,
-  // na decolagem, no meio do vão e no pouso (vista iso). Altura e distância de cada salto vão para
+  // saltos (itens 22 e 35; rodada 12): o carro corre de verdade até a rampa J e a tela é tirada,
+  // com a prova congelada, na decolagem, no ápice e no pouso (vista iso acompanhando). Altura e distância de cada salto vão para
   // 40_saltos.json. As pistas com "Gv" pousam um nível abaixo da decolagem.
   const jumps = [
     ['nho-3', 7],
@@ -104,27 +109,32 @@ async function telas() {
     }, trackId);
     await wait(1500);
     await page.waitForFunction(() => !window.game.preparing, null, { timeout: 60000 }).catch(() => {});
-    // largada instantânea e o carro do jogador posto 2 casas antes da rampa J a ~40 m/s, no chão
-    // (como place() em sim.test.ts); o piloto automático (?autopilot) segue acelerando
-    await page.evaluate((j) => {
+    // corrida de verdade: a contagem corre até o "VAI!" e o piloto automático (?autopilot) leva o
+    // carro pela pista até a casa antes da rampa J, embalado (sem teletransporte nem carro parado)
+    const pronto = await page.evaluate((j) => {
       const g = window.game;
       const w = g.world;
       const tr = w.track;
+      const n = tr.loop ?? tr.pieces.length;
       const c = w.racers[g.playerId].car;
-      g.countdown = 0;
-      g.phase = 'racing';
-      w.started = true;
-      const pt = tr.pointAtDist(tr.pieces[j].startDist - 2 * 20);
-      Object.assign(c, { x: pt.x, z: pt.z, y: pt.h, vy: 0, heading: pt.heading, pieceIndex: pt.pieceIndex, grounded: true, airTime: 0, vx: Math.sin(pt.heading) * 40, vz: Math.cos(pt.heading) * 40 });
+      for (let k = 0; k < 60 * 12 && g.phase !== 'racing'; k++) g.step(1 / 60);
+      // a partir da 2ª volta (já embalado desde a largada, mesmo quando o J fica logo depois dela)
+      const me = w.racers[g.playerId];
+      for (let k = 0; k < 60 * 240; k++) {
+        g.step(1 / 60);
+        if (me.progress.lap >= 2 && c.pieceIndex === (j - 1 + n) % n && c.grounded) return { ok: true, v: Math.hypot(c.vx, c.vz) };
+      }
+      return { ok: false };
     }, j);
+    if (!pronto.ok) errors.push(`salto ${trackId}: o carro não chegou à rampa ${j}`);
     const res = { pista: trackId, casaJ: j, ok: false };
-    for (const fase of ['decolagem', 'meio', 'pouso']) {
+    for (const fase of ['decolagem', 'apice', 'pouso']) {
       // avança até o momento pedido e congela a prova (fase 'paused' sem o menu de pausa)
       const r = await page.evaluate(([j, fase, prev]) => {
         const g = window.game;
         const w = g.world;
         const tr = w.track;
-        const n = tr.pieces.length;
+        const n = tr.loop ?? tr.pieces.length;
         const c = w.racers[g.playerId].car;
         g.phase = 'racing';
         w.started = true;
@@ -147,9 +157,9 @@ async function telas() {
             }
           } else {
             if (!c.grounded) info.yMax = Math.max(info.yMax ?? c.y, c.y);
-            if (fase === 'meio') {
-              const d = tr.query(c.x, c.z, c.pieceIndex).dist;
-              if (!c.grounded && d >= (gapStart + gapEnd) / 2 && d < gapEnd) ok = true;
+            if (fase === 'apice') {
+              // ápice: a velocidade vertical passa de subindo para descendo, ainda no ar
+              if (!c.grounded && c.vy <= 0) ok = true;
             } else if (wasAir && c.grounded) {
               const land = tr.query(c.x, c.z, c.pieceIndex);
               Object.assign(info, { x1: c.x, z1: c.z, hPouso: land.height, casaPouso: land.pieceIndex, depoisDoVaoM: land.dist - gapEnd });
@@ -160,6 +170,7 @@ async function telas() {
         }
         if (!ok) return { ...info, erro: `momento não alcançado: ${fase}` };
         g.phase = 'paused';
+        g.hud.clearMessage(); // sem "VAI!"/contagem na tela
         g.rig.snap();
         g.redraw = true;
         return info;
@@ -272,60 +283,80 @@ async function telas() {
   // tirada quando ele está parado até 25 m à frente da câmera (que segue o jogador, piloto automático
   // um pouco mais lento de propósito). O laço não para quando o jogador cruza: a vaga do 1º fica a 42 m
   // da linha, e o jogador passa por ela depois de terminar (rodada 10: a captura falhava por isso).
-  await page.evaluate(() => {
-    const a = window.game.menuActions();
-    a.setCamera('iso');
-    a.quickRace({ trackId: 'chem6-1', vehicleId: 'marauder', color: 0x2f7bff, difficulty: 'normal' });
-  });
-  await wait(1500);
-  await page.waitForFunction(() => !window.game.preparing, null, { timeout: 60000 }).catch(() => {});
-  const chegada = await page.evaluate(() => {
-    const g = window.game;
-    const w = g.world;
-    const me = w.racers[g.playerId];
-    me.spec = { ...me.spec, maxSpeed: me.spec.maxSpeed * 0.85 };
-    let k = 0;
-    for (; k < 60 * 400 && !w.racers.some((r) => r.finishPlace); k++) g.step(1 / 60);
-    const first = w.racers.find((r) => r.finishPlace === 1);
-    if (!first || first.id === g.playerId) return { ok: false, motivo: 'jogador venceu ou ninguém cruzou' };
-    const T = w.track.totalLength;
-    const vagas = () =>
-      w.racers
-        .filter((r) => r.finishPlace)
-        .sort((a, b) => a.finishPlace - b.finishPlace)
-        .map((r) => {
-          const q = w.track.query(r.car.x, r.car.z, r.car.pieceIndex);
-          return { lugar: r.finishPlace, jogador: r.id === g.playerId, parado: Math.hypot(r.car.vx, r.car.vz) < 0.3, lateral: +q.lateral.toFixed(2), meiaLargura: w.track.halfWidth, beira: +(w.track.halfWidth - Math.abs(q.lateral)).toFixed(2) };
-        });
-    // espera o 1º parar e ficar à frente do jogador (câmera), mesmo depois de o jogador cruzar
-    let menor = Infinity;
-    for (let j = 0; j < 60 * 60; j++) {
-      g.step(1 / 60);
-      const parado = Math.hypot(first.car.vx, first.car.vz) < 0.3;
-      const df = w.track.query(first.car.x, first.car.z, first.car.pieceIndex).dist;
-      const dm = w.track.query(me.car.x, me.car.z, me.car.pieceIndex).dist;
-      let gap = (((df - dm) % T) + T) % T;
-      if (gap > T / 2) gap -= T;
-      if (parado) menor = Math.min(menor, Math.abs(gap));
-      // (entre 3 e 15 m: longe da borda da tela, bem dentro dos 25 m pedidos)
-      if (parado && gap > 3 && gap < 15) {
-        // congela o jogador ali (o render por software é lento: a tela sai alguns quadros depois)
-        me.car.vx = me.car.vz = 0;
-        me.spec = { ...me.spec, accel: 0, maxSpeed: 0.01, nitroAccel: 0 };
-        return { ok: true, distanciaJogador: +gap.toFixed(1), jogadorTerminou: !!me.finishPlace, terminados: vagas() };
+  // As vagas são medidas antes de congelar o jogador; toasts, avisos e efeitos (fumaça, explosões,
+  // marcas) são limpos antes da captura. Repetida em três pistas (Chem VI, Nho e Bogmire).
+  for (const [trackId, tag] of [['chem6-1', '52'], ['nho-3', '52b'], ['bogmire-5', '52c']]) {
+    const base52 = tag === '52' ? '52_chegada' : `${tag}_chegada_${trackId.replace('-', '')}`;
+    await page.evaluate((id) => {
+      const a = window.game.menuActions();
+      a.setCamera('iso');
+      a.quickRace({ trackId: id, vehicleId: 'marauder', color: 0x2f7bff, difficulty: 'normal' });
+    }, trackId);
+    await wait(1500);
+    await page.waitForFunction(() => !window.game.preparing, null, { timeout: 60000 }).catch(() => {});
+    const chegada = await page.evaluate(() => {
+      const g = window.game;
+      const w = g.world;
+      const me = w.racers[g.playerId];
+      me.spec = { ...me.spec, maxSpeed: me.spec.maxSpeed * 0.85 };
+      let k = 0;
+      for (; k < 60 * 400 && !w.racers.some((r) => r.finishPlace); k++) g.step(1 / 60);
+      const first = w.racers.find((r) => r.finishPlace === 1);
+      if (!first || first.id === g.playerId) return { ok: false, motivo: 'jogador venceu ou ninguém cruzou' };
+      const T = w.track.totalLength;
+      const vagas = () =>
+        w.racers
+          .filter((r) => r.finishPlace)
+          .sort((a, b) => a.finishPlace - b.finishPlace)
+          .map((r) => {
+            const q = w.track.query(r.car.x, r.car.z, r.car.pieceIndex);
+            return { lugar: r.finishPlace, jogador: r.id === g.playerId, parado: Math.hypot(r.car.vx, r.car.vz) < 0.3, lateral: +q.lateral.toFixed(2), meiaLargura: w.track.halfWidth, beira: +(w.track.halfWidth - Math.abs(q.lateral)).toFixed(2) };
+          });
+      // espera o 1º parar e ficar à frente do jogador (câmera), mesmo depois de o jogador cruzar
+      let menor = Infinity;
+      for (let j = 0; j < 60 * 60; j++) {
+        g.step(1 / 60);
+        const parado = Math.hypot(first.car.vx, first.car.vz) < 0.3;
+        const df = w.track.query(first.car.x, first.car.z, first.car.pieceIndex).dist;
+        const dm = w.track.query(me.car.x, me.car.z, me.car.pieceIndex).dist;
+        let gap = (((df - dm) % T) + T) % T;
+        if (gap > T / 2) gap -= T;
+        if (parado) menor = Math.min(menor, Math.abs(gap));
+        // (entre 3 e 15 m: longe da borda da tela, bem dentro dos 25 m pedidos)
+        if (parado && gap > 3 && gap < 15) {
+          // vagas medidas antes de congelar o jogador (senão ele aparecia "parado" sem ter estacionado)
+          const terminados = vagas();
+          // congela o jogador ali (o render por software é lento: a tela sai alguns quadros depois)
+          me.car.vx = me.car.vz = 0;
+          me.spec = { ...me.spec, accel: 0, maxSpeed: 0.01, nitroAccel: 0 };
+          return { ok: true, distanciaJogador: +gap.toFixed(1), jogadorTerminou: !!me.finishPlace, terminados };
+        }
       }
+      return { ok: false, motivo: `o 1º não ficou parado até 25 m à frente da câmera (mais perto: ${menor.toFixed(1)} m)`, terminados: vagas() };
+    });
+    chegada.pista = trackId;
+    fs.writeFileSync(`${dir}/${base52}.json`, JSON.stringify(chegada, null, 2));
+    const png = `${dir}/${tag === '52' ? '52_chegada_iso' : base52}.png`;
+    if (chegada.ok) {
+      await wait(900);
+      // sem toasts/avisos por cima e sem fumaça/explosões/marcas de corridas anteriores
+      await page.evaluate(() => {
+        const g = window.game;
+        g.hud.clearMessage?.();
+        for (const el of [g.hud.toast, g.hud.note]) el?.classList.remove('show');
+        g.hud.toastTimer = 0;
+        g.hud.noteTimer = 0;
+        g.effects.reset?.();
+        g.redraw = true;
+      });
+      await frames(2);
+      await page.screenshot({ path: png });
+    } else {
+      // sem a cena certa não salva a imagem (uma tela errada passaria por evidência)
+      fs.rmSync(png, { force: true });
+      errors.push(`captura da chegada (${tag}, ${trackId}): ${chegada.motivo}`);
+      console.log('captura da chegada:', trackId, chegada.motivo);
     }
-    return { ok: false, motivo: `o 1º não ficou parado até 25 m à frente da câmera (mais perto: ${menor.toFixed(1)} m)`, terminados: vagas() };
-  });
-  fs.writeFileSync(`${dir}/52_chegada.json`, JSON.stringify(chegada, null, 2));
-  if (chegada.ok) {
-    await wait(900);
-    await page.screenshot({ path: `${dir}/52_chegada_iso.png` });
-  } else {
-    // sem a cena certa não salva a imagem (uma tela errada passaria por evidência)
-    fs.rmSync(`${dir}/52_chegada_iso.png`, { force: true });
-    errors.push(`captura da chegada (52): ${chegada.motivo}`);
-    console.log('captura da chegada:', chegada.motivo);
   }
 
   // close dos carros: vitrine com os 5 modelos lado a lado (se o jogo expuser a função)
@@ -343,7 +374,37 @@ async function telas() {
       await wait(1500);
       await page.screenshot({ path: `${dir}/21_carro_${id}.png` });
     }
+    // nitro aceso (22): cada carro sozinho na vitrine em 3/4 de trás, com as chamas do turbo
+    for (const id of ['dirtdevil', 'marauder', 'airblade', 'battletrak', 'havac']) {
+      await page.evaluate(([a, c]) => window.game.showroom(a, c, true), [id === 'airblade' ? -2.5 : 2.5, id]);
+      await wait(1500);
+      await page.screenshot({ path: `${dir}/22_nitro_${id}_vitrine.png` });
+    }
   }
+  // nitro na corrida (22): cada carro como jogador na vista iso, com nitroTime > 0 na hora da tela
+  const nitro = [];
+  for (const id of ['dirtdevil', 'marauder', 'airblade', 'battletrak', 'havac']) {
+    await page.evaluate((id) => {
+      const a = window.game.menuActions();
+      a.setCamera('iso');
+      a.quickRace({ trackId: 'chem6-1', vehicleId: id, color: 0x2f7bff, difficulty: 'normal' });
+    }, id);
+    await wait(1500);
+    await page.waitForFunction(() => !window.game.preparing, null, { timeout: 60000 }).catch(() => {});
+    await advance(6);
+    const r = await page.evaluate(() => {
+      const g = window.game;
+      const c = g.world.racers[g.playerId].car;
+      c.nitroTime = 5;
+      g.step(1 / 60);
+      return { nitroTime: +c.nitroTime.toFixed(2) };
+    });
+    await wait(900);
+    const t = await page.evaluate(() => +window.game.world.racers[window.game.playerId].car.nitroTime.toFixed(2));
+    await page.screenshot({ path: `${dir}/22_nitro_${id}_iso.png` });
+    nitro.push({ carro: id, nitroTimeAntes: r.nitroTime, nitroTimeNaTela: t });
+  }
+  fs.writeFileSync(`${dir}/22_nitro.json`, JSON.stringify(nitro, null, 2));
   await page.evaluate(() => window.game.menuActions().setCamera('iso'));
   await page.evaluate(() => window.game.menuActions().toMain());
 }
@@ -475,38 +536,64 @@ async function ui() {
   await page.evaluate(() => document.querySelector('.finale')?.click());
   await wait(600);
   await shot('33f_campeao_resumo');
-  // resultados da campanha simulada: PROMOVIDO (Drakonis B → A), chefe derrotado (Bogmire) e
-  // repescagem (duelo perdido em Nho A com os pontos faltando)
+  // resultados da campanha simulada: PROMOVIDO (Drakonis B → A), chefe derrotado com promoção
+  // (Bogmire) e repescagem (duelo perdido em Nho A com os pontos faltando). Cada tela sai de uma
+  // corrida real simulada (o mundo headless, 3 voltas, com os rivais e o carro do jogador daquele
+  // ponto da campanha): tempos, voltas, abates e dinheiro coerentes. A habilidade do piloto
+  // automático do jogador varia até ele terminar na colocação pedida.
   const results = async (name, key) => {
-    await page.evaluate(async (k) => {
+    const info = await page.evaluate(async (k) => {
       const m = await window.devModules();
       const c0 = window.__camp0;
-      let snap = window.__snaps[k];
-      if (k === 'playoff') {
-        const before = structuredClone(window.__snaps.nho);
-        before.points = m.promoteGoal(before) - 400;
-        const after = structuredClone(before);
-        const r = m.applyRaceResult(after, 2, m.prizesFor(before)[1], 0);
-        snap = { before, after, r, place: 2, pista: 0, kills: 0 };
-      }
-      const { before, after, r, place, pista, kills } = snap;
+      let before = structuredClone(k === 'playoff' ? window.__snaps.nho : window.__snaps[k].before);
+      let want = k === 'playoff' ? 2 : window.__snaps[k].place;
+      if (k === 'playoff') before.points = m.promoteGoal(before) - 400;
       const me = m.CHARACTERS.find((ch) => ch.id === c0.characterId);
-      const prizes = m.prizesFor(before);
-      const others = m.opponentsFor(before, m.VEHICLES);
-      const free = [1, 2, 3, 4].slice(0, others.length + 1).filter((p) => p !== place);
+      const track = new m.Track(m.trackById(m.currentTrackId(before)));
+      const opp = m.opponentsFor(before, m.VEHICLES);
+      const spec = m.playerSpec(before, m.VEHICLES);
+      const skills = want === 1 ? [0.97, 0.95, 0.92] : want === 2 ? [0.8, 0.85, 0.75, 0.9] : [0.7, 0.65, 0.75, 0.6];
+      let w = null;
+      let tries = 0;
+      for (let seed = 1; seed <= 6 && !w; seed++) {
+        for (const skill of skills) {
+          tries++;
+          const entries = [...opp.map((o) => ({ name: o.name, color: o.color, spec: o.spec, ai: o.ai })), { name: me.name, color: before.color, spec, ai: { skill, aggression: 0.8, lane: 0.5 } }];
+          const world = m.createWorld(track, entries, 3, seed, m.prizesFor(before), m.difficultyOf(before), m.moneyScale(before));
+          world.started = true;
+          for (let i = 0; i < 60 * 900 && world.racers.some((r) => !r.finishPlace); i++) m.stepWorld(world, {}, 1 / 60);
+          const pl = world.racers[entries.length - 1];
+          if (pl.finishPlace === want) {
+            w = world;
+            break;
+          }
+        }
+      }
+      if (!w) return { ok: false, motivo: `o jogador não terminou em ${want}º em ${tries} corridas simuladas` };
+      const pid = w.racers.length - 1;
+      const p = w.racers[pid];
+      const after = structuredClone(before);
+      // como na chegada do jogo (settleFinish): colocação, dinheiro da corrida (prêmio + pista) e abates
+      const r = m.applyRaceResult(after, p.finishPlace, p.money, p.kills);
       const hex = (c) => `#${c.toString(16).padStart(6, '0')}`;
-      const rows = [
-        { place, name: me.name, color: hex(before.color), time: 70 + place * 1.4, kills, prize: prizes[place - 1] ?? 0, money: (prizes[place - 1] ?? 0) + pista, me: true, pilot: me.id, vehicleId: before.car.vehicleId },
-        ...others.map((o, i) => ({ place: free[i], name: o.name, color: hex(o.color), time: 70 + free[i] * 1.4, kills: i % 2, prize: prizes[free[i] - 1] ?? 0, money: prizes[free[i] - 1] ?? 0, me: false, pilot: o.name, vehicleId: o.spec.id })),
-      ];
+      const rows = w.racers.map((x) => ({
+        place: x.finishPlace || x.place, name: x.id === pid ? me.name : x.name, color: hex(x.color), time: x.finishPlace ? x.progress.finishTime : null,
+        kills: x.kills, prize: w.prizes[(x.finishPlace || x.place) - 1] ?? 0, money: x.money, me: x.id === pid, pilot: x.id === pid ? me.id : x.name, vehicleId: x.spec.id,
+      }));
       const report = {
         outcome: r.outcome, kind: r.kind, pointsEarned: r.pointsEarned, points: after.points, promote: m.promoteGoal(before),
         label: `${m.PLANETS[after.planet].name} — Divisão ${m.DIVISIONS[after.division]}`, boss: m.PLANETS[before.planet].local, bonus: r.bonus,
-        playoffLeft: r.playoffLeft, planets: m.planetCount(after),
+        playoffLeft: r.playoffLeft, planets: m.planetCount(after), moneyCapped: m.moneyCapped(after),
       };
-      window.game.menus.showResults(rows, [71.2, 69.8, 70.4], report, false);
+      window.game.menus.showResults(rows, p.progress.lapTimes, report, false);
+      return { ok: true, pista: m.currentTrackId(before), tentativas: tries, lugar: p.finishPlace, tempos: rows.map((x) => [x.name, x.time && +x.time.toFixed(2)]), voltas: p.progress.lapTimes.map((t) => +t.toFixed(2)), dinheiro: p.money, abates: p.kills, bonus: r.bonus, desfecho: r.outcome };
     }, key);
-    await shot(name);
+    fs.writeFileSync(`${dir}/${name}.json`, JSON.stringify(info, null, 2));
+    if (info.ok) await shot(name);
+    else {
+      fs.rmSync(`${dir}/${name}.png`, { force: true });
+      errors.push(`resultado ${name}: ${info.motivo}`);
+    }
   };
   await results('33g_resultado_promovido', 'promoted');
   await results('33h_resultado_chefe_derrotado', 'boss');
@@ -594,6 +681,19 @@ async function celular() {
       // loja: o 1º item (melhoria ou arma) aparece inteiro na 1ª tela
       const item = document.querySelector('.shop-body > .shop-row, .weapon-card');
       if (item) res.item1Fundo = Math.round(item.getBoundingClientRect().bottom);
+      // loja: tamanho do carro ao lado das barras (≤ 72 px no celular deitado)
+      const shopCar = document.querySelector('.shop-car-img .car-img');
+      if (shopCar) res.lojaCarro = Math.round(shopCar.getBoundingClientRect().width);
+      // corrida rápida: colunas da grade de carros e linhas da faixa de pilotos
+      const cars = [...document.querySelectorAll('.quick .cars .car')].map((e) => e.getBoundingClientRect());
+      if (cars.length) {
+        res.carrosColunas = cars.filter((c) => Math.round(c.top) === Math.round(cars[0].top)).length;
+        res.carroAltura = Math.round(cars[0].height);
+      }
+      const chars = [...document.querySelectorAll('.quick .char-pick .char')].map((e) => Math.round(e.getBoundingClientRect().top));
+      if (chars.length) res.pilotosLinhas = new Set(chars).size;
+      // miniaturas de planeta sem imagem nem fundo (círculo vazio)
+      res.planetasVazios = [...document.querySelectorAll('img.planet-img')].filter((e) => !e.style.background && e.src.startsWith('data:image/gif')).length;
       // vão entre o painel e o botão flutuante de tela cheia
       const fs = document.querySelector('.fs-float');
       const card = document.querySelector('.overlay .card');
@@ -641,6 +741,9 @@ async function celular() {
       return {
         tela: `${innerWidth}x${innerHeight}`,
         vaoVolanteArmas: Math.round(steer.top - Math.max(...acts.map((a) => a.bottom))),
+        // vão real: descontando a área de toque invisível do volante (::before) que sobe acima do desenho
+        vaoRealToque: Math.round(steer.top + Math.min(0, parseFloat(getComputedStyle(document.querySelector('.touch .steer'), '::before').top) || 0) - Math.max(...acts.map((a) => a.bottom))),
+        botaoTelaCheia: document.querySelector('.touch .fs-help') ? 'passo a passo iOS' : document.querySelector('.touch [data-ui="fullscreen"]') ? 'tela cheia' : 'nenhum',
         volante: `${Math.round(steer.width)}x${Math.round(steer.height)}`,
         tiro: Math.round(r('.touch-actions .fire').width),
         tiroDireita: fire2 ? Math.round(fire2.width) : 0,
@@ -656,6 +759,7 @@ async function celular() {
   await m.waitForTimeout(900);
   await m.screenshot({ path: `${dir}/42_celular_corrida_controles.png`, timeout: 120000 });
   medidas.toque844 = await medeToque();
+  if ((medidas.toque844?.vaoRealToque ?? 99) < 32) errors.push(`[celular] área de toque do volante a ${medidas.toque844.vaoRealToque} px das armas (mínimo 32)`);
   if ((medidas.toque844?.vaoTiroAcel ?? 99) < 16) errors.push(`[celular] TIRO–ACEL a ${medidas.toque844.vaoTiroAcel} px (mínimo 16)`);
   // iPhone SE / 8 deitado
   await m.setViewportSize({ width: 667, height: 375 });
@@ -687,7 +791,7 @@ async function celular() {
 /* ------------------------------------------------------------------ */
 async function jogo() {
   const result = await page.evaluate(async () => {
-    const { TRACKS, VEHICLES, Track, createWorld, stepWorld, PRIZES, forwardSpeed } = await window.devModules();
+    const { TRACKS, VEHICLES, Track, createWorld, stepWorld, PRIZES, forwardSpeed, referenceInput, raceDistance } = await window.devModules();
     const dt = 1 / 60;
     const ids = Object.keys(VEHICLES);
 
@@ -706,17 +810,41 @@ async function jogo() {
       const entries = profiles.map((ai, i) => ({ name: `CPU${i}`, color: 0xffffff, spec: VEHICLES[car], ai }));
       const w = createWorld(track, entries, 4, 1234, PRIZES);
       w.started = true;
-      const stats = { fires: 0, hits: 0, explosions: 0, bumps: 0, pickups: 0, spins: 0, leadChanges: 0, placeChanges: 0, respawns: 0, hitsByKind: {}, firesByKind: {}, dropsByKind: {} };
+      // leadChanges: só trocas em que o novo líder fica na frente por 2 s ou mais (leadChangesRaw: todas)
+      const stats = { fires: 0, hits: 0, explosions: 0, bumps: 0, pickups: 0, spins: 0, leadChanges: 0, leadChangesRaw: 0, placeChanges: 0, respawns: 0, hitsByKind: {}, firesByKind: {}, dropsByKind: {}, mineTargeted: 0, mineTargetedHits: 0 };
       let leader = -1;
+      let rawLeader = -1;
+      let cand = -1;
+      let candSince = 0;
+      // minas: o perseguidor visado (o mais próximo atrás, até 25 m) levou a mina nos 3 s seguintes?
+      const mineWatch = [];
       const lastPlace = w.racers.map((r) => r.place);
       let t = 0;
       let wallTime = 0;
       let stuck = 0;
       const speeds = [];
       while (w.finishedCount < 4 && t < 600) {
+        const before = new Set(w.hazards.map((h) => h.id));
         stepWorld(w, {}, dt);
         t += dt;
         for (const e of w.events) {
+          if (e.type === 'drop' && e.kind === 'mine') {
+            const me = w.racers[e.racer];
+            const dm = raceDistance(w, me);
+            let f = -1;
+            let best = 25;
+            for (const o of w.racers) {
+              if (o === me || o.finishPlace) continue;
+              const g = dm - raceDistance(w, o);
+              if (g > 0 && g < best) { best = g; f = o.id; }
+            }
+            const h = w.hazards.find((x) => !before.has(x.id) && x.kind === 'mine');
+            if (f >= 0 && h) { stats.mineTargeted++; mineWatch.push({ hid: h.id, f, t, owner: e.racer }); }
+          }
+          if (e.type === 'hit' && e.kind === 'mine') {
+            const k = mineWatch.findIndex((x) => x.f === e.target && x.owner === e.by && t - x.t < 3);
+            if (k >= 0) { stats.mineTargetedHits++; mineWatch.splice(k, 1); }
+          }
           if (e.type === 'fire') {
             stats.fires++;
             stats.firesByKind[e.kind] = (stats.firesByKind[e.kind] ?? 0) + 1;
@@ -733,9 +861,14 @@ async function jogo() {
           if (e.type === 'respawn') stats.respawns++;
         }
         const ld = w.racers.find((r) => r.place === 1).id;
-        if (ld !== leader) {
+        if (ld !== rawLeader) {
+          if (rawLeader !== -1) stats.leadChangesRaw++;
+          rawLeader = ld;
+        }
+        if (ld !== cand) { cand = ld; candSince = t; }
+        if (cand !== leader && t - candSince >= 2) {
           if (leader !== -1) stats.leadChanges++;
-          leader = ld;
+          leader = cand;
         }
         w.racers.forEach((r, i) => {
           if (r.place !== lastPlace[i]) stats.placeChanges++;
@@ -892,42 +1025,51 @@ async function jogo() {
       const hits = races.reduce((s, r) => s + (k === 'oil' ? r.spins : r.hitsByKind[k] ?? 0), 0);
       rearRate[k] = { drops, hits, perCharge: drops ? +(hits / drops).toFixed(2) : null };
     }
+    // mina no perseguidor visado (o mais próximo atrás, até 25 m, na hora de soltar): meta 30–40%
+    {
+      const targeted = races.reduce((s, r) => s + r.mineTargeted, 0);
+      const hits = races.reduce((s, r) => s + r.mineTargetedHits, 0);
+      rearRate.mine.targeted = targeted;
+      rearRate.mine.targetedHits = hits;
+      rearRate.mine.targetedRate = targeted ? +(hits / targeted).toFixed(2) : null;
+    }
+    const leadChangesPerRace = +(races.reduce((s, r) => s + r.leadChanges, 0) / races.length).toFixed(1);
 
-    // 5) DERRAPAR numa pista real: o piloto simples dá 1 volta freando nas curvas fechadas ou usando o
-    //    botão derrapar nelas (curva à frente > 1,2 rad e acima de 60% da final); mede a velocidade de
-    //    saída de cada curva fechada (fração da final) e o tempo de volta
-    const driftTrack = TRACKS.find((d) => d.id === 'drakonis-2') ?? TRACKS[1];
-    function corners(spec, useSharp) {
-      const track = new Track(driftTrack);
-      const w = createWorld(track, [{ name: 'P', color: 0, spec, ai: null }], 99, 1, PRIZES);
-      w.started = true;
-      const r = w.racers[0];
-      const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
-      let inCorner = false;
-      let sharpT = 0;
-      const exits = [];
-      for (let t = 0; r.progress.lapTimes.length < 1 && t < 60; t += dt) {
-        const q = track.query(r.car.x, r.car.z, r.car.pieceIndex);
-        const v = forwardSpeed(r.car);
-        const p = track.pointAtDist(q.dist + 6 + Math.max(0, v) * 0.3);
-        const d = wrap(Math.atan2(p.x - r.car.x, p.z - r.car.z) - r.car.heading);
-        const bend = Math.abs(wrap(track.pointAtDist(q.dist + 8 + v * 0.45).heading - track.pointAtDist(q.dist).heading));
-        const tight = bend > 1.2;
-        const sharp = useSharp && tight && v > spec.maxSpeed * 0.6;
-        const brake = !sharp && bend > 0.9 && v > spec.maxSpeed * 0.7;
-        if (sharp) sharpT += dt;
-        stepWorld(w, { 0: { throttle: brake ? 0 : 1, brake: brake ? 0.6 : 0, steer: Math.max(-1, Math.min(1, -d * 2.5)), fire: false, drop: false, nitro: false, sharp } }, dt);
-        if (!inCorner && tight) inCorner = true;
-        else if (inCorner && bend < 0.3) {
-          inCorner = false;
-          exits.push(forwardSpeed(r.car) / spec.maxSpeed);
+    // 6) piloto de referência "humano" (referenceInput: centro da pista, acelera sempre, só DERRAPAR, sem
+    //    tiro) largando em último contra os 3 rivais da campanha (opponentsFor), em cada divisão de cada
+    //    dificuldade, 2 pistas do planeta; ele corre com o carro e as peças de Shred no Normal (um jogador
+    //    que acompanha a loja). Metas (rodada 11): Normal ~30–45% de vitórias, Fácil mais, Difícil menos
+    const { newCampaign, opponentsFor, currentPlanet, planetTracks, playerSpec, CAMPAIGN_RULES, rivalLevel, rivalEngine } = await window.devModules();
+    const reference = {};
+    for (const diff of ['easy', 'normal', 'hard']) {
+      let wins = 0, placeSum = 0, gapSum = 0, n = 0;
+      for (let t = 0; t < CAMPAIGN_RULES[diff].planets * 2; t++) {
+        const s = newCampaign('jake', 0, diff);
+        s.planet = t >> 1;
+        s.division = t & 1;
+        const car = newCarSetup(currentPlanet(s).cars[1]);
+        const lv = rivalLevel(t, 1, 'normal');
+        car.upgrades = { engine: rivalEngine(t, 1, 'normal'), tires: lv, shocks: lv, armor: lv };
+        s.car = car;
+        const ids2 = planetTracks(currentPlanet(s));
+        for (let k = 0; k < 2; k++) {
+          const def = TRACKS.find((d) => d.id === ids2[(k + t) % ids2.length]);
+          const w = createWorld(new Track(def), [...opponentsFor(s, VEHICLES, diff), { name: 'REF', color: 0, spec: playerSpec(s, VEHICLES), ai: null }], def.laps ?? 4, 11 + k, PRIZES, diff);
+          w.started = true;
+          const me = w.racers[3];
+          for (let tt = 0; w.finishedCount < 4 && tt < 400; tt += dt) stepWorld(w, { 3: referenceInput(w, me, dt) }, dt);
+          const place = me.finishPlace || 4;
+          const best = Math.min(...w.racers.filter((r) => r.ai && r.finishPlace).map((r) => r.progress.finishTime));
+          if (place === 1) wins++;
+          placeSum += place;
+          if (me.finishPlace && Number.isFinite(best)) gapSum += me.progress.finishTime - best;
+          n++;
         }
       }
-      const lap = r.progress.lapTimes[0];
-      return { lapS: lap === undefined ? null : +lap.toFixed(2), tightCorners: exits.length, exitSpeedRatio: exits.length ? +(exits.reduce((a, b) => a + b, 0) / exits.length).toFixed(3) : null, sharpSeconds: +sharpT.toFixed(1) };
+      // gapToBestCpuS: chegada do piloto de referência menos a da melhor CPU (negativo = chegou antes)
+      reference[diff] = { races: n, wins, winRate: +(wins / n).toFixed(2), avgPlace: +(placeSum / n).toFixed(2), gapToBestCpuS: +(gapSum / n).toFixed(1) };
     }
-    const drift = { track: driftTrack.id, cars: ids.map((id) => ({ car: id, semDerrapar: corners(VEHICLES[id], false), comDerrapar: corners(VEHICLES[id], true) })) };
-    return { races, hitRate, rearRate, mixed, handling, drift };
+    return { races, hitRate, rearRate, leadChangesPerRace, reference, mixed, handling, drift };
   });
   fs.writeFileSync(path.join(out, 'jogo.json'), JSON.stringify(result, null, 2));
 }
@@ -947,6 +1089,11 @@ async function picote() {
   const casos = [
     { nome: 'normal_cpu4x', leve: false },
     { nome: 'leve_cpu4x', leve: true },
+    // thread de áudio sob carga: além dos 5 motores e da música da corrida, ~12 efeitos por segundo
+    // (explosões, tiros, batidas, derrapagens) disparados durante a medição
+    { nome: 'estresse_cpu4x', leve: false, estresse: true },
+    // rodada 12 (Som): modo leve (celular) com CPU 6x mais lenta
+    { nome: 'leve_cpu6x', leve: true, cpu: 6 },
   ];
   const resultados = [];
   for (const caso of casos) {
@@ -1018,13 +1165,14 @@ async function picote() {
       const master = m.audioOutputForTest();
       const src = `class Tap extends AudioWorkletProcessor {
         constructor() { super(); this.chunk = new Float32Array(sampleRate / 2); this.n = 0; this.w0 = -1; this.frames = 0; this.hi = -1e9; this.saltos = []; this.on = true;
-          this.port.onmessage = () => { this.on = false; this.port.postMessage({ fim: true, saltos: this.saltos }); }; }
+          this.port.onmessage = () => { this.on = false; this.port.postMessage({ fim: true, saltos: this.saltos, saltosEm: this.saltosEm || [] }); }; }
         process(inputs) {
           if (!this.on) return false;
           const now = Date.now();
           if (this.w0 < 0) this.w0 = now;
           const lag = (now - this.w0) - (this.frames / sampleRate) * 1000;
-          if (this.frames > sampleRate && lag > this.hi + 2) this.saltos.push(+(lag - this.hi).toFixed(1));
+          if (this.w1 === undefined) { this.w1 = now; this.port.postMessage({ inicio: now }); }
+          if (this.frames > sampleRate && lag > this.hi + 2) { this.saltos.push(+(lag - this.hi).toFixed(1)); (this.saltosEm = this.saltosEm || []).push(this.frames); }
           if (lag > this.hi) this.hi = lag;
           const ch = inputs[0] && inputs[0][0];
           const ch2 = inputs[0] && inputs[0][1];
@@ -1043,7 +1191,10 @@ async function picote() {
       master.connect(tap);
       window.__tap = { node: tap, chunks: [], saltos: null };
       tap.port.onmessage = (e) => {
-        if (e.data && e.data.fim) window.__tap.saltos = e.data.saltos;
+        if (e.data && e.data.fim) {
+          window.__tap.saltos = e.data.saltos;
+          window.__tap.saltosEm = e.data.saltosEm;
+        } else if (e.data && e.data.inicio) window.__tap.inicio = e.data.inicio;
         else window.__tap.chunks.push(e.data);
       };
       window.__playout0 = a.ctx.playoutStats ? { ...a.ctx.playoutStats.toJSON?.() } : null;
@@ -1054,9 +1205,32 @@ async function picote() {
       performance.clearMarks();
       performance.clearMeasures();
     });
-    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
+    if (caso.estresse)
+      await page.evaluate(async () => {
+        const m = await window.devModules();
+        const fx = [
+          () => m.sfxExplosion(1, true, -0.5),
+          () => m.sfxLaser(1, 0.3),
+          () => m.sfxMissile(1, -0.2),
+          () => m.sfxHit(1, 0.6),
+          () => m.sfxBump(1, -0.6),
+          () => m.sfxSkid(1, 0),
+          () => m.sfxExplosion(0.8, false, 0.4),
+          () => m.sfxWall(1, 0.1),
+        ];
+        let k = 0;
+        window.__estresse = setInterval(() => {
+          try {
+            fx[k++ % fx.length]();
+          } catch {
+            /* efeito ausente nesta versão */
+          }
+        }, 80);
+      });
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: caso.cpu ?? 4 });
     await wait(SEG * 1000);
     await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
+    if (caso.estresse) await page.evaluate(() => clearInterval(window.__estresse));
     const r = await page.evaluate(async () => {
       const m = await window.devModules();
       const a = m.audio();
@@ -1085,8 +1259,10 @@ async function picote() {
           run = 0;
         }
       }
-      // descontinuidades: salto de amostra muito maior que a variação local (estalo)
+      // descontinuidades: salto de amostra muito maior que a variação local (estalo). Rodada 12: cada
+      // uma com o tempo exato (s desde o início da gravação e performance.now) e o contexto
       let desc = 0;
+      const descLista = [];
       const W = 64;
       for (let i = W + 1; i < n - W; i += 1) {
         const d = Math.abs(x[i] - x[i - 1]);
@@ -1095,6 +1271,7 @@ async function picote() {
         for (let j = i - W; j < i + W; j++) if (j !== i) s += Math.abs(x[j] - x[j - 1]);
         if (d > 8 * (s / (2 * W - 1))) {
           desc++;
+          descLista.push({ amostra: i, salto: +d.toFixed(3), variacaoLocal: +(s / (2 * W - 1)).toFixed(4), antes: +x[i - 1].toFixed(3), depois: +x[i].toFixed(3) });
           i += W;
         }
       }
@@ -1134,6 +1311,28 @@ async function picote() {
       const tarefas = lt
         .map((e) => ({ ...e, fase: faseEm(e.inicio), stepMs: Math.round(dentro(e.inicio, e.inicio + e.ms, 'step')), renderMs: Math.round(dentro(e.inicio, e.inicio + e.ms, 'render')) }))
         .sort((x, y) => y.ms - x.ms);
+      // contexto de cada descontinuidade: fase do jogo, tarefa longa / step() / render() em curso
+      // (±30 ms), salto do atraso de render mais próximo (±60 ms) e o que o locutor/efeitos faziam
+      const perf0 = t.inicio ? t.inicio - performance.timeOrigin : null;
+      const saltosEm = (t.saltosEm ?? []).map((fr, k) => ({ ms: (fr / sr) * 1000, salto: (t.saltos ?? [])[k] }));
+      const descontinuidadesDetalhe = descLista.slice(0, 40).map((e) => {
+        const seg = e.amostra / sr;
+        const pn = perf0 === null ? null : perf0 + seg * 1000;
+        const perto = (ini, dur, folga) => pn !== null && ini - folga <= pn && pn <= ini + dur + folga;
+        const lt0 = pn === null ? null : lt.find((q) => perto(q.inicio, q.ms, 30));
+        const tr0 = pn === null ? [] : trechos.filter(([, t0, d]) => perto(t0, d, 30)).map(([nm, t0, d]) => ({ nome: nm, inicioRel: Math.round(t0 - pn), ms: +d.toFixed(1) }));
+        const at = saltosEm.find((q) => Math.abs(q.ms - seg * 1000) < 60);
+        return {
+          ...e,
+          segundo: +seg.toFixed(4),
+          perfNow: pn === null ? null : Math.round(pn),
+          fase: pn === null ? null : faseEm(pn),
+          longtask: lt0 ? { inicioRel: Math.round(lt0.inicio - pn), ms: lt0.ms } : null,
+          trechos: tr0.slice(0, 4),
+          atrasoRenderMs: at ? at.salto : null,
+          nivelLocal_dBFS: +(20 * Math.log10(Math.max(1e-9, Math.max(...Array.from(x.subarray(Math.max(0, e.amostra - 480), e.amostra + 480), Math.abs))))).toFixed(1),
+        };
+      });
       const soma = (nome) => trechos.reduce((s, [n, , d]) => (n === nome ? s + d : s), 0);
       const conta = (nome) => trechos.filter(([n]) => n === nome).length;
       const maior = (nome) => trechos.reduce((s, [n, , d]) => (n === nome ? Math.max(s, d) : s), 0);
@@ -1154,6 +1353,7 @@ async function picote() {
         buracosSinalMaior2ms: buracos.length,
         buracosSinalMs: buracos.slice(0, 30),
         descontinuidades: desc,
+        descontinuidadesDetalhe,
         atrasosRenderMaior2ms: saltos.length,
         atrasosRenderMaior10ms: saltos.filter((s) => s > 10).length,
         atrasosRenderMs: saltos.slice(0, 30),
@@ -1178,7 +1378,7 @@ async function picote() {
     });
     const { wav, ...met } = r;
     fs.writeFileSync(path.join(dir, `picote_${caso.nome}.wav`), Buffer.from(wav, 'base64'));
-    const res = { caso: caso.nome, cpuLentidao: 4, ...met };
+    const res = { caso: caso.nome, cpuLentidao: caso.cpu ?? 4, ...met };
     console.log('picote', JSON.stringify(res));
     resultados.push(res);
   }
@@ -1189,6 +1389,8 @@ async function picote() {
         observacao:
           'Corrida real (chem6-1, autopiloto, q=baixo) com CPU 4x mais lenta (CDP Emulation.setCPUThrottlingRate). A saída do master é gravada por um ' +
           'AudioWorklet. buracosSinal = silêncio digital >= 2 ms no meio do som; descontinuidades = saltos de amostra ~8x maiores que a variação local; ' +
+          'descontinuidadesDetalhe = cada uma com o segundo exato na gravação, performance.now, fase, tarefa longa/step()/render() em curso (±30 ms), ' +
+          'salto do atraso de render próximo (±60 ms) e nível local; leve_cpu6x = modo leve (celular) com CPU 6x mais lenta; ' +
           'atrasosRender = saltos (> 2 ms) do atraso do relógio de áudio em relação ao relógio de parede (a thread de áudio não entregou a tempo: buraco na saída); ' +
           'playoutStats = contadores do Chrome (fallbackFrames = amostras que o dispositivo tocou em silêncio), quando disponíveis. ' +
           'longtasks.maiores = tarefas longas (inicio = performance.now), com a fase do jogo e os ms de step()/render() dentro delas; ' +
@@ -1671,7 +1873,25 @@ async function som() {
             if (env[i] - Math.max(l, r) >= 4) { peaks++; lastPk = i; }
           }
         }
-        return { loudnessMomentaneoMaxLUFS: +M.toFixed(1), esforcoVocal_dB_2a4k_vs_300a800: +(10 * Math.log10(eh / (el || 1e-12))).toFixed(1), silabasPorSeg: +(peaks / Math.max(0.1, active * 0.01)).toFixed(2) };
+        // F0 (rodada 12): autocorrelação em quadros de 40 ms (passo 10 ms) do sinal 60–900 Hz reduzido a
+        // SR/4, só quadros com voz (energia a até 30 dB do máximo e correlação >= 0,45), 70–450 Hz;
+        // mediana e faixa de entonação (semitons entre os percentis 10 e 90), como o tratar.py
+        const lp = await band(x, 60, 900), D = 4, sr4 = SR / D;
+        const y = Float32Array.from({ length: Math.floor(lp.length / D) }, (_, i) => lp[i * D]);
+        const w4 = Math.floor(0.04 * sr4), h4 = Math.floor(0.01 * sr4), lag0 = Math.floor(sr4 / 450), lag1 = Math.ceil(sr4 / 70);
+        const fe = []; for (let st = 0; st + w4 + lag1 < y.length; st += h4) { let e = 0; for (let i = st; i < st + w4; i++) e += y[i] * y[i]; fe.push(e); }
+        const feMax = Math.max(...fe, 1e-12), f0s = [];
+        fe.forEach((e0, k) => {
+          if (e0 < feMax * 1e-3) return;
+          const st = k * h4;
+          let best = 0, bl = 0;
+          for (let L = lag0; L <= lag1; L++) { let s2 = 0, e1 = 0; for (let i = st; i < st + w4; i++) { s2 += y[i] * y[i + L]; e1 += y[i + L] * y[i + L]; } const r = s2 / Math.sqrt(e0 * e1 + 1e-12); if (r > best) { best = r; bl = L; } }
+          if (best >= 0.45 && bl) f0s.push(sr4 / bl);
+        });
+        f0s.sort((a, b) => a - b);
+        const pct = (q) => f0s[Math.min(f0s.length - 1, Math.floor(q * f0s.length))];
+        const f0Med = f0s.length >= 5 ? Math.round(pct(0.5)) : 0, f0Faixa = f0s.length >= 5 ? +(12 * Math.log2(pct(0.9) / pct(0.1))).toFixed(1) : 0;
+        return { loudnessMomentaneoMaxLUFS: +M.toFixed(1), esforcoVocal_dB_2a4k_vs_300a800: +(10 * Math.log10(eh / (el || 1e-12))).toFixed(1), silabasPorSeg: +(peaks / Math.max(0.1, active * 0.01)).toFixed(2), f0Mediano_Hz: f0Med, faixaF0_semitons: f0Faixa };
       };
       const toMono = (b) => { const x = new Float32Array(b.length); for (let ch = 0; ch < b.numberOfChannels; ch++) { const d = b.getChannelData(ch); for (let i = 0; i < x.length; i++) x[i] += d[i] / b.numberOfChannels; } return x; };
       const decode = async (ab) => { const c = new OfflineAudioContext(1, 1, SR); return toMono(await c.decodeAudioData(ab)); };
@@ -1699,12 +1919,12 @@ async function som() {
         return (await c.startRendering()).getChannelData(0);
       };
       const falas = {};
-      for (const f of ['start_0', 'start_1', 'start_2', 'hotFury_0', 'lightsUp_0', 'hammered_0', 'holyToledo_0', 'wow_0']) {
+      for (const f of ['start_0', 'hotFury_0', 'hotFury_1', 'lightsUp_0', 'hammered_0', 'holyToledo_0', 'holyToledo_1', 'wow_0', 'wipedOut_0', 'wipedOut_1', 'finishFirst_0']) {
         const x = await decode(await (await fetch(m.publicUrl(`audio/locutor/${f}.mp3`))).arrayBuffer());
         const cru = await voiceMetrics(x);
         const arena = await voiceMetrics(await throughArena(x));
         const g = refGrito.luta;
-        falas[f] = { cru, arena, atingeGrito: { esforco: cru.esforcoVocal_dB_2a4k_vs_300a800 >= g.esforcoVocal_dB_2a4k_vs_300a800, taxa: cru.silabasPorSeg >= TAXA_GRITO, esforcoArena: arena.esforcoVocal_dB_2a4k_vs_300a800 >= g.esforcoVocal_dB_2a4k_vs_300a800, taxaArena: arena.silabasPorSeg >= TAXA_GRITO }, abaixoDaReferencia: { loudness: cru.loudnessMomentaneoMaxLUFS < ref.loudnessMomentaneoMaxLUFS, esforco: cru.esforcoVocal_dB_2a4k_vs_300a800 < ref.esforcoVocal_dB_2a4k_vs_300a800, taxa: cru.silabasPorSeg < ref.silabasPorSeg }, arenaAtingeReferencia: { loudness: arena.loudnessMomentaneoMaxLUFS >= ref.loudnessMomentaneoMaxLUFS, esforco: arena.esforcoVocal_dB_2a4k_vs_300a800 >= ref.esforcoVocal_dB_2a4k_vs_300a800 } };
+        falas[f] = { cru, arena, faixaF0Minima8st: cru.faixaF0_semitons >= 8, atingeGrito: { esforco: cru.esforcoVocal_dB_2a4k_vs_300a800 >= g.esforcoVocal_dB_2a4k_vs_300a800, taxa: cru.silabasPorSeg >= TAXA_GRITO, esforcoArena: arena.esforcoVocal_dB_2a4k_vs_300a800 >= g.esforcoVocal_dB_2a4k_vs_300a800, taxaArena: arena.silabasPorSeg >= TAXA_GRITO }, abaixoDaReferencia: { loudness: cru.loudnessMomentaneoMaxLUFS < ref.loudnessMomentaneoMaxLUFS, esforco: cru.esforcoVocal_dB_2a4k_vs_300a800 < ref.esforcoVocal_dB_2a4k_vs_300a800, taxa: cru.silabasPorSeg < ref.silabasPorSeg }, arenaAtingeReferencia: { loudness: arena.loudnessMomentaneoMaxLUFS >= ref.loudnessMomentaneoMaxLUFS, esforco: arena.esforcoVocal_dB_2a4k_vs_300a800 >= ref.esforcoVocal_dB_2a4k_vs_300a800 } };
       }
       extra.locutor = {
         referencia: { arquivo: 'scripts/locutor/voz-referencia-arena.wav (Alba MacKenna, CC-BY 4.0)', ...ref },
@@ -1805,6 +2025,7 @@ async function desempenho() {
             const seg = t.length > 1 ? (t[t.length - 1] - t[0]) / 1000 : ms / 1000;
             const p95 = iv.length ? iv[Math.min(iv.length - 1, Math.floor(iv.length * 0.95))] : 0;
             resolve({
+              inicioAbs: Math.round(t00),
               quadros: t.length,
               fpsMedio: +(Math.max(0, t.length - 1) / seg).toFixed(1),
               quadroP95ms: +p95.toFixed(1),
@@ -1839,10 +2060,25 @@ async function desempenho() {
     await page.waitForFunction(() => window.game.phase === 'racing', null, { timeout: 180000, polling: 250 });
     await wait(3000);
     const corrida = await medir(15000);
-    const estado = await page.evaluate(() => {
+    const estado = await page.evaluate((t0) => {
       const g = window.game;
-      return { escalaResolucao: +g.dynRes.scale.toFixed(2), pixelRatio: +g.renderer.getPixelRatio().toFixed(2), trava30: g.cap30 };
-    });
+      const tipos = { 0: 'Basic', 1: 'PCF', 2: 'PCFSoft', 3: 'VSM' };
+      return {
+        escalaResolucao: +g.dynRes.scale.toFixed(2),
+        pixelRatio: +g.renderer.getPixelRatio().toFixed(2),
+        trava30: g.cap30,
+        // queda automática e o que ficou ligado (prova de que a resolução dinâmica e a queda agiram)
+        degrau: g.degrade,
+        bloom: !!g.postfx,
+        sombraTipo: tipos[g.renderer.shadowMap.type] ?? g.renderer.shadowMap.type,
+        sombraLigada: g.sun.castShadow,
+        sombraIntensidade: g.sun.shadow.intensity,
+        historicoEscalas: g.dynRes.history,
+        // resize, resolução dinâmica, queda e preparo com carimbo relativo ao início da medição da
+        // corrida (aosMs negativo = antes dela; cruzar com corrida.renderLentos[].aosMs)
+        eventos: g.perfEvents.map((e) => ({ aosMs: e.t - t0, tipo: e.tipo, info: e.info })),
+      };
+    }, corrida.inicioAbs);
     await page.evaluate(() => window.game.togglePause());
     await wait(2500);
     const pausa = await medir(4000);

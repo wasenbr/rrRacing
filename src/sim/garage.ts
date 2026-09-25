@@ -129,14 +129,16 @@ export interface CarPotential {
 export const CAR_POTENTIAL: Record<string, CarPotential> = {
   // o carro de entrada: as peças rendem o bastante para valer a compra na Chem VI, mas abaixo do Marauder
   dirtdevil: { speed: 0.75, accel: 0.6, armor: 0.75 },
-  marauder: { speed: 0.85, accel: 0.85, armor: 0.85 },
+  // (rodada 11: arranque 0,85 → 0,5 — com o arranque de fábrica mais alto ele alcançava o Air Blade no máximo)
+  marauder: { speed: 0.85, accel: 0.5, armor: 0.85 },
   // o Air Blade já sai de fábrica com o melhor arranque: o motor rende mais em final que em arranque
   // (e a final no máximo passa a do Marauder: antes ele ficava mais lento que o Marauder no máximo)
   airblade: { speed: 0.9, accel: 0.3, armor: 0.9 },
   // o tanque arranca devagar e rola pesado de fábrica: o chassi aguenta motor grande (no máximo ele
   // precisa abrir folga clara sobre o Air Blade, que arranca muito melhor)
-  battletrak: { speed: 1.4, accel: 1.3, armor: 1.2 },
-  havac: { speed: 1.3, accel: 1.25, armor: 1.3 },
+  // (rodada 11: arranque de fábrica mais baixo em todos — o motor do tanque rende mais para manter o degrau)
+  battletrak: { speed: 1.4, accel: 3.2, armor: 1.2 },
+  havac: { speed: 1.4, accel: 2.6, armor: 1.3 },
 };
 
 function carClass(vehicleId: string): CarPotential {
@@ -345,7 +347,8 @@ function rawAttributes(s: VehicleSpec): CarAttributes {
  */
 const ATTRIBUTE_SCALE: Record<keyof CarAttributes, [number, number]> = {
   speed: [35, 51],
-  accel: [20, 56],
+  // (rodada 11: arranque de fábrica ~35% mais baixo — 0–100 de 1,3 a 2 s — e a escala acompanha)
+  accel: [12.5, 42],
   handling: [2.2, 7],
   armor: [50, 140],
   firepower: [35, 95],

@@ -51,11 +51,74 @@ function alongDelta(world: World, from: number, to: number): number {
 /** Distância (m) entre líder e 2º em que há disputa pela ponta (DUEL_MIN..DUEL_GAP). */
 const DUEL_GAP = 40;
 /** A CPU usa o DERRAPAR com a curva à frente acima deste ângulo (rad) e acima desta fração da final. */
-const AI_SHARP_BEND = 1.2;
-const AI_SHARP_SPEED = 0.6;
+const AI_SHARP_BEND = 0.9;
+const AI_SHARP_SPEED = 0.55;
+/**
+ * Ritmo da CPU. `basePace`: fração da final com habilidade 0 (com 1, a final inteira); `cornerSkill`:
+ * quanto a habilidade baixa tira da velocidade de curva; `cornerCut`: quanto do giro o carro de fato usa
+ * na curva (corta por dentro); `cornerGrip`: desconto da aderência baixa (grip / (grip + cornerGrip)).
+ */
+export const AI_TUNING = { basePace: 0.8, cornerSkill: 0.2, cornerCut: 1.6, cornerGrip: 2 };
+/** Janela (m) em que se mede a curvatura da pista à frente e até onde a CPU olha para frear. */
+const CORNER_WINDOW = 12;
+const CORNER_STEP = 3;
+/** Fração do freio com que a CPU conta ao planejar a frenagem (freia tarde). */
+const CORNER_BRAKE = 0.85;
+
+/**
+ * Velocidade máxima (m/s) com que dá para entrar nas curvas dos próximos metros: em cada ponto à frente,
+ * a curvatura da pista (giro na janela / comprimento) contra o giro do carro nessa velocidade (o mesmo
+ * de stepVehicle: steerRate × (1 − 0,22 v/final), vezes o DERRAPAR), descontada a aderência; e quanto
+ * dá para frear até lá.
+ */
+function cornerSpeed(world: World, r: Racer, dist: number, speed: number): number {
+  const track = world.track;
+  const spec = r.spec;
+  const turn = spec.steerRate * SHARP_TURN_AI * AI_TUNING.cornerCut * (spec.grip / (spec.grip + AI_TUNING.cornerGrip));
+  const decel = spec.brake * CORNER_BRAKE;
+  const horizon = 6 + (speed * speed) / (2 * decel);
+  let best = Infinity;
+  let h0 = track.pointAtDist(dist).heading;
+  for (let x = 0; x <= horizon; x += CORNER_STEP) {
+    const h1 = track.pointAtDist(dist + x + CORNER_WINDOW).heading;
+    const k = Math.abs(wrapAngle(h1 - (x === 0 ? h0 : (h0 = track.pointAtDist(dist + x).heading)))) / CORNER_WINDOW;
+    if (k < 0.02) continue;
+    // v·k = turn·(1 − 0,22 v/final)  →  v = turn / (k + 0,22·turn/final)
+    const vc = turn / (k + (0.22 * turn) / spec.maxSpeed);
+    best = Math.min(best, Math.sqrt(vc * vc + 2 * decel * x));
+  }
+  return best;
+}
+/** Giro a mais do DERRAPAR (SHARP_TURN em vehicle.ts). */
+const SHARP_TURN_AI = 1.9;
 const DUEL_MIN = 4;
-const DUEL_LEADER_PACE = 0.975;
-const DUEL_CHASER_PACE = 1.03;
+
+/**
+ * Faixa para passar quem está à frente (lateral `lat`): pelo lado com mais pista; atacando (`free`),
+ * pelo lado em que ninguém mais ocupa a faixa nos próximos metros.
+ */
+function passLane(world: World, r: Racer, dist: number, lat: number, side: number, free: boolean): number {
+  const lim = world.track.halfWidth - 1.6;
+  const a = clamp(lat - side, -lim, lim);
+  const b = clamp(lat + side, -lim, lim);
+  // quanto de carro cabe de cada lado
+  const roomA = lat - -lim;
+  const roomB = lim - lat;
+  let pick = roomA >= roomB ? a : b;
+  if (free) {
+    const busy = (c: number) =>
+      world.racers.some((o) => {
+        if (o.id === r.id || !o.alive || o.finishPlace) return false;
+        const oc = trackCoords(world, o.car.x, o.car.z, o.car.pieceIndex);
+        const ahead = alongDelta(world, dist, oc.dist);
+        return ahead > -3 && ahead < 16 && Math.abs(oc.lateral - c) < 2;
+      });
+    const other = pick === a ? b : a;
+    const roomOther = pick === a ? roomB : roomA;
+    if (busy(pick) && !busy(other) && roomOther > 1.5) pick = other;
+  }
+  return pick;
+}
 
 /** Líder (da CPU) com alguém colado atrás, ou o 2º colado no líder; entre quem ainda corre. */
 function leaderDuel(world: World, r: Racer): 'leader' | 'chaser' | null {
@@ -85,6 +148,16 @@ function hazardRadius(kind: Hazard['kind']): number {
   }
 }
 
+/**
+ * Tempo de reação da CPU a uma arma recém-solta (s): antes disso ela não "viu" a mina/óleo que caiu
+ * logo à frente (rodada 11: é o que decide se o perseguidor visado leva a mina — ~1/3 das vezes).
+ */
+export const AI_REACTION = { base: 0.5, skill: 0.3 };
+function noticed(h: Hazard, skill: number): boolean {
+  if (h.kind !== 'mine' && h.kind !== 'scatter' && h.kind !== 'oil') return true;
+  return h.age >= AI_REACTION.base - AI_REACTION.skill * skill;
+}
+
 /** Onde a CPU mira (ponto à frente na faixa): a mesma conta da direção, em `computeAiInput`. */
 function aimLook(speed: number): number {
   return 7 + Math.max(0, speed) * 0.35;
@@ -100,6 +173,7 @@ function steerLook(world: World, r: Racer, me: { dist: number; lateral: number }
   let threat = look;
   for (const h of world.hazards) {
     if (h.kind !== 'mine' && h.kind !== 'scatter' && h.kind !== 'oil') continue;
+    if (!noticed(h, r.ai?.skill ?? 1)) continue;
     const hc = trackCoords(world, h.x, h.z, r.car.pieceIndex);
     const ahead = alongDelta(world, me.dist, hc.dist);
     if (ahead > 2 && ahead < threat && Math.abs(hc.lateral - me.lateral) < hazardRadius(h.kind) + 2.5) threat = ahead;
@@ -122,6 +196,7 @@ function avoidHazards(world: World, r: Racer, me: { dist: number; lateral: numbe
   for (const h of world.hazards) {
     if (h.kind === 'slime' && skill < 0.5) continue;
     if (h.kind === 'puddle' && r.spec.traction === 'hover') continue;
+    if (!noticed(h, skill)) continue;
     const hc = trackCoords(world, h.x, h.z, car.pieceIndex);
     const ahead = alongDelta(world, me.dist, hc.dist);
     if (ahead <= 0 || ahead > see) continue;
@@ -168,6 +243,11 @@ function avoidHazards(world: World, r: Racer, me: { dist: number; lateral: numbe
 }
 
 export function computeAiInput(world: World, r: Racer, dt: number): ControlInput {
+  // desvios (bifurcação): cada CPU segue o ramo em que está; na chegada, o ramo alterna por carro e por volta
+  return world.track.withRoute(r.car.pieceIndex, (b) => (r.id + b + r.progress.lap) % 2 === 1, () => computeAiInputOnRoute(world, r, dt));
+}
+
+function computeAiInputOnRoute(world: World, r: Racer, dt: number): ControlInput {
   const track = world.track;
   const car = r.car;
   const diff = DIFFICULTY[world.difficulty];
@@ -237,9 +317,10 @@ export function computeAiInput(world: World, r: Racer, dt: number): ControlInput
       // desvia de quem está logo à frente, na mesma faixa (ultrapassagem pelo lado mais livre)
       if (ahead > 0 && ahead < 14 && Math.abs(oc.lateral - lane) < 2.4) {
         blocked = true;
-        // preso há um tempo: abre mais para o lado e ataca
-        const side = st.behindTime > 2 ? 3.8 : 3;
-        lane = oc.lateral > 0 ? oc.lateral - side : oc.lateral + side;
+        // preso há mais de 1 s: sai de lado para a faixa livre e ataca (ultrapassagem de verdade, no
+        // lugar do "duelo" roteirizado de antes — rodada 11)
+        const side = st.behindTime > 1 ? 3.8 : 3;
+        lane = passLane(world, r, me.dist, oc.lateral, side, st.behindTime > 1);
         // colado atrás e sem espaço: os jatos de pulo passam por cima
         if (ahead < 6 && Math.abs(oc.lateral - me.lateral) < 1.8 && speed > 12) hop = true;
       }
@@ -272,17 +353,20 @@ export function computeAiInput(world: World, r: Racer, dt: number): ControlInput
       // solta mina/óleo em quem vem colado atrás
       // (óleo só com o perseguidor bem alinhado e perto: mancha solta a esmo só enche a pista)
       const oil = r.spec.rear === 'oil';
-      const spread = r.spec.rear === 'scatter' ? 6 : oil ? 1.5 : 3;
+      // (mina só com ele na mesma linha — rodada 11: com 3 m de folga ela caía fora do caminho dele)
+      const spread = r.spec.rear === 'scatter' ? 6 : oil ? 1.5 : 1.4;
       // óleo só com o perseguidor a 12–25 m: longe o bastante para ele ver a mancha e poder desviar;
       // minas/scatter com ele a 8–16 m (antes 3–16: colado, não havia como desviar — rodada 10)
       if (rearOk && r.rearCharges > 0 && ahead < (oil ? -12 : -8) && ahead > (oil ? -25 : -16) && Math.abs(oc.lateral - me.lateral) < spread) {
         if (world.rng() < 0.2 + ai.aggression * 0.5) st.wantDrop = true;
       }
     }
-    // desvia de minas e óleo (pilotos melhores enxergam mais longe)
-    const see = Math.max(16 + ai.skill * 16, speed * (0.6 + ai.skill * 0.5));
+    // desvia de minas e óleo (pilotos melhores enxergam mais longe; rodada 11: a mina arma em 0,2 s,
+    // então o desvio começa bem antes — ~1 s à frente)
+    const see = Math.max(20 + ai.skill * 18, speed * (0.8 + ai.skill * 0.5));
     for (const h of world.hazards) {
       if (h.kind !== 'mine' && h.kind !== 'oil' && h.kind !== 'scatter') continue;
+      if (!noticed(h, ai.skill)) continue;
       const hc = trackCoords(world, h.x, h.z, car.pieceIndex);
       const ahead = alongDelta(world, me.dist, hc.dist);
       // perigo logo à frente na faixa atual: pula por cima (só minas/óleo; poças fixas não valem o pulo)
@@ -315,21 +399,24 @@ export function computeAiInput(world: World, r: Racer, dt: number): ControlInput
   const desired = Math.atan2(tx - car.x, tz - car.z);
   input.steer = clamp(-wrapAngle(desired - car.heading) * 2.6, -1, 1);
 
-  // Velocidade: reduz antes das curvas
+  // Velocidade: fração da final pela habilidade (AI_TUNING.basePace) e redução só onde a curva à frente pede,
+  // pelo raio real da pista e pelo quanto o carro vira (giro, aderência, DERRAPAR); freia tarde
+  // (avaliadores, rodada 11: um piloto trivial de acelerador cheio vencia 32 de 36 no Normal)
   const now = track.pointAtDist(me.dist).heading;
   const later = track.pointAtDist(me.dist + 10 + Math.max(0, speed) * 0.5).heading;
   const bend = Math.abs(wrapAngle(later - now));
-  let targetSpeed = r.spec.maxSpeed * (0.72 + ai.skill * 0.28) * (1 - 0.42 * clamp(bend / (Math.PI / 2), 0, 1));
-  // no vácuo de quem vai à frente, arrisca mais para passar (corridas menos "em fila")
-  if (st.behindTime > 2) targetSpeed *= 1.06;
+  const pace = AI_TUNING.basePace + (1 - AI_TUNING.basePace) * ai.skill;
+  let targetSpeed = r.spec.maxSpeed * pace;
+  const corner = cornerSpeed(world, r, me.dist, speed) * (1 - AI_TUNING.cornerSkill * (1 - ai.skill));
+  let brakeHard = false;
+  if (corner < targetSpeed) {
+    targetSpeed = corner;
+    brakeHard = speed > corner + 3;
+  }
+  // preso atrás de alguém há mais de 1 s: arrisca mais para passar (corridas menos "em fila")
+  if (st.behindTime > 1) targetSpeed *= 1.05;
   // e aproveita a velocidade a mais do vácuo (o carro anda mais ali: ver draftFactor)
   targetSpeed *= 1 + DRAFT_SPEED * draftFactor(world, r);
-
-  // Disputa pela ponta (avaliadores, rodada 9: pouca troca de liderança): com o 2º colado (< DUEL_GAP),
-  // o líder da CPU alivia um pouco o ritmo e o 2º arrisca mais (velocidade e turbo)
-  const duel = leaderDuel(world, r);
-  if (duel === 'leader') targetSpeed *= DUEL_LEADER_PACE;
-  else if (duel === 'chaser') targetSpeed *= DUEL_CHASER_PACE;
 
   // "Elástico" leve em relação ao humano mais adiantado (que ainda corre), para a corrida ficar disputada
   const humans = world.racers.filter((o) => !o.ai && !o.finishPlace);
@@ -342,9 +429,10 @@ export function computeAiInput(world: World, r: Racer, dt: number): ControlInput
   }
 
   if (speed < targetSpeed) input.throttle = 1;
-  else if (speed > targetSpeed + 4) input.brake = 0.6;
+  else if (brakeHard) input.brake = clamp((speed - targetSpeed) / 6, 0.3, 1);
+  else if (speed > targetSpeed + 4) input.brake = 0.4;
   // curva fechada embalado: usa o DERRAPAR como o jogador (vira mais e perde menos que frear; rodada 10)
-  if (bend > AI_SHARP_BEND && speed > r.spec.maxSpeed * AI_SHARP_SPEED && Math.abs(input.steer) > 0.5) input.sharp = true;
+  if (bend > AI_SHARP_BEND && speed > r.spec.maxSpeed * AI_SHARP_SPEED && Math.abs(input.steer) > 0.4) input.sharp = true;
 
   input.fire = st.wantFire;
   input.drop = st.wantDrop;
@@ -364,3 +452,45 @@ export function computeAiInput(world: World, r: Racer, dt: number): ControlInput
   if (input.nitro) st.wantNitro = false;
   return input;
 }
+
+/**
+ * Piloto de referência "humano" (avaliadores, rodada 11): o jeito mais simples de jogar — segue o
+ * centro da pista, acelera sempre, usa só o botão DERRAPAR nas curvas fechadas e não atira. Serve de
+ * régua para a CPU e a dificuldade (testes e scripts/evidencias.mjs): no Normal ele deve vencer só
+ * parte das corridas contra 3 CPUs. Preso (bateu, rodou), dá ré até alinhar, como qualquer jogador.
+ */
+export function referenceInput(world: World, r: Racer, dt = 1 / 60): ControlInput {
+  return world.track.withRoute(r.car.pieceIndex, () => false, () => referenceInputOnRoute(world, r, dt));
+}
+
+function referenceInputOnRoute(world: World, r: Racer, dt: number): ControlInput {
+  const track = world.track;
+  const car = r.car;
+  const input = emptyInput();
+  const st = r.aiState;
+  const q = track.query(car.x, car.z, car.pieceIndex);
+  const v = forwardSpeed(car);
+  const tangent = track.pointAtDist(q.dist).heading;
+  const err = wrapAngle(tangent - car.heading);
+  if (st.reverseTime > 0) {
+    st.reverseTime -= dt;
+    if (Math.abs(err) < 0.4) st.reverseTime = 0;
+    input.brake = 1;
+    input.steer = clamp(err * 3, -1, 1);
+    return input;
+  }
+  st.stuckTime = world.started && Math.abs(v) < 2 ? st.stuckTime + dt : 0;
+  if (st.stuckTime > 1) {
+    st.stuckTime = 0;
+    st.reverseTime = 1.5;
+  }
+  const p = track.pointAtDist(q.dist + 6 + Math.max(0, v) * 0.3);
+  const d = wrapAngle(Math.atan2(p.x - car.x, p.z - car.z) - car.heading);
+  const bend = Math.abs(wrapAngle(track.pointAtDist(q.dist + 8 + Math.max(0, v) * 0.45).heading - tangent));
+  input.throttle = 1;
+  input.steer = clamp(-d * 2.5, -1, 1);
+  input.sharp = bend > REF_SHARP_BEND && v > r.spec.maxSpeed * 0.6;
+  return input;
+}
+/** Curva à frente (rad) a partir da qual o piloto de referência usa o DERRAPAR. */
+const REF_SHARP_BEND = 0.9;

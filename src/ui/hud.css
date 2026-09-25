@@ -214,7 +214,8 @@
 /* celular: os cantos de baixo e a faixa sob a posição (pausa/câmera) são dos controles de toque;
    o aviso de corrida vai para a esquerda do bloco de posição e o de sistema para o meio de baixo */
 body:has(.touch:not(.off)) .rh-toast { top: 2px; right: calc(100% + 8px); max-width: 34vw; }
-body:has(.touch:not(.off)) .rh-note { left: 50%; bottom: max(8px, env(safe-area-inset-bottom)); transform: translateX(-50%); max-width: 30vw; }
+/* (o de sistema fica no meio também na pausa: voltar ao canto esquerdo animava o translate e cortava o chip) */
+body:has(.touch) .rh-note { left: 50%; bottom: max(8px, env(safe-area-inset-bottom)); transform: translateX(-50%); max-width: 30vw; }
 .rh-mirror {
   position: absolute; display: none; border: 5px solid #2a2c32; border-radius: 10px;
   /* moldura de retrovisor: aro cromado, sombra interna e sombra projetada */
@@ -248,7 +249,10 @@ body:has(.touch:not(.off)) .rh-note { left: 50%; bottom: max(8px, env(safe-area-
 .rh-right {
   padding: 4px 8px 6px 12px;
   border-radius: 10px;
-  background: radial-gradient(ellipse at 70% 40%, rgba(0, 0, 0, 0.42), rgba(0, 0, 0, 0.18) 70%, rgba(0, 0, 0, 0) 100%);
+  /* placa com borda discreta: a mesma em todas as câmeras (antes o degradê sem borda só aparecia
+     como uma caixa escura contra o céu claro da perseguição) */
+  background: linear-gradient(180deg, rgba(22, 22, 28, 0.5), rgba(8, 8, 12, 0.38));
+  border: 1px solid rgba(154, 154, 166, 0.28);
 }
 .rh-right, .rh-money, .rh-time, .rh-best, .rh-speed, .rh-laps span, .rh-toast, .rh-note {
   text-shadow: 1.5px 0 0 #000, -1.5px 0 0 #000, 0 1.5px 0 #000, 0 -1.5px 0 #000, 0 2px 4px rgba(0, 0, 0, 0.9);

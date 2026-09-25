@@ -182,9 +182,13 @@ const BALL_FS = /* glsl */ `
   void main() {
     vec4 t = texture2D(map, vUv);
     float a = t.a * vAlpha;
-    vec3 col = vColor * t.a * (0.4 + 0.9 * t.r) * vNear;
+    // miolo na cor quente (amarelo), borda puxada para laranja-escuro
+    vec3 tone = mix(vColor * vec3(0.78, 0.4, 0.18), vColor, t.r);
+    vec3 col = tone * t.a * (0.55 + 0.45 * t.r) * vNear;
     if (a < 0.004 && max(col.r, max(col.g, col.b)) < 0.004) discard;
-    gl_FragColor = vec4(col, a);
+    // emissão <= alfa: somando qualquer número de bolas o resultado nunca passa de 1,0 (sem o
+    // HDR branco que o bloom estourava numa bolha)
+    gl_FragColor = vec4(min(col, vec3(a)), a);
   }`;
 
 /**
@@ -354,7 +358,7 @@ class ParticlePool {
       else if (this.kind === 'ball') {
         // alfa = quanto tapa o fundo: pouco enquanto é fogo (brilha), mais quando vira fumaça
         const out = t < 0.55 ? 1 : 1 - ((t - 0.55) / 0.45) ** 2;
-        a = (0.18 + 0.47 * Math.min(1, t / 0.45)) * out;
+        a = (0.6 + 0.15 * Math.min(1, t / 0.45)) * out;
       } else a = 1 - t * t;
       this.alpha.setX(i, fadeIn * a);
       this.rot.setX(i, p.rot);
@@ -395,7 +399,7 @@ function coinTexture(): THREE.CanvasTexture {
  * ambiente "quebra" nelas), `detail` é o tom em escala de cinza (tingido pela cor de cada líquido)
  * e `sheen` é o furta-cor do óleo.
  */
-function puddleTextures(): { alpha: THREE.CanvasTexture; normal: THREE.CanvasTexture; detail: THREE.CanvasTexture; sheen: THREE.CanvasTexture } {
+function puddleTextures(): { alpha: THREE.CanvasTexture; normal: THREE.CanvasTexture; detail: THREE.CanvasTexture; sheen: THREE.CanvasTexture; mud: THREE.CanvasTexture } {
   const S = 256;
   const C = S / 2;
   let seed = 11;
@@ -526,8 +530,25 @@ function puddleTextures(): { alpha: THREE.CanvasTexture; normal: THREE.CanvasTex
       ctx.fill();
     }
   });
-  for (const t of [alpha, normal, detail, sheen]) t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
-  return { alpha, normal, detail, sheen };
+  // água de pântano: fundo escuro esverdeado e borda de lama (a cor vem daqui, não de um azul chapado)
+  const mud = canvasTexture(S, S, (ctx) => {
+    ctx.fillStyle = '#6a5c3c';
+    ctx.fillRect(0, 0, S, S);
+    for (const [grow, col] of [[-4, '#3e3a28'], [-9, '#1c2420'], [-15, '#0c1416'], [-24, '#070c10']] as const) {
+      ctx.fillStyle = col;
+      blob(ctx, grow);
+    }
+    for (let i = 0; i < 40; i++) {
+      const a = rnd() * 6.28;
+      const r = radius(a) - 2 - rnd() * 8;
+      ctx.fillStyle = `rgba(${110 + rnd() * 30},${96 + rnd() * 24},${60 + rnd() * 20},0.6)`;
+      ctx.beginPath();
+      ctx.arc(C + Math.cos(a) * r, C + Math.sin(a) * r, 1.5 + rnd() * 3.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  });
+  for (const t of [alpha, normal, detail, sheen, mud]) t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+  return { alpha, normal, detail, sheen, mud };
 }
 
 /** Marca queimada no chão: centro preto fosco, borda irregular em raios e fuligem esfumada. */
@@ -714,7 +735,8 @@ export class Effects {
   }
   private oilMat = this.liquid({ map: this.puddleTex.sheen, roughness: 0.03, metalness: 0.7, envMapIntensity: 2 });
   private slimeMat = this.liquid({ color: 0x5ad820, emissive: 0x1a6a04, roughness: 0.12, metalness: 0.15 });
-  private waterMat = this.liquid({ color: 0x3a6aff, emissive: 0x041a50, roughness: 0.03, metalness: 0.35, opacity: 0.9 });
+  // água escura translúcida com especular alto e borda de lama (antes: tinta azul chapada)
+  private waterMat = this.liquid({ map: this.puddleTex.mud, color: 0xffffff, roughness: 0.04, metalness: 0.15, envMapIntensity: 2.2, opacity: 0.85 });
   private tarMat = this.liquid({ color: 0x1a1a1e, roughness: 0.06, metalness: 0.7 });
   private snowMat = new THREE.MeshStandardMaterial({ color: 0xf4f8ff, roughness: 0.75 });
   private snowPatchMat = this.liquid({ color: 0xf4f8ff, roughness: 0.8, metalness: 0, envMapIntensity: 0.6, normalScale: new THREE.Vector2(2.5, 2.5) });
@@ -822,7 +844,7 @@ export class Effects {
     }
     for (let i = 0; i < 4; i++) {
       // clarão alaranjado e contido (o branco estourado tapava a cena)
-      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: blastTex, color: HOT(0xffc070, 1.3), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, fog: false }));
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: blastTex, color: HOT(0xffa850, 0.55), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, fog: false }));
       sprite.visible = false;
       sprite.renderOrder = 4;
       this.group.add(sprite);
@@ -1011,16 +1033,17 @@ export class Effects {
         x: x + Math.cos(a) * r, y: y + 0.7 + Math.random() * 0.9 * s, z: z + Math.sin(a) * r,
         vx: Math.cos(a) * (1 + Math.random() * 2) * s, vy: 1.5 + Math.random() * 2.5, vz: Math.sin(a) * (1 + Math.random() * 2) * s,
         life: 0.75 + Math.random() * 0.45, size0: (hot ? 1.2 : 1.6) * s, size1: (hot ? 3.0 : 3.8) * s,
-        c0: hot ? HOT(0xffb050, 1.7) : HOT(0xff8a30, 1.3), c1: HOT(0xd0601c, 0.9), gravity: -1.5, drag: 2.8,
+        c0: hot ? HOT(0xffd24a) : HOT(0xffa030), c1: HOT(0xc8501a, 0.85), gravity: -1.5, drag: 2.8,
       });
     }
     // núcleo aditivo curto (o brilho do miolo) e algumas línguas de fogo para os lados
-    for (let i = 0; i < (big ? 4 : 2); i++) {
+    // (fraco: somado à bola de fogo não passa muito de 1,0)
+    for (let i = 0; i < (big ? 2 : 1); i++) {
       this.fire.emit({
         x: x + (Math.random() - 0.5) * 0.8 * s, y: y + 0.9 + Math.random() * 0.6 * s, z: z + (Math.random() - 0.5) * 0.8 * s,
         vx: 0, vy: 1.5, vz: 0,
-        life: 0.3 + Math.random() * 0.1, size0: 1.8 * s, size1: 2.6 * s,
-        c0: HOT(0xffd890, 1.6), c1: HOT(0xff7020, 0.35), gravity: 0, drag: 3,
+        life: 0.3 + Math.random() * 0.1, size0: 1.4 * s, size1: 2.2 * s,
+        c0: HOT(0xffc050, 0.3), c1: HOT(0xff6010, 0.1), gravity: 0, drag: 3,
       });
     }
     const n = (big ? 14 : 6) >> (lite ? 1 : 0);
@@ -1032,7 +1055,7 @@ export class Effects {
         x, y: y + 0.8, z,
         vx: Math.cos(a) * sp * (1 - up * 0.5), vy: up * sp * 1.1, vz: Math.sin(a) * sp * (1 - up * 0.5),
         life: 0.25 + Math.random() * 0.35, size0: 1.0 * s, size1: 0.25,
-        c0: HOT(0xff8a20, 1.2), c1: HOT(0xb01800, 0.45), gravity: 4, drag: 3,
+        c0: HOT(0xff8a20, 0.7), c1: HOT(0xb01800, 0.3), gravity: 4, drag: 3,
       });
     }
     // destroços sólidos (8-12 na grande), com gravidade, giro e quique no chão (metade no celular)
@@ -1079,7 +1102,7 @@ export class Effects {
       this.smoke.emit({
         x: x + Math.cos(a), y: y + 0.4, z: z + Math.sin(a),
         vx: Math.cos(a) * 5 * s, vy: 0.6, vz: Math.sin(a) * 5 * s,
-        life: 1.2 + Math.random() * 0.6, size0: 1.2 * s, size1: 3.5 * s,
+        life: 2 + Math.random() * 0.8, size0: 1.2 * s, size1: 3.8 * s,
         c0: HOT(0x2e2620), c1: HOT(0x121110), gravity: -0.2, drag: 2.5,
       });
     }
@@ -1089,7 +1112,7 @@ export class Effects {
     flash.light.position.set(x, y + 2, z);
     flash.light.color.set(0xff7a20);
     flash.life = big ? 0.45 : 0.25;
-    flash.light.intensity = big ? 150 : 55;
+    flash.light.intensity = big ? 90 : 40;
     // onda de choque rente ao chão (pool): expande rápido e some em ~0,3 s
     const ground = this.world ? this.world.track.query(x, z).height : y;
     const onGround = Math.abs(ground - y) < 2.5;
@@ -1139,12 +1162,13 @@ export class Effects {
     });
   }
 
-  flame(x: number, y: number, z: number): void {
+  /** `k`: brilho (3 = labareda de carro em pedaços; menos nos restos de explosão). */
+  flame(x: number, y: number, z: number, k = 3): void {
     this.fire.emit({
       x: x + (Math.random() - 0.5) * 0.8, y, z: z + (Math.random() - 0.5) * 0.8,
       vx: 0, vy: 3 + Math.random() * 2, vz: 0,
       life: 0.3 + Math.random() * 0.2, size0: 0.8, size1: 0.1,
-      c0: HOT(0xffb040, 3), c1: HOT(0xff2000, 1), gravity: -2, drag: 2,
+      c0: HOT(0xffb040, k), c1: HOT(0xff2000, k / 3), gravity: -2, drag: 2,
     });
   }
 
@@ -1649,7 +1673,7 @@ export class Effects {
           c0: HOT(0x1e1814), c1: HOT(0x0a0a0a), gravity: -0.4, drag: 0.9,
         });
       }
-      if (c.s > 1 && Math.random() < dt * 14) this.flame(c.x + (Math.random() - 0.5) * 1.2, c.y + 0.5, c.z + (Math.random() - 0.5) * 1.2);
+      if (c.s > 1 && Math.random() < dt * 14) this.flame(c.x + (Math.random() - 0.5) * 1.2, c.y + 0.5, c.z + (Math.random() - 0.5) * 1.2, 0.8);
       if (c.t > 0) this.columns[nc++] = c;
       else this.columnsFree.push(c);
     }

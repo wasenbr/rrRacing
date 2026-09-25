@@ -75,6 +75,28 @@ def transcribed(codes, key, rel):
     return ' '.join(c + m for c, m in zip(codes, mods)), puddles
 
 
+def branch_layouts(t, key, rel, main_codes):
+    """Desvios (bifurcações do original): peças do ramo com o relevo transcrito do ramo."""
+    out = []
+    for bi, b in enumerate(t.get('desvios', [])):
+        codes = b['layout'].split()
+        r = (rel or {}).get('desvios', {}).get(str(bi), {})
+        for k, c in r.get('pecas', {}).items():
+            i = int(k)
+            if c not in 'UDB' or codes[i] != 'S' or i in (0, len(codes) - 1):
+                raise SystemExit(f'{key}: desvio {bi}, peça {c} inválida na casa {i}')
+            if c == 'B' and (codes[i - 1] not in 'SUDBX' or codes[i + 1] not in 'SUDBX'):
+                raise SystemExit(f'{key}: desvio {bi}, lombada B na casa {i} colada numa curva')
+            codes[i] = c
+        # o ramo substitui as casas from..to do laço: a altura tem de bater nas duas pontas
+        main = main_codes[b['from']:b['to'] + 1]
+        dh = lambda cs: sum(1 if c[0] == 'U' else -1 if c[0] == 'D' or c == 'Gv' else 0 for c in cs)
+        if dh(codes) != dh(main):
+            raise SystemExit(f'{key}: desvio {bi} muda {dh(codes)} níveis e o trecho principal {dh(main)}')
+        out.append({'from': b['from'], 'to': b['to'], 'layout': ' '.join(codes)})
+    return out
+
+
 def main():
     data = json.load(open(sys.argv[1] if len(sys.argv) > 1 else 'scripts/pistas/tracado.json', encoding='utf8'))
     relevo = {k: v for k, v in json.load(open(RELEVO, encoding='utf8')).items() if not k.startswith('_')}
@@ -89,9 +111,10 @@ def main():
             layout, puddles = transcribed(codes, key, relevo[key])
         else:
             layout, puddles = plain(codes), None
-        rows.append((p, t['race'], NAMES[p][t['race'] - 1], layout, len(puddles) if puddles is not None else 0, puddles))
+        branches = branch_layouts(t, key, relevo.get(key), layout.split())
+        rows.append((p, t['race'], NAMES[p][t['race'] - 1], layout, len(puddles) if puddles is not None else 0, puddles, branches))
     out = []
-    out.append("""import type { ThemeId, TrackDef } from '../../sim/track';
+    out.append("""import type { BranchDef, ThemeId, TrackDef } from '../../sim/track';
 
 /**
  * As 36 pistas do Rock n' Roll Racing original (SNES), por planeta e na ordem do jogo.
@@ -102,10 +125,12 @@ def main():
  *    sentido da corrida lido da seta de cada mapa completo (VGMaps);
  *  - relevo (rampas U/D, lombadas B, setas de warp `>` e warp reverso `<`, poças fixas) transcrito
  *    dos mapas completos em scripts/pistas/relevo.json; pistas ainda sem transcrição ficam só com
- *    o traçado (nenhum relevo inventado).
+ *    o traçado (nenhum relevo inventado);
+ *  - desvios (bifurcações do original, ex.: atalho de Inferno 4) transcritos à mão dos mapas
+ *    completos em scripts/pistas/tracado.json (campo `desvios`).
  * Todas são verificadas por teste: o circuito precisa fechar.
  */
-const t = (planet: ThemeId, order: number, name: string, layout: string, slime = 0, puddles?: number[], laps = 4): TrackDef => ({
+const t = (planet: ThemeId, order: number, name: string, layout: string, slime = 0, puddles?: number[], laps = 4, branches?: BranchDef[]): TrackDef => ({
   id: `${planet}-${order}`,
   name,
   planet: PLANET_NAMES[planet],
@@ -116,6 +141,7 @@ const t = (planet: ThemeId, order: number, name: string, layout: string, slime =
   order,
   ...(puddles ? { puddles } : {}),
   ...(HALF_OF[planet] ? { halfWidth: HALF_OF[planet] } : {}),
+  ...(branches ? { branches } : {}),
 });
 
 /** Meia-largura por planeta (m), quando difere do padrão. */
@@ -132,18 +158,20 @@ export const PLANET_NAMES: Record<ThemeId, string> = {
 
 export const TRACKS: TrackDef[] = [""")
     last = None
-    for p, race, name, layout, slime, puddles in rows:
+    for p, race, name, layout, slime, puddles, branches in rows:
         if p != last:
             out.append(f'  // {PLANET_NAME[p]}')
             last = p
         laps = LAPS.get(f'{p}-{race}', 4)
-        extra = f', {slime}' if slime or puddles or laps != 4 else ''
+        extra = f', {slime}' if slime or puddles or laps != 4 or branches else ''
         if puddles:
             extra += f", [{', '.join(map(str, puddles))}]"
-        elif laps != 4:
+        elif laps != 4 or branches:
             extra += ', undefined'
-        if laps != 4:
+        if laps != 4 or branches:
             extra += f', {laps}'
+        if branches:
+            extra += ', [' + ', '.join(f"{{ from: {b['from']}, to: {b['to']}, layout: '{b['layout']}' }}" for b in branches) + ']'
         out.append(f"  t('{p}', {race}, '{name}', '{layout}'{extra}),")
     out.append("""];
 

@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { decodeSave, encodeSave, forfeitRace, markRaceStarted, newCampaign, promoteGoal, racesIn, raceKind, resolveAbandonedRace, type CampaignState } from './campaign';
-import { behindNotice, exportSave, leaveRace, nextAfterForfeit, pauseView, sceneAfter, settleFinish } from './campaignFlow';
+import { afterLeave, behindNotice, exportSave, leaveRace, nextAfterForfeit, pauseView, resolveLeave, sceneAfter, settleFinish } from './campaignFlow';
 
 /** Recarregar a página: o save passa pela senha (como no slot) e volta. */
 const reload = (s: CampaignState) => decodeSave(encodeSave(s))!;
 
-const racing = { started: true, finished: false, resolved: false, videoLostThisRace: false };
+const racing = { started: true, finished: false, resolved: false, videoLostNow: false };
 
 describe('fluxo da campanha: chegada e recarregar', () => {
   it('terminar e recarregar antes dos resultados vale a colocação (não conta como último)', () => {
@@ -56,27 +56,54 @@ describe('fluxo da campanha: chegada e recarregar', () => {
 });
 
 describe('fluxo da campanha: vídeo cai e volta', () => {
-  it('a pausa e a cobrança seguem a mesma regra por corrida (mesmo depois de o vídeo voltar)', () => {
+  it('regra única: sair só é de graça enquanto o vídeo está fora; se voltou, a corrida volta a valer', () => {
     const c = newCampaign('jake', 0, 'normal');
     markRaceStarted(c);
     // sem queda: pausa cobra, reiniciar disponível
-    expect(pauseView({ campaign: c, online: false, started: true, videoLostThisRace: false, videoLostNow: false })).toEqual({ costs: true, restartEnabled: true, note: '' });
-    // vídeo caiu: não cobra e não deixa reiniciar às cegas
-    expect(pauseView({ campaign: c, online: false, started: true, videoLostThisRace: true, videoLostNow: true })).toEqual({ costs: false, restartEnabled: false, note: 'video' });
-    // voltou: reiniciar volta, e a corrida continua sem contar (texto e cobrança iguais)
-    const back = pauseView({ campaign: c, online: false, started: true, videoLostThisRace: true, videoLostNow: false });
-    expect(back).toEqual({ costs: false, restartEnabled: true, note: 'video' });
-    expect(leaveRace(c, { ...racing, videoLostThisRace: true })).toBe('video');
+    expect(pauseView({ campaign: c, online: false, started: true, videoLostNow: false })).toEqual({ costs: true, restartEnabled: true, note: '' });
+    // vídeo fora: não cobra e não deixa reiniciar às cegas (pausa e saída dizem o mesmo)
+    expect(pauseView({ campaign: c, online: false, started: true, videoLostNow: true })).toEqual({ costs: false, restartEnabled: false, note: 'video' });
+    expect(leaveRace(c, { ...racing, videoLostNow: true })).toBe('video');
+    // voltou: a pausa volta a cobrar e sair é desistência
+    expect(pauseView({ campaign: c, online: false, started: true, videoLostNow: false }).costs).toBe(true);
     expect(leaveRace(c, racing)).toBe('forfeit');
+  });
+
+  it('cruzando com a chegada: com o vídeo de volta a colocação conta; sair sem vídeo não conta nada', () => {
+    // o vídeo caiu e voltou; o jogador termina em 1º: vale (e sair depois disso não aplica de novo)
+    const c = newCampaign('jake', 0, 'normal');
+    markRaceStarted(c);
+    const settled = settleFinish(c, 1, 5000, 0);
+    expect(c.points).toBe(400);
+    const counted = resolveLeave(c, { ...racing, finished: true }, settled, 1);
+    expect(counted.kind).toBe('counted');
+    expect(c.points).toBe(400);
+    expect(c.stats.races).toBe(1);
+    // o vídeo está fora e o jogador sai: nada conta e a marca de corrida em andamento sai do save
+    const v = newCampaign('jake', 0, 'normal');
+    markRaceStarted(v);
+    const lost = resolveLeave(v, { ...racing, videoLostNow: true }, null, 3);
+    expect(lost.kind).toBe('video');
+    expect(v.raceInProgress).toBeUndefined();
+    expect(v.stats.races).toBe(0);
+    expect(resolveAbandonedRace(reload(v))).toBeNull();
+    expect(afterLeave(v, 'quit', lost).scene).toBe('hub');
+    // o vídeo voltou e o jogador sai: desistência (último)
+    const back = newCampaign('jake', 0, 'normal');
+    markRaceStarted(back);
+    const f = resolveLeave(back, racing, null, 2);
+    expect(f.kind).toBe('forfeit');
+    expect(back.stats.races).toBe(1);
+    expect(back.points).toBe(0);
   });
 
   it('antes da largada e no Fácil sair não conta', () => {
     const c = newCampaign('jake', 0, 'normal');
-    expect(pauseView({ campaign: c, online: false, started: false, videoLostThisRace: false, videoLostNow: false }).note).toBe('not-started');
+    expect(pauseView({ campaign: c, online: false, started: false, videoLostNow: false }).note).toBe('not-started');
     expect(leaveRace(c, { ...racing, started: false })).toBe('none');
     const easy = newCampaign('jake', 0, 'easy');
     expect(leaveRace(easy, racing)).toBe('free');
-    expect(pauseView({ campaign: easy, online: false, started: true, videoLostThisRace: false, videoLostNow: false }).costs).toBe(false);
+    expect(pauseView({ campaign: easy, online: false, started: true, videoLostNow: false }).costs).toBe(false);
     // corrida já resolvida (resultados na tela) não conta de novo
     expect(leaveRace(c, { ...racing, resolved: true })).toBe('none');
   });
@@ -111,6 +138,71 @@ describe('fluxo da campanha: desistir e ir para a próxima', () => {
     expect(nextAfterForfeit(rb)).toBe('hub');
     // de graça (Fácil): larga direto
     expect(nextAfterForfeit(null)).toBe('race');
+  });
+});
+
+describe('fluxo da campanha: depois de sair ou reiniciar (afterLeave)', () => {
+  const leave = (c: CampaignState, action: 'quit' | 'restart') => afterLeave(c, action, resolveLeave(c, racing, null, 4));
+
+  it('continue: reiniciar larga a próxima; sair vai à garagem com os pontos', () => {
+    const c = newCampaign('jake', 0, 'normal');
+    const r = leave(c, 'restart');
+    expect(r.scene).toBe('race');
+    expect(r.notice).toContain('Pontos: 0/');
+    expect(leave(newCampaign('jake', 0, 'normal'), 'quit').scene).toBe('hub');
+  });
+
+  it('playoff: a última corrida sem pontos vira repescagem (garagem com o aviso)', () => {
+    const c = newCampaign('jake', 0, 'normal');
+    c.race = racesIn(c) - 1;
+    const r = leave(c, 'restart');
+    expect(r).toMatchObject({ scene: 'hub' });
+    expect(r.notice).toContain('Repescagem contra Viper Mackay');
+  });
+
+  it('retry: perder a última repescagem recomeça a divisão', () => {
+    const c = newCampaign('jake', 0, 'normal');
+    c.race = racesIn(c);
+    c.playoff = 1;
+    const r = leave(c, 'restart');
+    expect(r.scene).toBe('hub');
+    expect(r.notice).toContain('A divisão recomeça');
+    expect(c.race).toBe(0);
+  });
+
+  it('promoted com viagem: a chegada contada sobe de planeta e a saída mostra a viagem', () => {
+    const c = newCampaign('jake', 0, 'normal');
+    c.division = 1;
+    c.race = racesIn(c) - 1;
+    c.points = promoteGoal(c);
+    markRaceStarted(c);
+    const settled = settleFinish(c, 1, 0, 0);
+    const r = afterLeave(c, 'quit', resolveLeave(c, { ...racing, finished: true }, settled, 1));
+    expect(r.scene).toBe('warp');
+    expect(r.notice).toContain('Corrida encerrada: 1º lugar.');
+    expect(r.notice).toContain('Drakonis');
+    expect(c.warpFrom).toBe(0);
+  });
+
+  it('champion: a desistência que ainda soma os pontos do título mostra o final', () => {
+    // Divisão B do último planeta não dá título; o título só vem vencendo o chefe: chegada contada
+    const c = newCampaign('jake', 0, 'easy');
+    c.planet = 2;
+    c.division = 1;
+    c.race = racesIn(c) - 1;
+    c.points = promoteGoal(c);
+    const settled = settleFinish(c, 1, 0, 0);
+    const r = afterLeave(c, 'restart', resolveLeave(c, { ...racing, finished: true }, settled, 1));
+    expect(r.scene).toBe('champion');
+    expect(c.champion).toBe(true);
+  });
+
+  it('sem custo: antes da largada, no Fácil e depois do título', () => {
+    const c = newCampaign('jake', 0, 'normal');
+    expect(afterLeave(c, 'quit', resolveLeave(c, { ...racing, started: false }, null, 4))).toEqual({ scene: 'hub', notice: 'Você saiu antes da largada: a corrida não contou.' });
+    const e = newCampaign('jake', 0, 'easy');
+    expect(afterLeave(e, 'quit', resolveLeave(e, racing, null, 4)).notice).toContain('no Fácil');
+    expect(afterLeave(e, 'restart', resolveLeave(e, racing, null, 4))).toEqual({ scene: 'race', notice: '' });
   });
 });
 

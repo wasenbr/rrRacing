@@ -125,6 +125,42 @@ describe('pistas do original', () => {
     }
   });
 
+  it('desvios: atalho de Inferno 4 e laço de Bogmire 2 fecham, contam distância e trocam de ramo na junção', () => {
+    for (const [id, from, to] of [['inferno-4', 18, 28], ['bogmire-2', 16, 24]] as const) {
+      const tr = new Track(TRACKS.find((d) => d.id === id)!);
+      expect(tr.isClosed, id).toBe(true);
+      expect(tr.branches.length, id).toBe(1);
+      const b = tr.branches[0];
+      expect([b.from, b.to]).toEqual([from, to]);
+      // começa com a peça da casa de saída e termina na mesma saída da casa de chegada
+      expect(tr.pieces[b.first].x0).toBeCloseTo(tr.pieces[from].x0);
+      expect(tr.pieces[b.first].z0).toBeCloseTo(tr.pieces[from].z0);
+      // distância cresce ao longo do ramo, do início da casa de saída ao fim da de chegada
+      const ds = tr.sampleCenterline(1, 0).map((p) => p.dist);
+      for (let k = 1; k < ds.length; k++) expect(ds[k]).toBeGreaterThan(ds[k - 1]);
+      expect(ds[0]).toBeCloseTo(b.startDist);
+      expect(b.endDist).toBeCloseTo(tr.pieces[to].startDist + tr.pieces[to].length);
+      // no meio do ramo: a consulta com dica acha a peça do ramo e a distância equivalente
+      const mid = tr.pieces[b.first + 2];
+      const c = tr.pointOn(mid, mid.length / 2);
+      const q = tr.query(c.x, c.z, mid.index);
+      expect(q.pieceIndex).toBe(mid.index);
+      expect(q.dist).toBeGreaterThan(b.startDist);
+      expect(q.dist).toBeLessThan(b.endDist);
+      // vindo pelo laço, a junção de saída entrega o ramo quando o carro entra nele
+      const e = tr.pointOn(tr.pieces[b.first], tr.pieces[b.first].length * 0.8);
+      expect(tr.query(e.x, e.z, from - 1).pieceIndex).toBe(b.first);
+      // pointAtDist segue o ramo só com a rota escolhida
+      const d = (b.startDist + b.endDist) / 2;
+      expect(tr.pointAtDist(d).pieceIndex).toBeLessThan(tr.loop);
+      expect(tr.withRoute(from - 1, () => true, () => tr.pointAtDist(d).pieceIndex)).toBeGreaterThanOrEqual(tr.loop);
+      expect(tr.withRoute(mid.index, () => false, () => tr.pointAtDist(d).pieceIndex)).toBeGreaterThanOrEqual(tr.loop);
+      expect(tr.withRoute(from + 1, () => true, () => tr.pointAtDist(d).pieceIndex)).toBeLessThan(tr.loop);
+      // malha: as casas de junção viram placa própria; o resto do ramo é trecho contínuo
+      expect(tr.isBreak(from) && tr.isBreak(b.first) && tr.isBreak(to) && tr.isBreak(b.last)).toBe(true);
+    }
+  });
+
   it('warp: para a frente em toda a largura; reverso só num lado', () => {
     const tr = new Track({ id: 'w', name: 'w', planet: 'x', theme: 'inferno', laps: 1, layout: 'F S> S< S R S S R S S S S R S S R S' });
     const fwd = tr.pieces[1];

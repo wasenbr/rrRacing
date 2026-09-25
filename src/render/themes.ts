@@ -88,23 +88,25 @@ export const THEMES: Record<ThemeId, Theme> = {
   drakonis: {
     skyHorizon: 0x2a1450, skyTop: 0x020106, fog: 0x07040e, groundLevel: -8, ground: 0x1e1630, groundStyle: 'void',
     liquid: false, liquidEmissive: 0,
-    road: '#2a2240', roadGrid: '#6a34c0', roadGlow: 0.5, roadPattern: 'grid', roadEdge: '#9a52f0', roadLine: '#9a52f0',
+    road: '#2a2240', roadGrid: '#6a34c0', roadGlow: 0.25, roadPattern: 'grid', roadEdge: '#9a52f0', roadLine: '#9a52f0',
     skirt: 0x2a78b0, walls: 'biomech', wallAccent: 0xff2020,
     rail: ['#9a44e8', '#5a1ea0'], railStyle: 'tube',
     props: [0x3a8ac0, 0x7a4ac8, 0xc8c0d8], glow: 0x60ff40, flames: false,
-    sun: 0xff6ae0, sunIntensity: 3.4, ambientSky: 0x8a70d0, ambientGround: 0x140c24, surface: 'metal',
+    // luz-chave mais forte e clara, preenchimento fraco: sombras contrastadas (antes a luz era plana)
+    sun: 0xffb4ec, sunIntensity: 3.9, ambientSky: 0x8a70d0, ambientGround: 0x140c24, surface: 'metal',
     dust: '#8a8098', curb: '#cfc6d2',
-    light: { sunDir: [48, 30, -52], fill: 0x30e0ff, fillIntensity: 2.3, hemi: 0.2 }, cells: 7,
+    light: { sunDir: [48, 34, -52], fill: 0x30e0ff, fillIntensity: 1.0, hemi: 0.13 }, cells: 7,
   },
   bogmire: {
     skyHorizon: 0x10286a, skyTop: 0x020410, fog: 0x050a18, groundLevel: -8, ground: 0x0e2a6a, groundStyle: 'ocean',
     liquid: true, liquidEmissive: 0x020a30,
-    road: '#8a5428', roadGrid: '#5a3416', roadGlow: 0, roadPattern: 'dirt', roadEdge: '#3a2412', roadLine: '#3a2412',
+    // aço escuro esverdeado com lodo claro nas juntas (antes: terra marrom, lia como tábua de madeira)
+    road: '#3c4a3c', roadGrid: '#161c16', roadGlow: 0, roadPattern: 'dirt', roadEdge: '#1e2a1e', roadLine: '#1e2a1e',
     skirt: 0x5a3418, walls: 'roots', wallAccent: 0x2a6a1a,
     rail: ['#1c1c20', '#b8bcc4'], railStyle: 'cable',
     props: [0x6a4424, 0x3a8a2a, 0x8a8a90], glow: 0x80c0ff, flames: false,
     sun: 0xfff4dc, sunIntensity: 3.2, ambientSky: 0xb8d0ff, ambientGround: 0x3a2a1a, surface: 'dirt',
-    dust: '#6a4a2a', curb: '#cdbb98',
+    dust: '#9aa27a', curb: '#cdbb98',
     light: { sunDir: [58, 34, -40], fill: 0x4a8aff, fillIntensity: 0.9, hemi: 0.28 }, cells: 10,
   },
   newmojave: {
@@ -122,7 +124,7 @@ export const THEMES: Record<ThemeId, Theme> = {
     skyHorizon: 0x2a4a8a, skyTop: 0x02040c, fog: 0x141a26, groundLevel: -8, ground: 0xe4eefc, groundStyle: 'snow',
     liquid: false, liquidEmissive: 0,
     road: '#1c58c8', roadGrid: '#08184a', roadGlow: 0.3, roadPattern: 'ice', roadEdge: '#8ac0ff', roadLine: '#8ac0ff',
-    skirt: 0x22242c, walls: 'icerock', wallAccent: 0x1a3aa0,
+    skirt: 0x22242c, walls: 'icerock', wallAccent: 0x7a94b0,
     rail: ['#4a8aff', '#d8ecff'], railStyle: 'ice',
     props: [0x2a6a3a, 0x8ab8ff, 0xc8d8f0], glow: 0x60c8ff, flames: false,
     // sol mais fraco e disco menos branco: na perseguição o sol baixo estourava em clarão (rodada 10)

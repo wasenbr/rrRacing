@@ -406,8 +406,12 @@ export function createMarauder(color: number, shadows: boolean): CarVisual {
   for (const sx of [-0.36, 0.36]) k.plasmaRifle(sx, bodyTop(1.0) + 0.12, 1.05, 1.0, k.body, 1.25);
   // BF's Slipsauce embaixo da traseira
   k.slipsauceTank(0, 1.26, -2.12, 0.9);
-  // escapamentos cromados saindo embaixo do para-choque
-  for (const sx of [-0.4, 0.4]) k.add(new THREE.CylinderGeometry(0.07, 0.08, 0.36, 12).rotateX(Math.PI / 2), k.chrome, sx, 1.18, -2.1);
+  // escapamentos cromados grossos saindo embaixo do para-choque (boca de 0,16 m: o nitro sai deles)
+  for (const sx of [-0.58, 0.58]) {
+    k.add(new THREE.CylinderGeometry(0.16, 0.12, 0.36, 16).rotateX(-Math.PI / 2), k.chrome, sx, 1.2, -2.22);
+    k.add(new THREE.TorusGeometry(0.145, 0.025, 6, 18), k.gunMetal, sx, 1.2, -2.4);
+    k.add(new THREE.CircleGeometry(0.13, 16).rotateY(Math.PI), k.dash, sx, 1.2, -2.395);
+  }
 
   // bandeja do chassi (cinza, como no pack) e longarinas
   // (afina entre as rodas da frente para o pneu esterçado não entrar nela)
@@ -454,7 +458,7 @@ export function createMarauder(color: number, shadows: boolean): CarVisual {
   // faróis de milha na barra do teto
   k.add(new THREE.BoxGeometry(0.8, 0.05, 0.07), k.trim, 0, cabTop(-0.3) + 0.06, -0.3);
   for (const sx of [-0.3, -0.1, 0.1, 0.3]) k.add(new THREE.CylinderGeometry(0.07, 0.07, 0.07, 12).rotateX(Math.PI / 2), k.head, sx, cabTop(-0.3) + 0.12, -0.27);
-  const flames = k.flames([[-0.4, 1.18, -2.28], [0.4, 1.18, -2.28]], 0.08, nitroThrust('marauder'));
+  const flames = k.flames([[-0.58, 1.2, -2.41], [0.58, 1.2, -2.41]], 0.16, nitroThrust('marauder'));
 
   const wheels = [-1, 1].flatMap((sx) => [-1, 1].map((sz) => ({ sz, ...wheel(k, { radius: WR, width: 0.52, spokes: 5, knobby: true }, sx * WX, WR, sz > 0 ? WZF : WZR) })));
   // rodas e eixos no chassi: a carroceria balança por cima deles

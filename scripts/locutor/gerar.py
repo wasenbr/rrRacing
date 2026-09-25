@@ -85,16 +85,18 @@ LINES = {
 }
 
 
-# tratamento de arena: corpo, presença, compressão forte, saturação leve e um eco só, curto (28 ms;
-# rodada 11: os ecos de 45 e 110 ms borravam as sílabas do grito)
+# tratamento de arena: corpo, presença +2 dB, compressão leve e um eco só, curto (28 ms; rodada 11: os
+# ecos de 45 e 110 ms borravam as sílabas do grito). Rodada 12: sem saturação e presença menor (era
+# +4 dB): a emoção vem do take gritado, não de EQ/saturação sobre o TTS
 ARENA_FILTER = ('silenceremove=start_periods=1:start_threshold=-45dB,areverse,silenceremove=start_periods=1:start_threshold=-45dB,areverse,'
-                'highpass=f=85,equalizer=f=220:t=q:w=0.8:g=2,equalizer=f=3000:t=q:w=0.9:g=4,'
-                'acompressor=threshold=-22dB:ratio=5:attack=3:release=120:makeup=4,'
-                'asoftclip=type=tanh:threshold=0.7,'
+                'highpass=f=85,equalizer=f=220:t=q:w=0.8:g=2,equalizer=f=3000:t=q:w=0.9:g=2,'
+                'acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=2,'
                 'aecho=0.8:0.5:28:0.08,apad=pad_dur=0.15,alimiter=limit=0.89')
 # grito (itens 32/53): taxa mínima de sílabas e F0 mediano máximo aceitável antes do tratar.py
 # (que baixa até 4 semitons o que passar de 225 Hz)
 TAXA_MIN, F0_TETO_REFAZER = 4.5, 265.0
+# rodada 12: faixa de F0 mínima (semitons) e loudness momentâneo máximo da fala tratada (LUFS)
+FAIXA_MIN_REFAZER, LOUD_MIN_REFAZER = 8.0, -15.0
 
 
 def slug(n):
@@ -138,7 +140,8 @@ def gerar():
     part, parts = 0, 1
     if '--parte' in sys.argv:
         part, parts = map(int, sys.argv[sys.argv.index('--parte') + 1].split('/'))
-    only = set(sys.argv[sys.argv.index('--chave') + 1].split(',')) if '--chave' in sys.argv else None
+    ordem = sys.argv[sys.argv.index('--chave') + 1].split(',') if '--chave' in sys.argv else []
+    only = set(ordem) or None
     os.makedirs(TAKES, exist_ok=True)
     # --exag 1.5,1.9 --takes 6: takes EXTRAS (ids novos, a partir do 10º) com mais exagero para as
     # chaves de --chave (itens 32/53: largada e "hot fury" precisam soar gritados)
@@ -147,7 +150,8 @@ def gerar():
     desde = int(sys.argv[sys.argv.index('--desde') + 1]) if '--desde' in sys.argv else 10
     jobs = jobs_all()
     if extra and only:
-        jobs = [(f"{key}__{t % len(LINES[key])}__{desde + t}", key, LINES[key][t % len(LINES[key])]) for key in sorted(only) for t in range(extra)]
+        # na ordem de --chave (prioridade: largada, ataque, explosão, vitória...)
+        jobs = [(f"{key}__{t % len(LINES[key])}__{desde + t}", key, LINES[key][t % len(LINES[key])]) for key in ordem for t in range(extra)]
     todo = [j for k, j in enumerate(jobs) if k % parts == part and (not only or j[1] in only or j[1].split(':')[-1] in only)]
     todo = [j for j in todo if not os.path.exists(os.path.join(TAKES, j[0] + '.json'))]
     print(len(todo), 'takes nesta parte', flush=True)
@@ -291,67 +295,121 @@ def escolher():
 
 def refazer():
     """
-    Regrava só as chaves de --chave (ex.: start,hotFury) escolhendo os takes pelo GRITO: esforço vocal
-    (2–4 kHz vs 300–800 Hz) e taxa de sílabas comparados aos trechos gritados da referência de
-    ringue (voz-referencia-luta.wav), F0 mediano até F0_TETO_REFAZER (sem voz fina) e texto fiel.
-    Troca os mp3 e o manifest só dessas chaves; depois rode tratar.py --so <chaves>.
+    Regrava só as chaves de --chave (ex.: start,hotFury ou combo:jamsFirst:viper) com os takes que
+    passam no GRITO (rodada 12): texto fiel (Whisper), F0 mediano até F0_TETO_REFAZER (sem voz fina),
+    faixa de F0 >= FAIXA_MIN_REFAZER semitons, loudness momentâneo máximo >= LOUD_MIN_REFAZER LUFS e
+    >= TAXA_MIN sílabas/s — as três últimas medidas na fala já com o tratamento de arena e normalizada
+    como o tratar.py faz (o "cru" de som() em scripts/evidencias.mjs). Chave sem take aprovado fica
+    com as falas atuais (listadas em .tts/takes-luta/refazer.json, "mantidas").
+    Análise em cache (.tts/takes-luta/analise-r12.json); --so-analise só mede. Troca os mp3 e o
+    manifest só dessas chaves; depois rode tratar.py --so <chaves>.
     """
     sys.path.insert(0, HERE)
-    from tratar import f0, emocao
-    from faster_whisper import WhisperModel
+    from tratar import f0, emocao, loudness_max, duration, EXCLAMACAO
     keys = sys.argv[sys.argv.index('--chave') + 1].split(',')
-    whisper = WhisperModel('small.en', device='cpu', compute_type='int8')
+    so_analise = '--so-analise' in sys.argv
+    whisper = None
     norm = lambda t: re.sub(r'[^a-z]', '', t.lower().replace('11', 'eleven'))
     ref_esf, ref_taxa = map(float, emocao(REF, so_gritado=True))
     print(f'referência gritada: esforço {ref_esf} dB, {ref_taxa} sílabas/s (mínimo exigido {TAXA_MIN})')
     mpath = os.path.join(OUT, 'manifest.json')
     man = json.load(open(mpath, encoding='utf8'))
-    rel = {'referencia': {'esforco': ref_esf, 'silabas': ref_taxa}, 'chaves': {}}
+    cpath = os.path.join(TAKES, 'analise-r12.json')
+    cache = json.load(open(cpath, encoding='utf8')) if os.path.exists(cpath) else {}
+    rpath = os.path.join(TAKES, 'refazer.json')
+    rel = json.load(open(rpath, encoding='utf8')) if os.path.exists(rpath) else {}
+    rel.setdefault('chaves', {})
+    rel.setdefault('mantidas', {})
+    rel['referencia'] = {'esforco': ref_esf, 'silabas': ref_taxa}
+    rel['criterio'] = {'faixaF0_st': FAIXA_MIN_REFAZER, 'loudnessCruMax_LUFS': LOUD_MIN_REFAZER, 'silabasPorSeg': TAXA_MIN,
+                       'f0Teto_Hz': F0_TETO_REFAZER, 'fidelidade': FIDEL}
+    tmp = os.path.join(TAKES, 'arena-r12')
+    os.makedirs(tmp, exist_ok=True)
     for key in keys:
+        combo = key.startswith('combo:')
+        base = key.replace(':', '_')
         takes = []
-        for meta in sorted(glob.glob(os.path.join(TAKES, f'{key}__*.json'))):
+        for meta in sorted(glob.glob(os.path.join(TAKES, f'{base}__*.json'))):
             m = json.load(open(meta, encoding='utf8'))
             wav = meta[:-5] + '.wav'
-            heard = ' '.join(x.text for x in whisper.transcribe(wav, beam_size=3)[0]).strip()
-            fid = difflib.SequenceMatcher(None, norm(heard), norm(m['text'])).ratio()
-            med, rng = f0(wav)
-            esf, taxa = emocao(wav)
-            t = {**m, 'wav': wav, 'heard': heard, 'fid': round(fid, 2), 'med': round(med), 'rng': round(rng, 1), 'esforco': esf, 'silabas': taxa}
-            t['grito'] = bool(esf >= ref_esf and taxa >= TAXA_MIN)
+            jid = os.path.basename(meta)[:-5]
+            if not os.path.exists(wav):
+                continue
+            if jid not in cache:
+                if whisper is None:
+                    from faster_whisper import WhisperModel
+                    whisper = WhisperModel('small.en', device='cpu', compute_type='int8')
+                heard = ' '.join(x.text for x in whisper.transcribe(wav, beam_size=3)[0]).strip()
+                med, rng = f0(wav)
+                arena = os.path.join(tmp, jid + '.wav')
+                subprocess.run([FFMPEG, '-y', '-loglevel', 'error', '-i', wav, '-af', ARENA_FILTER, '-ar', '44100', '-ac', '1', arena], check=True)
+                esf, taxa = emocao(arena)
+                cache[jid] = {'heard': heard, 'med': round(med), 'rng': round(rng, 1), 'esforco': esf, 'silabas': taxa, 'lufs': loudness_max(arena)}
+                json.dump(cache, open(cpath, 'w', encoding='utf8'), ensure_ascii=False, indent=0)
+            c = cache[jid]
+            if 'dur' not in c:
+                arena = os.path.join(tmp, jid + '.wav')
+                c['dur'] = round(duration(arena) - 0.15, 2) if os.path.exists(arena) else 0.0
+                json.dump(cache, open(cpath, 'w', encoding='utf8'), ensure_ascii=False, indent=0)
+            fid = difflib.SequenceMatcher(None, norm(c['heard']), norm(m['text'])).ratio()
+            t = {**m, **c, 'wav': wav, 'fid': round(fid, 2)}
+            # o tratar.py acelera frases longas (até 1,25x, tom igual): a taxa no jogo sobe junto
+            k0 = key.split(':')[1] if combo else key
+            alvo = 1.5 if k0 in EXCLAMACAO else 3.0 if k0 == 'start' else 2.2
+            tempo = min(1.25, c['dur'] / alvo) if c['dur'] > alvo * 1.03 else 1.0
+            t['silabas'] = round(c['silabas'] * tempo, 2)
+            t['aprovado'] = bool(fid >= FIDEL and 0 < t['med'] <= F0_TETO_REFAZER and t['rng'] >= FAIXA_MIN_REFAZER
+                                 and t['lufs'] >= LOUD_MIN_REFAZER and t['silabas'] >= TAXA_MIN)
             takes.append(t)
-            print(f"{os.path.basename(wav):24s} fid {fid:.2f} F0 {med:4.0f} esforço {esf:6.1f} sílabas {taxa:4.2f} {'GRITO' if t['grito'] else ''} {heard!r}", flush=True)
-        pool = [t for t in takes if t['fid'] >= FIDEL and 0 < t['med'] <= F0_TETO_REFAZER]
-        # grito primeiro; depois mais esforço e fala mais rápida; um take por texto antes de repetir
-        pool.sort(key=lambda t: (t['grito'], t['esforco'] + 2 * min(t['silabas'], 6)), reverse=True)
-        keep = len(man['lines'].get(key, [])) or MANTER_FRASE
+            print(f"{jid:34s} fid {fid:.2f} F0 {t['med']:4.0f} faixa {t['rng']:4.1f} LUFS {t['lufs']:5.1f} esforço {t['esforco']:6.1f} "
+                  f"sílabas {t['silabas']:4.2f} {'OK' if t['aprovado'] else '  '} {c['heard']!r}", flush=True)
+        if so_analise:
+            continue
+        pool = [t for t in takes if t['aprovado']]
+        # mais perto do esforço da referência gritada (nem abafado, nem estridente), mais entonação e
+        # fala mais rápida; um take por texto antes de repetir
+        pool.sort(key=lambda t: t['rng'] / 3 + 2 * min(t['silabas'], 6) - abs(t['esforco'] - ref_esf), reverse=True)
+        if combo:
+            _, line, who = key.split(':')
+            cur = man.get('combos', {}).get(line, {}).get(who, [])
+        else:
+            cur = man['lines'].get(key, [])
+        keep = 1 if combo else len(cur) or MANTER_FRASE
         chosen = []
         for t in pool:
             if len(chosen) < keep and t['text'] not in [c['text'] for c in chosen]:
                 chosen.append(t)
         for t in pool:
-            if len(chosen) < keep and t not in chosen and t['grito']:
+            if len(chosen) < keep and t not in chosen:
                 chosen.append(t)
         if not chosen:
-            print(key, 'sem take aprovado: mantidas as falas atuais')
+            print(key, f'sem take aprovado ({len(takes)} takes): mantidas as falas atuais')
+            rel['mantidas'][key] = cur
             continue
-        for f in man['lines'].get(key, []):
+        rel['mantidas'].pop(key, None)
+        for f in cur:
             try:
                 os.remove(os.path.join(OUT, f))
             except FileNotFoundError:
                 pass
         files = []
         for i, t in enumerate(chosen):
-            f = f'{key}_{i}.mp3'
+            f = f'{base}_{i}.mp3'
             subprocess.run([FFMPEG, '-y', '-loglevel', 'error', '-i', t['wav'], '-af', ARENA_FILTER, '-ar', '44100', '-ac', '1',
                             '-c:a', 'libmp3lame', '-b:a', '96k', os.path.join(OUT, f)], check=True)
             files.append(f)
-        man['lines'][key] = files
-        rel['chaves'][key] = {f: {k: t[k] for k in ('text', 'exag', 'cfg', 'fid', 'med', 'rng', 'esforco', 'silabas', 'grito')} for f, t in zip(files, chosen)}
+        if combo:
+            man.setdefault('combos', {}).setdefault(line, {})[who] = files
+        else:
+            man['lines'][key] = files
+        rel['chaves'][key] = {f: {k: t[k] for k in ('text', 'exag', 'cfg', 'fid', 'med', 'rng', 'lufs', 'esforco', 'silabas')} for f, t in zip(files, chosen)}
         print(key, '->', files)
+    if so_analise:
+        return
     man['tratado'] = False
     json.dump(man, open(mpath, 'w', encoding='utf8'), indent=2, ensure_ascii=False)
-    json.dump(rel, open(os.path.join(TAKES, 'refazer.json'), 'w', encoding='utf8'), indent=1, ensure_ascii=False)
-    print('pronto; agora: python scripts/locutor/tratar.py --so', ','.join(keys))
+    json.dump(rel, open(rpath, 'w', encoding='utf8'), indent=1, ensure_ascii=False)
+    print('pronto; agora: python scripts/locutor/tratar.py --so', ','.join(k.replace(':', '_') for k in keys))
 
 
 if __name__ == '__main__':

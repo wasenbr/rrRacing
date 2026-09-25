@@ -78,6 +78,14 @@ export function isIos(): boolean {
   return /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 }
 
+/** Passo a passo "Adicionar à Tela de Início" do iPhone (HTML), usado na garagem e no HUD da corrida. */
+export function iosInstallSteps(): string {
+  const chrome = /crios/i.test(navigator.userAgent);
+  return `<p>O iPhone não deixa sites abrirem em tela cheia: é preciso <b>adicionar o jogo à Tela de Início</b>.</p>
+    <p>${chrome ? 'No <b>Chrome</b>, toque em <b>Compartilhar</b> (quadrado com seta para cima, na barra de endereço)' : 'No <b>Safari</b>, toque em <b>Compartilhar</b> (quadrado com seta para cima)'} e depois em <b>“Adicionar à Tela de Início”</b>.</p>
+    <p class="small-note">Depois abra o jogo pelo ícone na Tela de Início: ele roda em tela cheia, sem a barra do navegador.</p>`;
+}
+
 export async function promptInstall(): Promise<boolean> {
   if (!installEvent) return false;
   await installEvent.prompt();

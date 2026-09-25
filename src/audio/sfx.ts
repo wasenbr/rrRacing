@@ -159,6 +159,25 @@ function crackSynth(ctx: BaseAudioContext, out: AudioNode, t: number, p = 1): vo
   metalRing(ctx, out, 1500 * p * vary(0.1), 0.5, 0.28, t);
 }
 
+/**
+ * Passa-altas de 80 Hz para a parte grave de um golpe (soco, baque, amostra grave): o peso fica em
+ * 80–200 Hz, que caixa pequena ainda reproduz, sem o sub-grave que comia a folga do limitador
+ * (rodada 12: 45–61% da energia abaixo de 120 Hz em batidas, nitro e jump jets).
+ */
+function grave(ctx: BaseAudioContext, out: AudioNode): BiquadFilterNode {
+  return filter(ctx, 'highpass', 80, 0.7, out);
+}
+
+/**
+ * Transiente metálico de 1–4 kHz (~40 ms): o "clang" de chapa que faz o golpe atravessar o motor e a
+ * música (rodada 12: mina e impacto ficavam ~+5 dB acima de 200 Hz, meta +6).
+ */
+function clank(ctx: BaseAudioContext, out: AudioNode, peak: number, p = 1, t = ctx.currentTime): void {
+  noiseSrc(ctx, filter(ctx, 'bandpass', 1700 * p, 1.4, env(ctx, dirt(ctx, out, 2), peak, 0.0008, 0.045, t)), 0.06, t);
+  noiseSrc(ctx, filter(ctx, 'bandpass', 3300 * p, 1.6, env(ctx, out, peak * 0.7, 0.0005, 0.03, t)), 0.05, t);
+  metalRing(ctx, out, 1900 * p * vary(0.08), peak * 0.35, 0.09, t);
+}
+
 /** Estalo de lataria com volume próprio (`peak`) e afinação `p`. */
 function crack(ctx: BaseAudioContext, out: AudioNode, peak: number, p = 1): void {
   const g = ctx.createGain();
@@ -367,6 +386,7 @@ export function sfxExplosion(vol = 1, big = true, pan = 0): void {
   // rodada 11: sub-grave mais baixo (dominava: 87% da energia abaixo de 120 Hz) e estalo de 1,5–6 kHz
   sample(a, out, 'explosao_sub', { vol: big ? 0.65 : 0.4, rate: big ? 0.9 : 1.2, duration: big ? 2 : 0.8, fadeOut: 0.4 });
   if (big) sample(a, out, 'explosao_cauda', { vol: 0.6, rate: 0.85 * p, t: t + 0.05 });
+  if (big) rumbleTail(ctx, out, t, p);
   // corpo médio do estouro (a amostra "curta b" é quase toda 120–1500 Hz)
   if (big) sample(a, out, 'explosao_curta_b', { vol: 0.7, rate: 0.9 * p });
   crack(ctx, out, big ? 2 : 1.6, 0.9 * p);
@@ -383,6 +403,36 @@ export function sfxExplosion(vol = 1, big = true, pan = 0): void {
   }
   if (big) punch(vol, 0.85, 1.4);
   else punch(vol, 0.65, 0.5);
+}
+
+/**
+ * Cauda da explosão grande (rodada 12: acabava seca em ~1 s): estrondo de ruído que entra logo depois
+ * do estouro e decai em ~1,5 s com o passa-baixa descendo de ~1,8 kHz a ~120 Hz (o fogo "rolando"
+ * e se afastando), mais a cauda gravada uma oitava abaixo pelo mesmo filtro.
+ */
+function rumbleTail(ctx: BaseAudioContext, out: AudioNode, t: number, p: number): void {
+  const t0 = t + 0.18;
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.Q.value = 0.6;
+  lp.frequency.setValueAtTime(1800 * p, t0);
+  lp.frequency.exponentialRampToValueAtTime(160, t0 + 2.3);
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(2.2, t0 + 0.3);
+  g.gain.setTargetAtTime(0.0001, t0 + 0.7, 0.6);
+  lp.connect(g);
+  g.connect(filter(ctx, 'highpass', 60, 0.7, out));
+  // ruído em loop (o buffer de 2 s a 0,5x acabava antes da cauda)
+  const n = ctx.createBufferSource();
+  n.buffer = noise(ctx);
+  n.loop = true;
+  n.playbackRate.value = 0.5;
+  n.connect(lp);
+  n.start(t0, Math.random() * 1.5);
+  n.stop(t0 + 2.9);
+  const s = sfxBuffer('explosao_cauda');
+  if (s) playBuffer(ctx, s, lp, { vol: 0.5, rate: 0.5 * p, t: t0 + 0.1 });
 }
 
 function explosionSynth(ctx: BaseAudioContext, out: AudioNode, t: number, p: number, big: boolean, crunch: boolean): void {
@@ -412,11 +462,13 @@ export function sfxHit(vol = 1, pan = 0): void {
   const p = vary(0.12);
   // metal +4 dB e mais agudo (rodada 11: 94% da energia abaixo de 120 Hz, sumia no celular)
   const has = sample(a, out, ['impacto_metal_a', 'impacto_metal_b', 'impacto_placa'], { vol: 1.6, rate: 1.05 * p });
-  sample(a, out, 'batida_grave', { vol: 0.35, rate: 0.8 * p }); // corpo grave do impacto
+  const low = grave(ctx, out);
+  sample(a, low, 'batida_grave', { vol: 0.35, rate: 0.8 * p }); // corpo grave do impacto
   if (!has) metalRing(ctx, out, 430 * p, 0.55, 0.35);
-  synthLayer(ctx, out, 'impacto', 0.2, hitSynth, p);
-  crack(ctx, out, 0.5, 1.2 * p);
-  subThump(ctx, out, 0.12);
+  synthLayer(ctx, low, 'impacto', 0.2, hitSynth, p);
+  crack(ctx, out, 0.9, 1.2 * p);
+  clank(ctx, out, 0.5, p);
+  subThump(ctx, low, 0.08);
 }
 
 function hitSynth(ctx: BaseAudioContext, out: AudioNode, t: number, p = 1): void {
@@ -436,7 +488,8 @@ export function sfxDrop(vol = 1, kind: string = 'mine', pan = 0): void {
   const out = voice(a, vol * (kind === 'oil' ? 3.4 : 5), pan, vol, -6);
   const t = ctx.currentTime;
   punch(vol, 0.4, 0.35);
-  sample(a, out, 'batida_grave', { vol: 0.5, rate: 0.8 * vary(0.1) }); // baque da carga caindo
+  const low = grave(ctx, out);
+  sample(a, low, 'batida_grave', { vol: 0.5, rate: 0.8 * vary(0.1) }); // baque da carga caindo
   if (kind === 'oil') {
     if (!sample(a, out, 'oleo', { vol: 1, rate: 0.75 * vary(0.1) })) {
       const bp = ctx.createBiquadFilter();
@@ -448,7 +501,7 @@ export function sfxDrop(vol = 1, kind: string = 'mine', pan = 0): void {
       noiseSrc(ctx, bp, 0.4);
     }
     // lata esguichando (glub grave)
-    osc(ctx, 'sine', 300, 70, 0.22, env(ctx, out, 0.5, 0.004, 0.22));
+    osc(ctx, 'sine', 300, 70, 0.22, env(ctx, low, 0.5, 0.004, 0.22));
     return;
   }
   const scatter = kind === 'scatter';
@@ -456,9 +509,10 @@ export function sfxDrop(vol = 1, kind: string = 'mine', pan = 0): void {
   for (const dt of drops) {
     const r = vary(0.1) * (scatter ? 1.15 : 1);
     if (!sample(a, out, 'mina_clunk', { vol: 0.95, rate: r, t: t + dt })) metalRing(ctx, out, 620 * r, 0.3, 0.18, t + dt);
-    crack(ctx, out, 1.5, 1.2 * r);
-    osc(ctx, 'sine', 150 * r, 50, 0.14, env(ctx, out, 0.5, 0.002, 0.15, t + dt), t + dt);
-    subThump(ctx, out, 0.25, t + dt, 62);
+    crack(ctx, out, 1.9, 1.2 * r);
+    clank(ctx, out, scatter ? 0.45 : 0.6, r, t + dt);
+    osc(ctx, 'sine', 150 * r, 60, 0.14, env(ctx, low, scatter ? 0.3 : 0.4, 0.002, 0.15, t + dt), t + dt);
+    subThump(ctx, low, scatter ? 0.12 : 0.18, t + dt, 62);
   }
   // bipes de armar (sinal de perigo)
   const base = scatter ? 0.3 : 0.25;
@@ -470,17 +524,20 @@ export function sfxAssist(kind: string, vol = 1, pan = 0): void {
   const a = audio();
   if (!a || vol < 0.02) return;
   const { ctx } = a;
-  const out = voice(a, vol, pan, vol);
+  // prateleira -6 dB abaixo de 140 Hz e passa-altas de 80 Hz nos baques (rodada 12: 52–62% da energia
+  // abaixo de 120 Hz; o jato é sopro, não soco)
+  const out = voice(a, vol * 1.3, pan, vol, -6);
+  const low = grave(ctx, out);
   const t = ctx.currentTime;
   punch(vol, 0.3, 0.4);
   if (kind === 'jump') {
-    sample(a, out, 'jato', { vol: 1, rate: 0.9, duration: 0.9, fadeOut: 0.4 });
+    sample(a, filter(ctx, 'highpass', 110, 0.6, out), 'jato', { vol: 1, rate: 0.9, duration: 0.9, fadeOut: 0.4 });
     osc(ctx, 'sawtooth', 110, 420, 0.35, filter(ctx, 'lowpass', 1600, 3, env(ctx, dirt(ctx, out), 0.35, 0.01, 0.35)));
-    osc(ctx, 'sine', 110, 50, 0.12, env(ctx, out, 0.8, 0.002, 0.12));
+    osc(ctx, 'sine', 140, 80, 0.12, env(ctx, low, 0.45, 0.002, 0.12));
     return;
   }
   // jato do nitro com os agudos cortados (sopro encorpado, não chiado)
-  sample(a, filter(ctx, 'lowpass', 2200, 0.6, out), 'nitro', { vol: 1.1, rate: 0.9, duration: 1.6, fadeOut: 0.6 });
+  sample(a, filter(ctx, 'lowpass', 2200, 0.6, filter(ctx, 'highpass', 110, 0.6, out)), 'nitro', { vol: 1.1, rate: 0.9, duration: 1.6, fadeOut: 0.6 });
   // "whoosh" grave subindo (250 → 1100 Hz) + estalo de ignição
   const f = ctx.createBiquadFilter();
   f.type = 'bandpass';
@@ -489,8 +546,8 @@ export function sfxAssist(kind: string, vol = 1, pan = 0): void {
   f.frequency.exponentialRampToValueAtTime(1100, t + 0.5);
   f.connect(env(ctx, dirt(ctx, out, 2), 0.8, 0.03, 0.7));
   noiseSrc(ctx, f, 0.8);
-  sample(a, out, 'batida_grave', { vol: 0.6, rate: 0.7 });
-  osc(ctx, 'sine', 90, 45, 0.15, env(ctx, out, 0.9, 0.002, 0.15));
+  sample(a, low, 'batida_grave', { vol: 0.45, rate: 0.7 });
+  osc(ctx, 'sine', 130, 80, 0.15, env(ctx, low, 0.5, 0.002, 0.15));
 }
 
 /* ------------------------------------------------------------------ */
@@ -538,17 +595,19 @@ export function sfxBump(vol = 1, pan = 0): void {
   const out = voice(a, vol * 3.2, pan, 1, -9);
   const p = vary(0.15);
   punch(vol, 0.55, 0.4);
-  const has = sample(a, out, 'batida_soco', { vol: 1, rate: 0.8 * p });
-  sample(a, out, 'batida_grave', { vol: 0.45, rate: 1.1 * p });
+  const low = grave(ctx, out);
+  const has = sample(a, low, 'batida_soco', { vol: 1, rate: 0.8 * p });
+  sample(a, low, 'batida_grave', { vol: 0.45, rate: 1.1 * p });
   // lataria amassando: metal e estalo de 1,5–6 kHz (o que se ouve em alto-falante pequeno)
   sample(a, out, ['impacto_metal_a', 'impacto_metal_b'], { vol: 0.9, rate: 0.9 * p });
-  crack(ctx, out, 2.2, p);
+  crack(ctx, out, 2.6, p);
+  clank(ctx, out, 0.45, p);
   if (!has) {
     noiseSrc(ctx, filter(ctx, 'lowpass', 1400 * p, 0.8, env(ctx, out, 0.9, 0.002, 0.14)), 0.18, ctx.currentTime, 0.8);
     metalRing(ctx, out, 240 * p, 0.45, 0.28);
   }
-  osc(ctx, 'sine', 100 * p, 42, 0.12, env(ctx, out, 0.4, 0.002, 0.13));
-  subThump(ctx, out, 0.35, ctx.currentTime, 58);
+  osc(ctx, 'sine', 100 * p, 42, 0.12, env(ctx, low, 0.4, 0.002, 0.13));
+  subThump(ctx, low, 0.3, ctx.currentTime, 58);
 }
 
 /** Batida na mureta (raspão metálico). */
@@ -560,12 +619,15 @@ export function sfxWall(vol = 1, pan = 0): void {
   const p = vary(0.15);
   punch(vol, 0.55, 0.4);
   const has = sample(a, out, 'mureta', { vol: 1, rate: 0.95 * p });
+  const low = grave(ctx, out);
   sample(a, out, 'batida_soco', { vol: 0.6, rate: 1.1 * p }); // estalo seco do contato
-  sample(a, out, 'batida_grave', { vol: 0.3, rate: 0.8 * p });
+  sample(a, low, 'batida_grave', { vol: 0.3, rate: 0.8 * p });
   sample(a, out, ['impacto_metal_a', 'impacto_metal_b'], { vol: 0.7, rate: 1.1 * p });
-  crack(ctx, out, 1.8, 1.1 * p);
-  noiseSrc(ctx, filter(ctx, 'bandpass', 1400 * p, 0.6, env(ctx, out, has ? 0.5 : 0.9, 0.002, 0.22)), 0.26);
-  osc(ctx, 'sine', 90 * p, 40, 0.15, env(ctx, out, 0.3, 0.002, 0.15));
+  crack(ctx, out, 2.8, 1.1 * p);
+  clank(ctx, out, 0.65, 1.1 * p);
+  // raspão de chapa 1–4 kHz sustentado (~0,25 s; rodada 12: +5,5 dB acima de 200 Hz, meta 6)
+  noiseSrc(ctx, filter(ctx, 'bandpass', 1900 * p, 0.7, env(ctx, dirt(ctx, out, 2), has ? 0.9 : 1.2, 0.002, 0.26)), 0.3);
+  osc(ctx, 'sine', 90 * p, 40, 0.15, env(ctx, low, 0.3, 0.002, 0.15));
   if (!has) metalRing(ctx, out, 310 * p, 0.3, 0.25);
 }
 
@@ -987,6 +1049,16 @@ export function finaleShow(later: (seconds: number, fn: () => void) => void = (s
   if (!a) return { cues: [], stop: () => {} };
   const bus = a.ctx.createGain();
   bus.connect(a.out);
+  // fogos -3,5 dB e corte suave acima de 8 kHz (rodada 12: o final soava brilhante demais); a
+  // multidão vai direto ao barramento
+  const fireworks = a.ctx.createGain();
+  fireworks.gain.value = 0.67;
+  const soft = a.ctx.createBiquadFilter();
+  soft.type = 'lowpass';
+  soft.frequency.value = 8000;
+  soft.Q.value = 0.5;
+  fireworks.connect(soft);
+  soft.connect(bus);
   let live = true;
   const cues: [number, () => void][] = [[0, () => sfxCrowd(10, 0.55, bus)]];
   let at = 0.2;
@@ -999,9 +1071,9 @@ export function finaleShow(later: (seconds: number, fn: () => void) => void = (s
         at + k * 0.22,
         () => {
           if (!live) return;
-          const rise = sfxFireworkLaunch(vol * 0.8, pan, bus);
+          const rise = sfxFireworkLaunch(vol * 0.8, pan, fireworks);
           later(rise, () => {
-            if (live) sfxFireworkBurst(vol, pan, bus);
+            if (live) sfxFireworkBurst(vol, pan, fireworks);
           });
         },
       ]);

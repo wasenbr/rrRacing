@@ -48,7 +48,7 @@ function mixHex(a: string, b: string, t: number): string {
 function roadBase(theme: Theme): string {
   if (theme === THEMES.drakonis) return mixHex(theme.road, '#2e2c34', 0.5);
   if (theme.roadPattern === 'ice') return mixHex(theme.road, '#52606e', 0.7);
-  if (theme.roadPattern === 'dirt') return mixHex(theme.road, '#4a4640', 0.65);
+  if (theme.roadPattern === 'dirt') return mixHex(theme.road, '#2c3230', 0.35);
   return theme.road;
 }
 
@@ -302,7 +302,7 @@ export function roadMaps(theme: Theme): RoadMaps {
     ctx.fillStyle = roadBase(theme);
     ctx.fillRect(0, 0, S, S);
     // variação suave da cor (manchas)
-    ctx.globalAlpha = theme.roadPattern === 'dirt' ? 0.35 : 0.18;
+    ctx.globalAlpha = theme.roadPattern === 'dirt' ? 0.22 : 0.18;
     ctx.globalCompositeOperation = 'overlay';
     ctx.drawImage(noiseCanvas, 0, 0, S, S);
     ctx.globalCompositeOperation = 'source-over';
@@ -325,7 +325,7 @@ export function roadMaps(theme: Theme): RoadMaps {
   // base de placas metálicas comum a todos os planetas: a grade já tem placas, ganha só a chapa
   // xadrez; hexágonos, escamas, gelo e a chapa enlameada de Bogmire ganham também as juntas
   const drak = theme === THEMES.drakonis;
-  plateBase(c, h, S, CELLS, theme.roadPattern === 'grid' ? 0 : theme.roadPattern === 'ice' ? 0.55 : theme.roadPattern === 'dirt' ? 0.85 : 0.7);
+  plateBase(c, h, S, CELLS, theme.roadPattern === 'grid' ? 0 : theme.roadPattern === 'ice' ? 0.55 : theme.roadPattern === 'dirt' ? 0.75 : 0.7);
 
   if (theme.roadPattern === 'grid') {
     // placas metálicas (alvo visual do usuário): cada placa quadrada é dividida em dois triângulos
@@ -535,52 +535,47 @@ export function roadMaps(theme: Theme): RoadMaps {
       }
     speckle(c, S, S, 3000, 0.2, 4);
   } else {
-    // chapa enlameada (Bogmire): placas de metal com lama marrom espalhada (mais nas bordas),
-    // respingos, torrões e sulcos de pneus
-    const mud = mixHex(theme.road, '#2a1808', 0.35);
-    const mr = parseInt(mud.slice(1, 3), 16);
-    const mg = parseInt(mud.slice(3, 5), 16);
-    const mb = parseInt(mud.slice(5, 7), 16);
-    for (let i = 0; i < 90; i++) {
+    // chapa de aço esverdeada (Bogmire): tom por placa, lodo claro esverdeado nas juntas (vem de
+    // grime(), com a cor `dust`), manchas úmidas escuras e respingos de lodo mais nas bordas
+    const per = CELLS % 2 === 0 ? cell * 2 : cell;
+    const m = Math.round(S / per);
+    for (let y = 0; y < m; y++)
+      for (let x = 0; x < m; x++) {
+        const k = cellRand(x, y) - 0.5;
+        c.fillStyle = k > 0 ? `rgba(190,205,180,${k * 0.14})` : `rgba(0,8,4,${-k * 0.3})`;
+        c.fillRect(x * per + 2, y * per + 2, per - 3, per - 3);
+      }
+    // manchas úmidas (escuras, sem tom marrom) e lodo claro respingado, mais nas bordas
+    for (let i = 0; i < 60; i++) {
       const x = rng() * S;
       const side = Math.abs(x / S - 0.5) * 2;
-      c.fillStyle = `rgba(${mr},${mg},${mb},${(0.12 + rng() * 0.2) * (0.6 + side * 0.8)})`;
+      c.fillStyle = `rgba(8,14,10,${(0.08 + rng() * 0.14) * (0.6 + side * 0.8)})`;
       c.beginPath();
-      c.ellipse(x, rng() * S, 14 + rng() * 60, 8 + rng() * 34, rng() * 3, 0, Math.PI * 2);
+      c.ellipse(x, rng() * S, 14 + rng() * 50, 10 + rng() * 34, rng() * 3, 0, Math.PI * 2);
       c.fill();
     }
-    for (let i = 0; i < 70; i++) {
-      c.fillStyle = rng() > 0.5 ? `rgba(255,200,140,${0.03 + rng() * 0.05})` : `rgba(40,18,4,${0.06 + rng() * 0.1})`;
-      c.beginPath();
-      c.ellipse(rng() * S, rng() * S, 20 + rng() * 70, 10 + rng() * 40, rng() * 3, 0, Math.PI * 2);
-      c.fill();
-    }
-    speckle(c, S, S, 6000, 0.4, 1);
-    for (let i = 0; i < 220; i++) {
+    speckle(c, S, S, 4000, 0.25, 1);
+    for (let i = 0; i < 160; i++) {
       const x = rng() * S;
       const y = rng() * S;
-      const r = 1 + rng() * 2.8;
-      c.fillStyle = `rgba(${90 + rng() * 50},${60 + rng() * 35},${30 + rng() * 25},0.85)`;
+      const side = Math.abs(x / S - 0.5) * 2;
+      if (rng() > 0.35 + side * 0.6) continue;
+      const r = 1 + rng() * 2.4;
+      c.fillStyle = `rgba(${130 + rng() * 40},${140 + rng() * 40},${100 + rng() * 30},0.7)`;
       c.beginPath();
       c.arc(x, y, r, 0, Math.PI * 2);
       c.fill();
-      h.fillStyle = '#e0e0e0';
+      h.fillStyle = '#d0d0d0';
       h.beginPath();
       h.arc(x, y, r, 0, Math.PI * 2);
       h.fill();
-    }
-    for (const x of [0.28, 0.36, 0.64, 0.72]) {
-      c.fillStyle = 'rgba(30,12,2,0.2)';
-      c.fillRect(S * x - 10, 0, 20, S);
-      h.fillStyle = '#707070';
-      h.fillRect(S * x - 10, 0, 20, S);
     }
   }
   // poeira/areia acumulada nas juntas e perto do meio-fio, grão fino e metal gasto (visual alvo)
   h.restore();
   // pouca poeira (≤ ~15% do piso somando esta camada e a de addRoadDirt): a cor do tema manda
   // (Chem VI preto e vermelho, New Mojave oliva, Nho azul, Inferno escuro); o gelo leva geada
-  const dustAmt = theme.roadPattern === 'dirt' ? 0.45 : theme.roadPattern === 'ice' ? 0.4 : drak ? 0.3 : 0.2;
+  const dustAmt = theme.roadPattern === 'dirt' ? 0.45 : theme.roadPattern === 'ice' ? 0.4 : drak ? 0.45 : 0.2;
   const rough = grime(color, height, theme, dustAmt);
   h.save();
   h.scale(0.5 * K, 0.5 * K);
@@ -608,9 +603,9 @@ export function roadMaps(theme: Theme): RoadMaps {
   normal.minFilter = THREE.LinearMipmapLinearFilter;
   normal.anisotropy = maxAnisotropy;
   // gelo fosco (não espelhado) e chapa com lama (fosca onde tem barro, metal por baixo)
-  const roughness = theme.roadPattern === 'ice' ? 0.4 : theme.roadPattern === 'dirt' ? 0.8 : 0.55;
-  const metalness = theme.roadPattern === 'dirt' ? 0.25 : theme.roadPattern === 'scales' ? 0.15 : theme.roadPattern === 'ice' ? 0.4 : 0.3;
-  const roughMap = grayCanvasTexture(rough, S * K, (d) => (theme.roadPattern === 'dirt' ? 0.55 + d * 0.45 : theme.roadPattern === 'ice' ? 0.35 + d * 0.6 : theme.roadPattern === 'scales' ? 0.78 + d * 0.2 : 0.45 + d * 0.55));
+  const roughness = theme.roadPattern === 'ice' ? 0.55 : theme.roadPattern === 'dirt' ? 0.8 : 0.55;
+  const metalness = theme.roadPattern === 'dirt' ? 0.4 : theme.roadPattern === 'scales' ? 0.15 : theme.roadPattern === 'ice' ? 0.2 : 0.3;
+  const roughMap = grayCanvasTexture(rough, S * K, (d) => (theme.roadPattern === 'dirt' ? 0.5 + d * 0.5 : theme.roadPattern === 'ice' ? 0.55 + d * 0.4 : theme.roadPattern === 'scales' ? 0.78 + d * 0.2 : 0.45 + d * 0.55));
   return { map: tex(color), emissive: theme.roadGlow > 0 ? tex(glow) : null, normal, roughness, metalness, roughnessMap: roughMap };
 }
 

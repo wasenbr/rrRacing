@@ -5,7 +5,7 @@ import { planetThumbnail } from '../render/planetThumbs';
 import type { ThemeId } from '../sim/track';
 import {
   bossBonus, campaignChargePrice, CAMPAIGN_RULES, canAdvanceEarly, carComingSoon, carsForSale, DIVISIONS, moneyCapped, planetCount, planetForLevel, PLANETS, POINTS, raceKind, rulesOf, seasonInfo, shopLevel, START_MONEY,
-  type CampaignState, type OpponentSetup, type PlanetDef, type PlanetNews, type RaceKind, type RaceOutcome, RIVALS, CHAMPION_BONUS, seasonSchedule,
+  CHAMPION_PAINT, paintPrice, type CampaignState, type OpponentSetup, type PlanetDef, type PlanetNews, type RaceKind, type RaceOutcome, RIVALS, CHAMPION_BONUS, seasonSchedule,
 } from '../sim/campaign';
 import { pauseView } from '../sim/campaignFlow';
 import {
@@ -128,6 +128,7 @@ export interface MenuActions {
   buyCar(id: string): void;
   buyUpgrade(kind: UpgradeKind): void;
   buyCharge(kind: ChargeKind): void;
+  buyPaint(): void;
   showPassword(): void;
   /** o final da campanha foi visto até o fim (ou pulado): sai do save */
   championSeen(): void;
@@ -373,7 +374,28 @@ function planetImg(theme: ThemeId | undefined, size = 64, cls = ''): string {
   if (!theme) return '';
   const key = `planet|${theme}|${size}`;
   const url = thumbReady.get(key);
-  return `<img class="planet-img${cls ? ` ${cls}` : ''}${url ? '' : ' loading'}" data-thumb="${key}" src="${url ?? BLANK}" alt="" draggable="false"/>`;
+  // fundo na cor do planeta: enquanto a miniatura 3D não fica pronta (ou se ela falhar), nunca um círculo vazio
+  const [lit, dark] = PLANET_TINT[theme] ?? ['#8a8aa0', '#1a1a2a'];
+  const bg = `background:radial-gradient(circle at 36% 34%,${lit},${dark} 68%,#05040a 100%)`;
+  return `<img class="planet-img${cls ? ` ${cls}` : ''}${url ? '' : ' loading'}" data-thumb="${key}" style="${bg}" src="${url ?? BLANK}" alt="" draggable="false"/>`;
+}
+
+/** Cores (luz, sombra) do fundo provisório de cada planeta. */
+const PLANET_TINT: Record<ThemeId, [string, string]> = {
+  chem6: ['#d8883a', '#4a1c08'],
+  drakonis: ['#9458d0', '#1a0a30'],
+  bogmire: ['#7a8a3a', '#1a220c'],
+  newmojave: ['#eca858', '#6a2a0c'],
+  nho: ['#d4e4f6', '#2a5a98'],
+  inferno: ['#ff6a1a', '#2a0806'],
+};
+
+/** Aquece as miniaturas do planeta atual e do próximo (cabeçalho, rota e viagem) na frente da fila. */
+function warmPlanetThumbs(index: number, urgent = true): void {
+  const keys: string[] = [];
+  for (const p of PLANETS.slice(index, index + 2)) for (const s of [72, 48, 176]) keys.push(`planet|${p.theme}|${s}`);
+  if (!urgent) return warmThumbs(keys);
+  idleJobsUrgent(keys.filter((k) => !thumbReady.has(k)).map((key) => ({ key: `thumb:${key}`, run: () => makeThumb(key) })));
 }
 
 /** Rota da campanha: os 6 planetas em ordem, com o atual em destaque e os vencidos marcados. */
@@ -384,7 +406,7 @@ function planetList(count: number): string {
 }
 
 /** Selo do teto de dinheiro (garagem e resultados): o jogador entende por que os prêmios encolheram. */
-const CAPPED_SEAL = '<span class="capped-seal" title="Com mais dinheiro do que a loja ainda vende, prêmios e bônus rendem só uma parte.">Prêmios reduzidos: você já tem mais do que a loja vende</span>';
+const CAPPED_SEAL = '<span class="capped-seal" title="Com mais dinheiro do que a loja ainda vende, o dinheiro da pista e os prêmios de 2º e 3º rendem só uma parte. O 1º lugar e o bônus do chefe pagam sempre cheio.">Pista e 2º/3º reduzidos: você já tem mais do que a loja vende</span>';
 
 /** Rota dos planetas da campanha (só os da dificuldade: Fácil 3, Normal 5, Difícil 6). */
 function planetRoute(current: number, champion = false, count = PLANETS.length): string {
@@ -444,10 +466,24 @@ function makeThumb(key: string): void {
   thumbPending.add(key);
   void p.then((url) => {
     thumbPending.delete(key);
-    if (url) thumbReady.set(key, url); // falha não fica guardada: a próxima tela tenta de novo
+    if (url) {
+      thumbTries.delete(key);
+      thumbReady.set(key, url);
+    } else {
+      // falha (ex.: contexto WebGL perdido): tenta de novo mais tarde (até 3 vezes) com a imagem ainda "carregando"
+      const n = (thumbTries.get(key) ?? 0) + 1;
+      thumbTries.set(key, n);
+      if (n <= 3) {
+        setTimeout(() => idleJob(`thumb:${key}`, () => makeThumb(key)), 400 * n);
+        return;
+      }
+      thumbTries.delete(key); // desiste por agora; a próxima tela tenta de novo
+    }
     applyThumb(key, url);
   });
 }
+/** Tentativas seguidas que falharam por chave de miniatura. */
+const thumbTries = new Map<string, number>();
 
 /**
  * Pré-gera miniaturas (a partir do menu principal) nos intervalos livres, uma por vez e nunca
@@ -584,6 +620,11 @@ export class Menus {
     this.refresh();
     this.updateFsButton();
     fillThumbs(this.el);
+  }
+
+  /** A garagem ou a loja estão na tela (sem cena por cima)? Para recarregar o save salvo em outra aba. */
+  isShowingGarage(): boolean {
+    return this.el.style.display !== 'none' && !!this.el.querySelector('.card.hub, .shop-head') && !this.el.querySelector('.finale');
   }
 
   /** A tela de som/opções está aberta? (para redesenhar depois de trocar a tela cheia) */
@@ -970,6 +1011,8 @@ export class Menus {
     // a próxima pista é desenho 2D barato: gera na hora, sem esperar a fila das miniaturas 3D
     // (na garagem do chefe a fila ainda estava nos carros e o quadro ficava vazio)
     makeThumb(trackKey(d.track.def, 320, 200));
+    // planeta atual e próximo na frente dos carros (cabeçalho e rota nunca ficam esperando)
+    warmPlanetThumbs(s.planet);
   }
 
   /**
@@ -1013,6 +1056,8 @@ export class Menus {
         <p class="warp-larry"><b>Loudmouth Larry:</b> “${esc(line)}”</p>
         <button class="go warp-go" data-act="warp-done">Continuar ${icon('arrowRight')}</button>
       </div>`);
+    // ao sair da viagem a garagem do planeta novo já encontra as miniaturas prontas
+    warmPlanetThumbs(n, false);
   }
 
   /**
@@ -1086,7 +1131,8 @@ export class Menus {
           const next = upgradeName(vid, k, lvl + 1);
           return `<div class="shop-row"><div class="upg-icon">${itemImg(k)}</div><div class="grow"><b>${upgradeLabel(vid, k)}: ${upgradeName(vid, k, lvl)}</b> ${pips(lvl, MAX_UPGRADE)}<small>${upgradeHelp(vid, k)}${next ? ` · próximo: <b class="upg-next">${next}</b>` : ''}</small>${vbase ? upgradePreview(vbase, s.car, k) : ''}</div>
             ${price === null ? '<span class="maxed">MÁXIMO</span>' : lockedAt ? `<span class="maxed">${icon('lock')} CHEGA EM ${esc(lockedAt.name.toUpperCase())}</span>` : `<button class="buy" data-upgrade="${k}" ${price > s.money ? 'disabled' : ''}>${money(price)}</button>`}</div>`;
-        }).join('');
+        }).join('') +
+        this.paintRow(s);
     } else if (this.shopTab === 'weapons') {
       const baseCar = d.vehicles[s.car.vehicleId];
       body = CHARGE_KINDS.map((k) => {
@@ -1130,6 +1176,15 @@ export class Menus {
         <div class="shop-body">${body}</div>
         <button data-act="hub">← Voltar à garagem</button>
       </div>`);
+  }
+
+  /** Pintura de campeão (gasto opcional do último planeta para o dinheiro que sobra). */
+  private paintRow(s: CampaignState): string {
+    const price = paintPrice(s);
+    if (price === null && s.paint !== 'champion') return '';
+    const swatch = `<div class="upg-icon" style="display:grid;place-items:center"><i style="display:block;width:44px;height:44px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#ffd29a,#${CHAMPION_PAINT.color.toString(16).padStart(6, '0')} 55%,#6a1a00);box-shadow:0 0 12px #${CHAMPION_PAINT.color.toString(16).padStart(6, '0')}"></i></div>`;
+    return `<div class="shop-row">${swatch}<div class="grow"><b>Pintura de campeão: laranja-brasa</b><small>Só aqui no último planeta: o carro corre com a cor que nenhum rival usa. Não muda o desempenho.</small></div>
+      ${price === null ? '<span class="maxed">PINTADO</span>' : `<button class="buy" data-paint="1" ${price > s.money ? 'disabled' : ''}>${money(price)}</button>`}</div>`;
   }
 
   /* ---------------- senha ---------------- */
@@ -1215,7 +1270,11 @@ export class Menus {
   }
 
   /** Criar sala ou entrar numa (com o código já preenchido quando veio por link). */
-  showOnline(code = '', error = ''): void {
+  /**
+   * Tela do online. `code` fixa a sala (convite); `retryCode` reabre o campo de código já preenchido
+   * (sala do link não encontrada: o jogador corrige o código ou volta ao menu).
+   */
+  showOnline(code = '', error = '', retryCode = ''): void {
     this.show(`
       <div class="card wide">
         <h2>ONLINE COM AMIGOS</h2>
@@ -1231,11 +1290,11 @@ export class Menus {
             ? `<h3>Sala ${esc(code)}</h3><input class="room" type="hidden" value="${esc(code)}"/>
                <button class="go" data-act="online-join">ENTRAR NA SALA</button>`
             : `<button class="go" data-act="online-create">CRIAR SALA</button>
-               <h3>Ou entre com um código</h3>
-               <div class="join-row"><input class="room" maxlength="4" placeholder="ABCD" autocapitalize="characters" spellcheck="false"/><button class="buy" data-act="online-join">Entrar</button></div>`
+               <h3>${retryCode ? 'Informe o código correto da sala' : 'Ou entre com um código'}</h3>
+               <div class="join-row"><input class="room" maxlength="4" placeholder="ABCD" autocapitalize="characters" spellcheck="false" value="${esc(retryCode)}"/><button class="buy" data-act="online-join">Entrar</button></div>`
         }
         <p class="pw-msg online-msg"></p>
-        <button data-act="main">← Voltar</button>
+        <button data-act="main">${retryCode ? '← Menu inicial' : '← Voltar'}</button>
       </div>`);
   }
 
@@ -1297,15 +1356,14 @@ export class Menus {
   /* ---------------- pausa e resultado ---------------- */
 
   /**
-   * Pausa. `started`: a corrida já largou (na contagem sair não custa nada); `glLostThisRace`: o vídeo
-   * caiu nesta corrida (sair ou reiniciar não custa, mesmo depois de ele voltar); `glLostNow`: o vídeo
-   * está fora agora (reiniciar fica desabilitado: largaria às cegas). A regra é a mesma que decide a
-   * cobrança no jogo (campaignFlow.pauseView/leaveRace).
+   * Pausa. `started`: a corrida já largou (na contagem sair não custa nada); `glLostNow`: o vídeo está
+   * fora agora (sair não custa e reiniciar fica desabilitado: largaria às cegas). Se o vídeo voltou, a
+   * corrida volta a valer. A regra é a mesma que decide a cobrança no jogo (campaignFlow.pauseView/leaveRace).
    */
-  showPause(online = false, started = true, glLostThisRace = false, glLostNow = glLostThisRace): void {
+  showPause(online = false, started = true, glLostNow = false): void {
     // campanha (fora do Fácil): sair ou reiniciar depois da largada conta como último lugar (e gasta o duelo)
     const st = this.inCampaign ? this.lastHub?.state : undefined;
-    const view = pauseView({ campaign: st ?? null, online, started, videoLostThisRace: glLostThisRace, videoLostNow: glLostNow });
+    const view = pauseView({ campaign: st ?? null, online, started, videoLostNow: glLostNow });
     const costs = view.costs;
     const duel = costs && raceKind(st!) !== 'normal';
     const quitLabel = online
@@ -1317,9 +1375,7 @@ export class Menus {
           : 'Sair da corrida';
     const freeNote =
       view.note === 'video'
-        ? glLostNow
-          ? 'O vídeo caiu: esta corrida não conta para a temporada. Sair agora não custa nada.'
-          : 'O vídeo caiu nesta corrida: ela não conta para a temporada. Sair ou reiniciar não custa nada.'
+        ? 'O vídeo caiu: sair agora não custa nada. Se ele voltar, a corrida volta a valer.'
         : view.note === 'not-started'
           ? 'A corrida ainda não largou: sair ou reiniciar agora não conta.'
           : !online && glLostNow
@@ -1439,7 +1495,7 @@ export class Menus {
           ${stat('ABATES', String(st.kills))}
           ${stat('GANHOS', money(st.earnings))}
         </div>
-        <div class="notice promoted">Recompensa: troféu da galáxia e <b class="gold">${money(CHAMPION_BONUS)}</b> de prêmio, já somado ao seu saldo de <b>${money(s.money)}</b>. A garagem continua aberta: em ${esc(PLANETS[planetCount(s) - 1].name)} as corridas valem só dinheiro e diversão${moneyCapped(s) ? ' — com o bolso acima do que a loja vende, os prêmios vêm reduzidos até você gastar' : ''}.</div>
+        <div class="notice promoted">Recompensa: troféu da galáxia e <b class="gold">${money(CHAMPION_BONUS)}</b> de prêmio, já somado ao seu saldo de <b>${money(s.money)}</b>. A garagem continua aberta: em ${esc(PLANETS[planetCount(s) - 1].name)} as corridas valem só dinheiro e diversão${moneyCapped(s) ? ' — com o bolso acima do que a loja vende, a pista e o 2º/3º rendem menos até você gastar (o 1º paga cheio)' : ''}.</div>
         <button class="go" data-act="champion-next" data-diff-next="${next}">${diff === next ? 'Nova campanha no' : 'Próximo desafio: campanha no'} ${esc(DIFFICULTY_LABEL[next])} ${icon('arrowRight')}</button>
         <div class="row-buttons">
           <button data-act="hub">Voltar à garagem</button>
@@ -1453,22 +1509,25 @@ export class Menus {
     const net = typeof online === 'object' ? online : null;
     const best = lapTimes.length ? Math.min(...lapTimes) : 0;
     const me = rows.find((r) => r.me);
+    // venceu o duelo (chefe ou repescagem): o título é a vitória sobre o chefe; a promoção vira subtítulo
+    const bossWin = !!report && report.kind !== 'normal' && (report.bonus > 0 || me?.place === 1);
     const title =
       report?.outcome === 'champion'
         ? 'CAMPEÃO!'
-        : report?.outcome === 'promoted'
-          ? 'PROMOVIDO!'
-          : report && report.kind !== 'normal' && me?.place === 1
-            ? 'CHEFE DERROTADO!'
+        : bossWin
+          ? 'CHEFE DERROTADO!'
+          : report?.outcome === 'promoted'
+            ? 'PROMOVIDO!'
             : me && me.place === 1
               ? 'VITÓRIA!'
               : 'RESULTADO';
+    const subtitle = report?.outcome === 'promoted' && bossWin ? `<p class="res-sub center" style="margin:-6px 0 8px;font-weight:700;letter-spacing:.08em;opacity:.85">PROMOVIDO</p>` : '';
     const tries = (n: number) => (n === 1 ? '<b>última chance</b>' : `restam <b>${n}</b> tentativas`);
     const campaignBlock = report
       ? `<div class="notice ${report.outcome}">
-          ${report.bonus ? `Você derrotou ${esc(report.boss)}! Bônus de chefe: <b class="gold">${money(report.bonus)}</b><br>` : ''}
+          ${report.bonus ? `<div>Você derrotou ${esc(report.boss)}! Bônus de chefe: <b class="gold">${money(report.bonus)}</b></div>` : ''}
           ${report.outcome === 'champion' ? `${planetRoute(report.planets, true, report.planets)}Você venceu a galáxia inteira! Lenda do rock.` : ''}
-          ${report.outcome === 'promoted' ? `${planetImg(PLANETS.find((p) => report.label.startsWith(p.name))?.theme, 112, 'promo')}Subiu para: <b>${report.label}</b><span hidden>${planetImg(PLANETS.find((p) => report.label.startsWith(p.name))?.theme, 176)}</span>` : ''}
+          ${report.outcome === 'promoted' ? `<div${report.bonus ? ' style="margin-top:6px"' : ''}>${planetImg(PLANETS.find((p) => report.label.startsWith(p.name))?.theme, 112, 'promo')}Promovido — subiu para: <b>${report.label}</b></div><span hidden>${planetImg(PLANETS.find((p) => report.label.startsWith(p.name))?.theme, 176)}</span>` : ''}
           ${report.outcome === 'retry' ? (report.kind === 'playoff' ? `${esc(report.boss)} venceu a repescagem. A divisão recomeça — melhore o carro na loja!` : `Não somou ${report.promote} pontos. A divisão recomeça — melhore o carro na loja!`) : ''}
           ${
             report.outcome !== 'playoff'
@@ -1495,6 +1554,7 @@ export class Menus {
     this.show(`
       <div class="card results">
         <h2>${title}</h2>
+        ${subtitle}
         ${campaignBlock}
         <div class="res-list">${podium}</div>
         ${lapTimes.length ? `<table>${lapTimes.map((t, i) => `<tr class="${t === best ? 'best' : ''}"><td>Volta ${i + 1}</td><td>${formatTime(t)}</td></tr>`).join('')}</table>` : ''}
@@ -1647,6 +1707,7 @@ export class Menus {
     }
     if (d.upgrade) this.actions.buyUpgrade(d.upgrade as UpgradeKind);
     if (d.charge) this.actions.buyCharge(d.charge as ChargeKind);
+    if (d.paint) this.actions.buyPaint();
     if (d.buycar) {
       // trocar de carro perde as peças: pede um segundo toque com o valor da troca
       if (!this.confirmClick(t, `Trocar? ${d.buyinfo ?? ''}`.trim())) return;

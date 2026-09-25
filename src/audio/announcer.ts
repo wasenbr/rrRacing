@@ -73,21 +73,23 @@ const arenaCache = new WeakMap<BaseAudioContext, AudioNode>();
 
 /**
  * Cadeia de "arena" do locutor (itens 32/53: as falas medidas tinham loudness de pico 2–4 dB abaixo
- * da referência de locutor de luta; ver som() em scripts/evidencias.mjs): saturação leve (voz
- * "estourando" o microfone), corte de grave, presença em 3 kHz e corpo em 1,2 kHz, compressão
- * (a fala inteira no mesmo nível de grito) e reverb curto de ginásio (~0,2 s; fora no modo leve).
+ * da referência de locutor de luta; ver som() em scripts/evidencias.mjs): saturação bem leve,
+ * corte de grave, presença em 3 kHz e corpo em 1,2 kHz, compressão (a fala inteira no mesmo nível
+ * de grito) e reverb curto de ginásio (~0,2 s; fora no modo leve). Rodada 12: presença +2 dB (era
+ * +5) e saturação menor — o esforço passava do grito real da referência (−10 dB) e soava
+ * artificial; a emoção agora vem dos takes gritados (scripts/locutor/gerar.py refazer).
  */
 export function arenaChain(ctx: BaseAudioContext, dest: AudioNode): AudioNode {
   const have = arenaCache.get(ctx);
   if (have) return have;
   const input = ctx.createGain();
-  input.gain.value = 1.9;
+  input.gain.value = 1.4;
   const sat = ctx.createWaveShaper();
   const n = 1024;
   const curve = new Float32Array(new ArrayBuffer(n * 4));
   for (let i = 0; i < n; i++) {
     const x = (i / (n - 1)) * 2 - 1;
-    curve[i] = Math.tanh(x * 1.5) / Math.tanh(1.5);
+    curve[i] = Math.tanh(x * 0.8) / Math.tanh(0.8);
   }
   sat.curve = curve;
   sat.oversample = isAudioLite() ? 'none' : '2x';
@@ -100,7 +102,7 @@ export function arenaChain(ctx: BaseAudioContext, dest: AudioNode): AudioNode {
     return b;
   };
   const hp = biquad('highpass', 140, 0.7);
-  const presence = biquad('peaking', 3000, 0.9, 5);
+  const presence = biquad('peaking', 3000, 0.9, 2);
   const body = biquad('peaking', 1200, 1, 2);
   const comp = ctx.createDynamicsCompressor();
   comp.threshold.value = -24;
@@ -250,6 +252,15 @@ export class Announcer {
     }
     this.busyPriority = priority;
     this.lastSpoke = now;
+  }
+
+  /**
+   * Cria a cadeia de "arena" antes da contagem (no preparo da largada): criada na primeira fala de
+   * largada, custava ~190 ms no passo da simulação logo depois do "VAI!".
+   */
+  prepare(): void {
+    const a = audio();
+    if (a) arenaChain(a.ctx, a.voice);
   }
 
   private play(buf: AudioBuffer, t: number, rate = 1, arena = false): void {

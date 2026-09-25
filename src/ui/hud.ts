@@ -212,9 +212,9 @@ export class Hud {
     }
     setText(this.best, data.best !== null ? `MELHOR ${formatTime(data.best)}` : '');
     setText(this.speed, String(Math.round(Math.abs(data.speedKmh))));
-    const posKey = `${data.place}`;
-    if (this.pos.dataset.v !== posKey) {
-      this.pos.dataset.v = posKey;
+    // comparações numéricas (sem montar strings por quadro: lixo para o coletor)
+    if (this.posNow !== data.place) {
+      this.posNow = data.place;
       this.pos.className = `rh-pos p${data.place}`;
       this.pos.innerHTML = `<b>${ORD[data.place] ?? data.place}</b>`;
     }
@@ -227,17 +227,18 @@ export class Hud {
     const ratio = Math.max(0, data.armor);
     const lit = Math.ceil(ratio * ARMOR_DOTS - 0.01);
     const tone = ratio > 0.6 ? 'ok' : ratio > 0.3 ? 'mid' : 'low';
-    const key = `${lit}|${tone}`;
-    if (this.armor.dataset.v !== key) {
-      this.armor.dataset.v = key;
+    const key = lit * 4 + (tone === 'ok' ? 0 : tone === 'mid' ? 1 : 2);
+    if (this.armorNow !== key) {
+      this.armorNow = key;
       this.armor.className = `rh-armor ${tone}`;
       this.armor.querySelectorAll('i').forEach((dot, k) => dot.classList.toggle('on', k < lit));
     }
 
     const f = data.front, r = data.rear, a = data.assist;
-    const wkey = `${f.icon}${f.n}${f.active ? 1 : 0}${f.label}|${r.icon}${r.n}${r.active ? 1 : 0}${r.label}|${a.icon}${a.n}${a.active ? 1 : 0}${a.label}`;
-    if (this.weaponsKey === wkey) return this.minimapTick(dt, data);
-    this.weaponsKey = wkey;
+    if (sameSlot(this.wPrev[0], f) && sameSlot(this.wPrev[1], r) && sameSlot(this.wPrev[2], a)) return this.minimapTick(dt, data);
+    copySlot(this.wPrev[0], f);
+    copySlot(this.wPrev[1], r);
+    copySlot(this.wPrev[2], a);
     const slot = (s: HudSlot, cls: string) =>
       `<div class="w ${cls}${s.active ? ' active' : ''}${s.n === 0 ? ' empty' : ''}" title="${s.label}"><div class="ic">${ICONS[s.icon] ?? ICONS.laser}</div><b>${s.n}</b><small>${s.label}</small></div>`;
     const html = slot(data.front, 'front') + slot(data.rear, 'rear') + slot(data.assist, `assist ${data.assist.icon}`);
@@ -249,7 +250,10 @@ export class Hud {
   }
 
   private moneyNow = NaN;
-  private weaponsKey = '';
+  private posNow = NaN;
+  private armorNow = NaN;
+  /** armas mostradas (comparadas campo a campo a cada quadro) */
+  private wPrev: HudSlot[] = [0, 1, 2].map(() => ({ label: '', icon: '', n: -1, max: 0, active: false }));
 
   private minimapTick(dt: number, data: HudData): void {
 
@@ -365,6 +369,12 @@ export class Hud {
     this.centerTimer = 0;
   }
 
+  /** Apaga os avisos de corrida (acertos, dinheiro) — não passam para a próxima largada. */
+  clearToasts(): void {
+    this.toast.classList.remove('show');
+    this.toastTimer = 0;
+  }
+
   /**
    * Aviso curto. Os de sistema (música, som, câmera, sala online) vão para o canto de baixo; os de
    * corrida (acertos, dinheiro, voltas) numa faixa sob o bloco de posição — nenhum no centro, sobre
@@ -462,4 +472,16 @@ const SYSTEM_TOAST = /^\s*(♪|🔇|🔊|🎥|🌐)/u;
 
 function setText(el: HTMLElement, text: string): void {
   if (el.textContent !== text) el.textContent = text;
+}
+
+function sameSlot(p: HudSlot, s: HudSlot): boolean {
+  return p.icon === s.icon && p.n === s.n && p.max === s.max && p.active === s.active && p.label === s.label;
+}
+
+function copySlot(p: HudSlot, s: HudSlot): void {
+  p.icon = s.icon;
+  p.n = s.n;
+  p.max = s.max;
+  p.active = s.active;
+  p.label = s.label;
 }

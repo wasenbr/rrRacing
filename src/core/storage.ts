@@ -64,6 +64,16 @@ function readSlot(i: number): { state: CampaignState; savedAt: number } | null {
   }
 }
 
+/**
+ * Evento 'storage' (outra aba do jogo salvou): devolve o slot salvo se for o slot em uso, senão -1.
+ * `key` null é um localStorage.clear() de outra aba: conta como o slot em uso.
+ */
+export function slotChangedElsewhere(key: string | null): number {
+  const i = activeSlot();
+  if (key === null) return i;
+  return i >= 0 && key === SLOT_KEY(i) ? i : -1;
+}
+
 /** Slot em uso (o último salvo/carregado); -1 se nenhum. */
 export function activeSlot(): number {
   const raw = read(ACTIVE_KEY);

@@ -1,4 +1,4 @@
-import { applyRaceResult, currentPlanet, encodeSave, forfeitCosts, promoteGoal, type CampaignState, type RaceReport } from './campaign';
+import { applyRaceResult, currentPlanet, DIVISIONS, encodeSave, forfeitCosts, forfeitRace, promoteGoal, raceKind, type CampaignState, type RaceReport } from './campaign';
 
 /**
  * Fluxos da campanha em volta de uma corrida (chegada, pausa, sair/reiniciar, vídeo perdido, carregar),
@@ -13,6 +13,9 @@ export interface SettledRace {
   /** pontos para subir e chefe da divisão em que a corrida foi disputada */
   promote: number;
   boss: string;
+  /** dinheiro e abates do jogador creditados na chegada (a tela de resultados mostra estes, congelados) */
+  money: number;
+  kills: number;
 }
 
 /**
@@ -23,7 +26,7 @@ export function settleFinish(c: CampaignState, place: number, money: number, kil
   const fromPlanet = c.planet;
   const promote = promoteGoal(c);
   const boss = currentPlanet(c).local;
-  return { report: applyRaceResult(c, place, money, kills), fromPlanet, promote, boss };
+  return { report: applyRaceResult(c, place, money, kills), fromPlanet, promote, boss, money, kills };
 }
 
 /** Cena que vem depois de uma corrida contada: o final (título), a viagem (subiu de planeta) ou nenhuma. */
@@ -41,15 +44,18 @@ export interface RaceFlags {
   finished: boolean;
   /** a tela de resultados já apareceu (ou a corrida já foi resolvida por uma saída anterior) */
   resolved: boolean;
-  /** o vídeo caiu em algum momento desta corrida (mesmo que já tenha voltado) */
-  videoLostThisRace: boolean;
+  /**
+   * o vídeo está perdido agora. Regra única: só enquanto o vídeo está fora sair não custa; se ele
+   * voltou, a corrida volta a valer (sair é desistência, cruzar a chegada conta a colocação)
+   */
+  videoLostNow: boolean;
 }
 
 /**
  * O que sair ou reiniciar faz com a corrida:
  * - 'none': nada a contar (não largou, ou já foi resolvida);
  * - 'counted': já contou na chegada (vale a colocação; nada é aplicado de novo);
- * - 'video': o vídeo caiu nesta corrida: não conta para a temporada;
+ * - 'video': o vídeo está fora agora: sair não conta para a temporada;
  * - 'forfeit': desistência (conta como último);
  * - 'free': sair não custa (Fácil, depois do título).
  */
@@ -59,7 +65,7 @@ export function leaveRace(c: CampaignState, f: RaceFlags): LeaveKind {
   if (f.resolved || !f.started) return 'none';
   if (f.finished) return 'counted';
   if (!forfeitCosts(c)) return 'free';
-  return f.videoLostThisRace ? 'video' : 'forfeit';
+  return f.videoLostNow ? 'video' : 'forfeit';
 }
 
 /** O que o menu de pausa mostra; a cobrança segue exatamente leaveRace (texto e regra não se contradizem). */
@@ -72,10 +78,10 @@ export interface PauseView {
   note: '' | 'video' | 'not-started';
 }
 
-export function pauseView(o: { campaign: CampaignState | null; online: boolean; started: boolean; videoLostThisRace: boolean; videoLostNow: boolean }): PauseView {
+export function pauseView(o: { campaign: CampaignState | null; online: boolean; started: boolean; videoLostNow: boolean }): PauseView {
   const restartEnabled = !o.videoLostNow;
   if (o.online || !o.campaign) return { costs: false, restartEnabled: o.online ? false : restartEnabled, note: '' };
-  const leave = leaveRace(o.campaign, { started: o.started, finished: false, resolved: false, videoLostThisRace: o.videoLostThisRace });
+  const leave = leaveRace(o.campaign, { started: o.started, finished: false, resolved: false, videoLostNow: o.videoLostNow });
   const canCost = forfeitCosts(o.campaign);
   const note = !canCost ? '' : leave === 'video' ? 'video' : !o.started ? 'not-started' : '';
   return { costs: leave === 'forfeit', restartEnabled, note };
@@ -87,6 +93,87 @@ export function pauseView(o: { campaign: CampaignState | null; online: boolean; 
  */
 export function nextAfterForfeit(r: RaceReport | null): 'race' | 'hub' {
   return !r || r.outcome === 'continue' ? 'race' : 'hub';
+}
+
+/** Planeta e divisão atuais ("Bogmire — Divisão A"). */
+export function campaignLabel(c: CampaignState): string {
+  return `${currentPlanet(c).name} — Divisão ${DIVISIONS[c.division]}`;
+}
+
+/** Aviso depois de uma desistência (ou corrida encerrada), conforme o que ela causou na temporada. */
+export function leaveNotice(c: CampaignState, head: string, r: RaceReport, boss: string): string {
+  switch (r.outcome) {
+    case 'playoff':
+      return `${head} Repescagem contra ${boss}: ${r.playoffLeft === 1 ? 'última chance' : `restam ${r.playoffLeft} duelos`}.`;
+    case 'retry':
+      return `${head} A divisão recomeça — melhore o carro na loja!`;
+    case 'promoted':
+      return `${head} Mesmo assim os pontos bastaram: agora em ${campaignLabel(c)}.`;
+    case 'champion':
+      return `${head} Os pontos bastaram: campeão da galáxia!`;
+    default:
+      return `${head} ${raceKind(c) === 'boss' ? `Próxima: o duelo contra ${boss}.` : `Pontos: ${c.points}/${promoteGoal(c)}.`}`;
+  }
+}
+
+/** Saída de uma corrida da campanha já resolvida (resolveLeave): o que contou e onde. */
+export interface LeaveOutcome {
+  kind: LeaveKind;
+  /** relatório do que contou ('counted' e 'forfeit'); null nos outros */
+  report: RaceReport | null;
+  /** planeta e chefe da corrida que foi deixada */
+  fromPlanet: number;
+  boss: string;
+  /** colocação na chegada ('counted') */
+  place: number;
+}
+
+/**
+ * Resolve a saída (sair ou reiniciar): aplica a desistência quando custa (muta a campanha e tira a
+ * marca de corrida em andamento quando não conta). Salvar é do chamador.
+ */
+export function resolveLeave(c: CampaignState, f: RaceFlags, settled: SettledRace | null, place: number): LeaveOutcome {
+  const kind = leaveRace(c, f);
+  const fromPlanet = settled?.fromPlanet ?? c.planet;
+  const boss = settled?.boss ?? currentPlanet(c).local;
+  let report: RaceReport | null = null;
+  if (kind === 'counted') report = settled?.report ?? null;
+  else if (kind === 'forfeit') report = forfeitRace(c);
+  else if (kind === 'video' || kind === 'free') delete c.raceInProgress;
+  return { kind, report, fromPlanet, boss, place };
+}
+
+/** O que vem depois de sair/reiniciar: a cena (final, viagem, garagem ou largar a próxima) e o aviso. */
+export interface AfterLeave {
+  scene: 'champion' | 'warp' | 'hub' | 'race';
+  notice: string;
+}
+
+/**
+ * Depois de sair ('quit') ou reiniciar ('restart') uma corrida da campanha: cena e aviso. O final e a
+ * viagem vêm antes de tudo; reiniciar larga a próxima só quando a temporada segue igual (senão
+ * garagem com o aviso); sair sempre vai à garagem.
+ */
+export function afterLeave(c: CampaignState, action: 'quit' | 'restart', o: LeaveOutcome): AfterLeave {
+  const r = o.report;
+  if (r) {
+    const head = o.kind === 'counted' ? `Corrida encerrada: ${o.place}º lugar.` : 'Você desistiu: contou como último lugar, sem prêmio.';
+    const notice = leaveNotice(c, head, r, o.boss);
+    const scene = sceneAfter(c, o.fromPlanet, r);
+    if (scene) return { scene, notice };
+    return { scene: action === 'restart' && nextAfterForfeit(r) === 'race' ? 'race' : 'hub', notice };
+  }
+  const notice =
+    o.kind === 'video'
+      ? 'O vídeo caiu no meio da corrida: sair enquanto ele estava fora não contou para a temporada.'
+      : action === 'restart'
+        ? ''
+        : o.kind === 'none'
+          ? 'Você saiu antes da largada: a corrida não contou.'
+          : c.champion
+            ? 'Corrida abandonada — depois do título sair não conta.'
+            : 'Corrida abandonada — no Fácil sair não conta para a temporada.';
+  return { scene: action === 'restart' ? 'race' : 'hub', notice };
 }
 
 /** Senha exportável: sem a marca de corrida em andamento (quem digita a senha não está no meio de uma). */

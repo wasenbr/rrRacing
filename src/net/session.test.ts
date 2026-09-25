@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { pong } from './peer';
-import { backoffMs, canCloseRace, FINISH_GRACE_MS, isToken, newToken, pingTone, REJOIN_MS, RejoinBook, Rtt } from './session';
+import { backoffMs, canCloseRace, FINISH_GRACE_MS, isToken, JitterBuffer, newToken, pingTone, REJOIN_MS, RejoinBook, Rtt, SNAP_BUFFER_MAX, SNAP_BUFFER_MIN } from './session';
 import { parseHello, parseLobbyPlayers, parseRacerList, validateEvents } from './sync';
 
 describe('reconexão', () => {
@@ -120,5 +120,25 @@ describe('ping', () => {
     );
     expect(ps?.map((p) => p.ping)).toEqual([undefined, 88, undefined, undefined]);
     expect(ps?.[1].away).toBe(true);
+  });
+});
+
+describe('folga de reprodução do convidado', () => {
+  it('rede lisa: 2 estados; rede irregular: mais, até 5', () => {
+    const smooth = new JitterBuffer();
+    for (let k = 0; k < 100; k++) smooth.add(k, 1000 + k * 50 + (k % 2) * 3, 50);
+    expect(smooth.packets).toBe(SNAP_BUFFER_MIN);
+    const bursty = new JitterBuffer();
+    // rajadas: a cada 4 estados, chegam 3 atrasados ~120 ms
+    for (let k = 0; k < 100; k++) bursty.add(k, 1000 + k * 50 + (k % 4 ? 120 : 0), 50);
+    expect(bursty.packets).toBeGreaterThan(SNAP_BUFFER_MIN);
+    expect(bursty.packets).toBeLessThanOrEqual(SNAP_BUFFER_MAX);
+    const awful = new JitterBuffer();
+    for (let k = 0; k < 100; k++) awful.add(k, 1000 + k * 50 + (k % 3) * 900, 50);
+    expect(awful.packets).toBe(SNAP_BUFFER_MAX);
+    awful.reset();
+    expect(awful.packets).toBe(SNAP_BUFFER_MIN);
+    awful.add(NaN, 1, 50);
+    expect(awful.packets).toBe(SNAP_BUFFER_MIN);
   });
 });

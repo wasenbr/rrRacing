@@ -32,12 +32,15 @@ const BUILDERS: Record<string, (color: number, shadows: boolean) => CarVisual> =
 const VISUAL_SCALE: Record<string, number> = {
   dirtdevil: 0.797, // 2,76 x 5,10; vol 24,1 → sA 0,866 · sV 0,734
   marauder: 0.777, // 2,82 x 5,40; vol 25,1 → sA 0,833 · sV 0,725
-  // Air Blade da rodada 11 (bandeja por cima dos pneus, barbatana alta, asas em diedro negativo),
-  // medido com o mesmo mapa de alturas (Havac na mesma medição: 2,59 x 4,07; vol 10,2): 4,06 x 5,82;
-  // vol 45,6 → sA 0,668 · sV 0,607 → 0,637. Fica em 0,66 (um pouco acima da média para não sumir
-  // perto dos outros, mas abaixo de sA: nunca maior que a escala só pela área)
-  airblade: 0.66,
-  battletrak: 0.755, // 3,36 x 5,52; vol 19,4 → sA 0,755 · sV 0,789 (baixo: fica em sA)
+  // Air Blade da rodada 12 (casco largo sobre convés vermelho, bandeja rente ao topo dos pneus, cabine
+  // alongada), remedido com o mapa de alturas do modelo inteiro, raiz em escala 1 (Havac na mesma
+  // medição: 2,59 x 4,08; vol 8,4): 4,06 x 5,82; vol 53,5 → sA 0,669 · sV 0,538 → 0,600. Nessa
+  // medição o Dirt Devil dá 0,747 (fica em 0,797): mesma proporção → 0,64. Fica em 0,65 (um pouco
+  // acima da média para não sumir perto dos outros, abaixo de sA)
+  airblade: 0.65,
+  // Battle Trak da rodada 12 (esteiras de placas, casco prata até o topo delas), mesma medição:
+  // 3,36 x 5,40; vol 19,1 → sA 0,763 · sV 0,760 (baixo: fica em sA)
+  battletrak: 0.763,
   havac: 1, // 2,59 x 4,08; vol 9,6
 };
 

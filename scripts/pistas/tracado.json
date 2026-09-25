@@ -106,8 +106,16 @@
    0,
    1
   ],
-  "layout": "F L S S S S R S S S R S S S R S L S S R S S S S R S R S",
-  "tiles": 28
+  "layout": "F S S L S S R S L S S S L S S S L S S S S R S S L S L S",
+  "tiles": 28,
+  "nota": "Retranscrito do mapa completo (Bogmire-DivisionsBA-Track2.png): largada na coluna da esquerda (marca e seta do mapa), sentido para baixo; o laço de cima à direita (em volta da ilha) é um desvio: da casa 16 (junção em T) pela direita e por cima até a casa 24.",
+  "desvios": [
+   {
+    "from": 16,
+    "to": 24,
+    "layout": "S S S L S S S S S"
+   }
+  ]
  },
  {
   "planet": "bogmire",
@@ -327,7 +335,15 @@
    0
   ],
   "layout": "F R S S S S S S R S S S S S S R S S S S S S R S R S L S L S R S",
-  "tiles": 32
+  "tiles": 32,
+  "desvios": [
+   {
+    "from": 18,
+    "to": 28,
+    "layout": "R S S S L S S"
+   }
+  ],
+  "nota": "Atalho do mapa entre as casas 18 e 28 (faixa entre os dois blocos internos) é um desvio: vira à direita na 18 e entra no trecho da 28 seguindo reto."
  },
  {
   "planet": "inferno",

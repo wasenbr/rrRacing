@@ -205,7 +205,11 @@ export function createDirtDevil(color: number, shadows: boolean): CarVisual {
   // (atrás do pneu traseiro, sem encostar nele)
   for (const sx of [-0.56, 0.56]) {
     bar(k, V(sx, BOT + 0.05, -BL + 0.02), V(sx * 1.1, BOT + 0.95, -BL + 0.1), 0.07, k.chrome);
-    k.add(new THREE.CylinderGeometry(0.1, 0.085, 0.14, 12), k.trim, sx * 1.1, BOT + 1.0, -BL + 0.1);
+    // boca larga (0,17 m) virada para trás: o nitro sai dela
+    k.add(new THREE.SphereGeometry(0.12, 12, 8), k.chrome, sx * 1.1, BOT + 0.97, -BL + 0.1);
+    k.add(new THREE.CylinderGeometry(0.17, 0.12, 0.34, 16).rotateX(-Math.PI / 2), k.chrome, sx * 1.1, BOT + 1.0, -BL - 0.02);
+    k.add(new THREE.TorusGeometry(0.155, 0.025, 6, 18), k.gunMetal, sx * 1.1, BOT + 1.0, -BL - 0.19);
+    k.add(new THREE.CircleGeometry(0.14, 16).rotateY(Math.PI), k.dash, sx * 1.1, BOT + 1.0, -BL - 0.185);
   }
   // Locust Jump Jets sob o assoalho
   for (const sx of [-1, 1]) k.jumpJet(sx * 0.42, BOT - 0.18, 0);
@@ -229,7 +233,7 @@ export function createDirtDevil(color: number, shadows: boolean): CarVisual {
   k.decalOn(roof, 0.8, 0.7, 0, CAB.z - 0.1, 'number');
   k.decalOn(tub, 0.62, 0.6, 0, 1.55, 'stripes');
   for (const sx of [-1, 1]) k.decalSide(tub, 0.6, 0.48, sx, TUB.y + 0.3, 0.3, 'number');
-  const flames = k.flames([[-0.62, BOT + 1.0, -BL + 0.1], [0.62, BOT + 1.0, -BL + 0.1]], 0.1, nitroThrust('dirtdevil'));
+  const flames = k.flames([[-0.616, BOT + 1.0, -BL - 0.2], [0.616, BOT + 1.0, -BL - 0.2]], 0.17, nitroThrust('dirtdevil'));
 
   // rodas enormes com aro cromado (anel e calota) por cima da roda padrão
   const lip = new THREE.TorusGeometry(WR * 0.6, 0.06, 8, 28).rotateY(Math.PI / 2);

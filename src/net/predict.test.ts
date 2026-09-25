@@ -5,7 +5,7 @@ import { newCampaign, opponentsFor } from '../sim/campaign';
 import { emptyInput } from '../sim/input';
 import { forwardX, forwardZ } from '../sim/math';
 import { Track } from '../sim/track';
-import { createWorld, stepDriver, stepWorld, type DriverState, type Hazard, type World } from '../sim/world';
+import { createWorld, draftBehind, stepDriver, stepWorld, type DriverState, type Hazard, type World } from '../sim/world';
 import { applySnapshot, takeSnapshot } from './sync';
 
 const DT = 1 / 60;
@@ -83,5 +83,36 @@ describe('previsão do convidado: mesmas regras do host', () => {
     applySnapshot(g, s);
     expect(g.racers[0].spinTotal).toBeGreaterThan(0);
     expect(g.racers[0].slipTime).toBe(0);
+  });
+
+  it('vácuo: carro em fila atrás de outro anda igual na previsão e no mundo', () => {
+    const run = (withDraft: boolean) => {
+      const track = new Track(TRACKS[0]);
+      const base = opponentsFor(newCampaign('jake', 0), VEHICLES)[0];
+      // 0 = quem segue (anda primeiro no passo), 1 = quem vai na frente, 12 m adiante na mesma linha
+      const w = createWorld(track, [{ ...base, ai: null }, { ...base, ai: null }], 3, 5);
+      w.started = true;
+      w.pickups = [];
+      w.hazards = [];
+      const [me, lead] = w.racers;
+      Object.assign(lead.car, { x: me.car.x + forwardX(me.car.heading) * 12, z: me.car.z + forwardZ(me.car.heading) * 12, heading: me.car.heading, pieceIndex: me.car.pieceIndex });
+      const pred: DriverState = { car: { ...me.car }, slipTime: 0, spinTime: 0, spinTotal: 1, oilGrace: 0 };
+      const input = { ...emptyInput(), throttle: 1 };
+      let drafted = 0;
+      let maxErr = 0;
+      for (let k = 0; k < 240; k++) {
+        const leadBefore = { ...lead.car };
+        drafted = Math.max(drafted, draftBehind(me.car, leadBefore));
+        stepWorld(w, { 0: input, 1: input }, DT);
+        stepDriver(pred, me.spec, input, 0, true, w.track, [], DT, undefined, withDraft ? [leadBefore] : undefined);
+        maxErr = Math.max(maxErr, Math.hypot(pred.car.x - me.car.x, pred.car.z - me.car.z));
+      }
+      return { drafted, maxErr };
+    };
+    const ok = run(true);
+    expect(ok.drafted).toBeGreaterThan(0);
+    expect(ok.maxErr).toBeLessThan(1e-6);
+    // sem o vácuo a previsão se afastava do host
+    expect(run(false).maxErr).toBeGreaterThan(0.01);
   });
 });

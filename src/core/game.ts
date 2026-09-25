@@ -1,5 +1,6 @@
-import { batteryApiAvailable, DynamicResolution, ECO_AUTO_S, ECO_PARTICLES, ECO_RES, ECO_SHADOW_EVERY, normalizeBatteryPref, resolveQuality, watchBattery, type BatteryPref, type QualityPref, type QualitySettings } from '../render/quality';
+import { AutoDegrade, batteryApiAvailable, DynamicResolution, ECO_AUTO_S, ECO_PARTICLES, ECO_RES, ECO_SHADOW_EVERY, loadDynScale, normalizeBatteryPref, resolveQuality, saveDynScale, watchBattery, type BatteryPref, type QualityPref, type QualitySettings } from '../render/quality';
 import * as THREE from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Announcer, Commentary } from '../audio/announcer';
 import { resumeAudio, setAudioLite, setSfxEnabled, suspendAudio, toggleMute, unlockAudio } from '../audio/context';
 import { Music } from '../audio/music';
@@ -8,12 +9,12 @@ import { sfxAssist, sfxBump, sfxBurn, sfxCountdown, sfxDrop, sfxExplosion, sfxFa
 import { trackById, TRACKS } from '../data/tracks';
 import { VEHICLES } from '../data/vehicles';
 import {
-  advanceEarly, campaignChargePrice, moneyCapped, currentPlanet, forfeitRace, markRaceStarted, planetNews, resolveAbandonedRace, type RaceReport, moneyScale, planetCount, raceKind, seasonInfo, shopLevel, difficultyOf, currentTrackId, decodeSave, DIVISIONS, newCampaign, opponentsFor, PLANETS, playerSpec, prizesFor,
+  advanceEarly, campaignChargePrice, CHAMPION_PAINT, paintPrice, moneyCapped, currentPlanet, markRaceStarted, planetNews, resolveAbandonedRace, moneyScale, planetCount, shopLevel, difficultyOf, currentTrackId, decodeSave, newCampaign, opponentsFor, PLANETS, playerSpec, prizesFor,
   type CampaignState,
 } from '../sim/campaign';
-import { behindNotice, exportSave, leaveRace, nextAfterForfeit, sceneAfter, settleFinish, type SettledRace } from '../sim/campaignFlow';
+import { afterLeave, behindNotice, campaignLabel, exportSave, leaveNotice, resolveLeave, sceneAfter, settleFinish, type AfterLeave, type SettledRace } from '../sim/campaignFlow';
 import { buildSpec, carSwapCost, CHARACTERS, newCarSetup, upgradePrice } from '../sim/garage';
-import { deleteSlot, listSlots, loadCampaign, loadFromSlot, loadPrefs, saveCampaign, savePrefs, saveToSlot } from './storage';
+import { deleteSlot, listSlots, loadCampaign, loadFromSlot, loadPrefs, saveCampaign, savePrefs, saveToSlot, slotChangedElsewhere } from './storage';
 import { canInstall, fullscreenSupported, initPwa, initViewport, isFullscreen, isInstalled, isIos, onFullscreenChange, onInstallChange, promptInstall, quitGame, toggleFullscreen } from '../ui/pwa';
 import { Controls, createTouchControls, isTouchDevice, setTouchAutoThrottle, setTouchWeapons } from '../input/controls';
 import { CAMERA_LABELS, CameraRig, type CameraMode } from '../render/cameras';
@@ -23,7 +24,8 @@ import { buildEnvironment, buildGround, buildSky, SUN_DIR } from '../render/envi
 import { contactShadow, setMaxAnisotropy } from '../render/textures';
 import { freezeStatic, mergeStatic } from '../render/merge';
 import { PostFx } from '../render/postfx';
-import { RivalTag } from '../render/rivalTag';
+import { RivalTag, setTagCanvasRect } from '../render/rivalTag';
+import { ghostVisible, nextGhost } from '../render/ghost';
 import { buildScenery, scenerySeed } from '../render/scenery';
 import { levelTheme, THEMES } from '../render/themes';
 import { buildTrackMesh } from '../render/trackMesh';
@@ -40,9 +42,9 @@ import { setIdlePaused } from '../ui/idleQueue';
 import { releaseThumbRenderer } from '../render/thumbnails';
 import { COLORS, Menus, WEAPON_LABEL, type CampaignReport, type HubData, type LobbyView, type NewCampaignOptions, type OnlineOptions, type OnlineResults, type QuickOptions, type ResultRow } from '../ui/menus';
 import { DROP_MS, NetClient, NetHost, netErrorText, normalizeCode } from '../net/peer';
-import { applySnapshot, MAX_PLAYERS, parseHello, parseLobbyPlayers, parseRacerList, parseStart, pickColor, takeSnapshot, validateEvents, validateSnap, cleanName, type ClientMsg, type HostMsg, type LobbyPlayer, type OnlineRace, type WorldSnap } from '../net/sync';
+import { applyProg, applySnapshot, decodeSnapMsg, encodeSnapMsg, isImportant, MAX_PLAYERS, parseHello, parseLobbyPlayers, parseProg, parseStart, pickColor, progEntry, progKey, takeSnapshot, validateSnap, cleanName, type ClientMsg, type HostMsg, type IdEvent, type LobbyPlayer, type OnlineRace, type ProgMsg, type SnapMsg, type WorldSnap } from '../net/sync';
 import { CMDS_PER_MSG, InputQueue, parseInputMsg, TapCounter, type NetCmd } from '../net/inputs';
-import { backoffMs, canCloseRace, cpuTakesOver, guestDropPlan, isToken, loadSession, LocalEcho, newToken, onlineMenuToggle, pingTone, REJOIN_MS, RejoinBook, saveSession, StallGuard } from '../net/session';
+import { backoffMs, canCloseRace, cpuTakesOver, dupPlan, guestDropPlan, isToken, JitterBuffer, loadSession, LocalEcho, newToken, onlineMenuToggle, pingTone, REJOIN_MS, RejoinBook, saveSession, StallGuard } from '../net/session';
 import { HiddenTicker } from '../net/ticker';
 
 const DT = 1 / 60;
@@ -52,8 +54,17 @@ const NO_CAP30 = typeof location !== 'undefined' && new URLSearchParams(location
 /** online: o host manda o estado a cada 3 passos (20x por segundo) */
 const SNAP_EVERY = 3;
 const SNAP_S = SNAP_EVERY * DT;
-/** online: o convidado mostra os outros carros ~100 ms atrás do estado mais novo (2 pacotes de folga) */
-const SNAP_BUFFER = 2;
+/** online: sem estado novo, o convidado segue os rivais pela velocidade até 2 estados (~100 ms) além do último */
+const EXTRAP_PKTS = 2;
+/**
+ * Convidado: posição em que um rival aparece. `al` 0..1 interpola entre o estado anterior e o
+ * último; acima de 1 (fila de estados vazia), segue do último pela velocidade.
+ */
+function shownPos(p: { x: number; y: number; z: number }, v: VehicleState, al: number): { x: number; y: number; z: number } {
+  if (al <= 1) return { x: lerp(p.x, v.x, al), y: lerp(p.y, v.y, al), z: lerp(p.z, v.z, al) };
+  const t = Math.min(al - 1, EXTRAP_PKTS) * SNAP_S;
+  return { x: v.x + v.vx * t, y: v.y, z: v.z + v.vz * t };
+}
 /** online: fila máxima de estados guardados no convidado (aba oculta não acumula sem fim) */
 const SNAP_QUEUE = 40;
 /** online: sem comando do convidado por esse tempo, o host solta os controles do carro dele */
@@ -78,7 +89,14 @@ interface NetSnap {
   /** carros fora da tela / reconectando */
   aw: number[];
   dc: number[];
+  /** eventos importantes com id (repetidos por ~1 s; o convidado deduplica) */
+  ie: IdEvent[];
 }
+
+/** online: por quantos estados (~1 s) o host repete cada evento importante */
+const IMPORTANT_RESEND = 20;
+/** id desta aba (a mesma ficha de sessão em outra aba: o host recusa a nova se a antiga responde) */
+const INSTANCE = newToken();
 
 /** Guarda a ficha de sessão do convidado (voltar à mesma sala depois de cair ou recarregar). */
 const sessionStore = (): Storage | null => {
@@ -131,6 +149,21 @@ interface Online {
   pred: DriverState | null;
   /** convidado: previsão limitada quando os estados do host param de chegar */
   stall: StallGuard;
+  /** host: a CPU pilota o carro do host enquanto a aba dele está oculta */
+  hostCpu: boolean;
+  /** host: próximo id de evento importante e os recentes (vão repetidos); último progresso enviado */
+  evId: number;
+  important: { id: number; e: WorldEvent; k: number }[];
+  progKeys: string[];
+  /** convidado: eventos importantes já mostrados, primeiro id que vale e progressos à espera do estado */
+  seenEv: Set<number>;
+  evMin: number;
+  progs: ProgMsg[];
+  /** convidado: sequência e último comando confirmado do estado mais novo recebido (adianta os próprios tiros) */
+  lastK: number;
+  lastAck: number;
+  /** convidado: irregularidade da chegada dos estados (folga de reprodução de 2 a 5 estados) */
+  jitter: JitterBuffer;
   /** convidado: tiro/bomba/turbo já mostrados na hora do toque (o eco do host é engolido) */
   echo: LocalEcho;
   /** convidado: comando do passo anterior (bordas de subida do retorno local) */
@@ -397,7 +430,6 @@ export class Game {
   private idlePaused = false;
   /** corrida limitada a 30 qps (nível baixo em aparelho lento) e média do tempo de quadro que decide */
   private cap30 = false;
-  private slowAvg = 1 / 60;
   /** relógio da última atualização do mapa de sombras */
   private shadowAt = -Infinity;
   /** economia de bateria em uso (opção "Sempre", ou "Automática" fora da tomada): 30 qps, resolução
@@ -423,9 +455,24 @@ export class Game {
   private readonly playerPoseTmp = { x: 0, y: 0, z: 0, heading: 0 };
   private readonly nearPool: RivalEngineInput[] = [];
   private readonly nearList: RivalEngineInput[] = [];
-  /** degraus de queda automática já aplicados (luzes dos clarões → sombra → partículas → 30 qps) */
-  private degrade = 0;
-  private degradeCd = 0;
+  /** queda automática (luzes dos clarões → bloom → sombra → partículas → 30 qps) */
+  private readonly autoDeg = new AutoDegrade();
+  /** degraus da queda automática já aplicados (lido pelas evidências) */
+  get degrade(): number {
+    return this.autoDeg.level;
+  }
+  /**
+   * Eventos de desempenho com carimbo (performance.now, ms): resize, resolução dinâmica, queda
+   * automática e preparo da largada — as evidências cruzam com os quadros lentos. Só nos eventos
+   * (raros): nada é montado por quadro.
+   */
+  readonly perfEvents: { t: number; tipo: string; info: string }[] = [];
+  private perfEvent(tipo: string, info: string): void {
+    if (this.perfEvents.length >= 200) this.perfEvents.shift();
+    this.perfEvents.push({ t: Math.round(performance.now()), tipo, info });
+  }
+  /** corridas desde o carregamento (a primeira retoma a escala salva da resolução dinâmica) */
+  private races = 0;
   /** tamanho da tela (guardado no resize: ler clientWidth por quadro força layout) */
   private width = 1;
   private height = 1;
@@ -446,12 +493,11 @@ export class Game {
   /** medição opcional das subetapas de step()/render() (ligada pelas evidências: game.prof = {}) */
   prof: Record<string, { soma: number; maior: number; n: number }> | null = null;
   /** o contexto WebGL foi perdido (GPU reiniciada): não desenha até voltar */
-  private glLost = false;
   /**
-   * o vídeo caiu em algum momento desta corrida (mesmo que já tenha voltado): decide a cobrança de
-   * sair/reiniciar e monta o menu de pausa com a mesma regra (ver campaignFlow.leaveRace)
+   * (regra da campanha: só enquanto o vídeo está fora sair não custa; se ele voltou, a corrida volta a
+   * valer — ver campaignFlow.leaveRace/pauseView)
    */
-  private glLostThisRace = false;
+  private glLost = false;
   /** campanha: resultado já contado na chegada do jogador (a tela de resultados só mostra) */
   private settled: SettledRace | null = null;
   private glNotice: HTMLElement | null = null;
@@ -492,13 +538,14 @@ export class Game {
     /** luz do planeta guardada: a vitrine usa luz neutra e devolve a original ao sair */
     light: { sun: THREE.Color; sunI: number; hemi: THREE.Color; hemiG: THREE.Color; hemiI: number; fill: THREE.Color | null; fillI: number };
     /** cada carro e o seu lugar nas fileiras (lateral, frente) em relação ao centro da reta */
-    cars: Map<string, { root: THREE.Object3D; lat: number; fwd: number }>;
+    cars: Map<string, { root: THREE.Object3D; lat: number; fwd: number; flames: THREE.Mesh[] }>;
+    /** estúdio: mapa de reflexos neutro (o do planeta volta ao sair), luz de recorte, piso e vinheta */
+    studio: { env: THREE.Texture; oldEnv: THREE.Texture | null; oldEnvI: number; rim: THREE.DirectionalLight; floor: THREE.Mesh; vignette: HTMLElement };
   } | null = null;
   private net: Online | null = null;
   /** resultados online: nota (host caiu etc.) e se o placar já é o final */
   private netResults: OnlineResults = {};
   /** carro rival na posição mostrada (colisão da previsão do convidado; reaproveitado) */
-  private contactTmp: VehicleState | null = null;
   /** host online com a aba oculta: a simulação segue fora do rAF */
   private hiddenTicker = new HiddenTicker(() => this.hiddenTick());
   private hiddenLast = 0;
@@ -539,7 +586,6 @@ export class Game {
     this.renderer.domElement.addEventListener('webglcontextlost', (e) => {
       e.preventDefault();
       this.glLost = true;
-      if (this.phase === 'racing' || this.phase === 'countdown' || this.phase === 'paused') this.glLostThisRace = true;
       if (!this.net && (this.phase === 'racing' || this.phase === 'countdown')) this.togglePause();
       // já estava pausado: refaz o menu (sem cobrança e sem reiniciar às cegas)
       else this.refreshPause();
@@ -558,7 +604,7 @@ export class Game {
       this.idleDt = 0;
       this.accumulator = 0;
       this.showGlNotice(false);
-      // pausa aberta: o menu volta a oferecer reiniciar (a corrida segue sem contar: glLostThisRace)
+      // pausa aberta: o menu volta a oferecer reiniciar, e a corrida volta a valer (sair é desistência)
       this.refreshPause();
     });
 
@@ -654,6 +700,9 @@ export class Game {
       }
     });
 
+    // outra aba salvou o mesmo slot: a garagem recarrega o save mais novo; em corrida só avisa
+    window.addEventListener('storage', (e) => this.onOtherTabSave(e.key));
+
     document.addEventListener('visibilitychange', () => this.onlineVisibility());
     window.addEventListener('beforeunload', (e) => this.onlineBeforeUnload(e));
     window.addEventListener('pagehide', () => this.onlinePageHide());
@@ -670,8 +719,10 @@ export class Game {
     const saved = loadSession(sessionStore());
     if (saved && (room.length !== 4 || room === saved.code)) {
       this.onlineJoin({ name: saved.name, color: saved.color, vehicleId: saved.vehicleId }, saved.code);
-    } else if (room.length === 4) {
-      this.menus.showOnline(room);
+    } else if (new URLSearchParams(location.search).has('sala')) {
+      // código válido abre a tela de entrar; código malformado já pede o código correto
+      if (room.length === 4) this.menus.showOnline(room);
+      else this.menus.showOnline('', 'O link da sala está incompleto ou inválido. Informe o código de 4 letras ou volte ao menu inicial.', room);
       const url = new URL(location.href);
       url.searchParams.delete('sala');
       history.replaceState(null, '', url);
@@ -798,9 +849,12 @@ export class Game {
    * fileiras centradas e longe das muretas, com câmera em perspectiva orbitando no ângulo dado (rad).
    * Com `only`, mostra só aquele carro, mais de perto (captura 3/4 de cada modelo). Ao entrar, a pista
    * fica vazia: sem tiros, explosões, minas, poças nem prêmios (a corrida é remontada ao sair).
-   * Usada pelo script de evidências para avaliar os modelos.
+   * Usada pelo script de evidências para avaliar os modelos. `nitro` acende as chamas do turbo
+   * (como com nitroTime > 0 na corrida).
+   * Luz de estúdio: reflexos de uma sala neutra (RoomEnvironment), luz de recorte forte por trás dos
+   * carros (em relação à câmera), piso escuro brilhante sob eles e vinheta nas bordas — só aqui.
    */
-  showroom(angle: number, only?: string): void {
+  showroom(angle: number, only?: string, nitro = false): void {
     if (!this.showcase) {
       // nada da corrida na vitrine: efeitos, projéteis, minas, poças e prêmios somem; o mundo não
       // anda no menu (sem IA nem armas) e é refeito na próxima largada (raceKey invalidada ao sair)
@@ -836,12 +890,12 @@ export class Game {
         [-3.3, -3.6],
         [-1.8, 3.6],
       ];
-      const cars = new Map<string, { root: THREE.Object3D; lat: number; fwd: number }>();
+      const cars = new Map<string, { root: THREE.Object3D; lat: number; fwd: number; flames: THREE.Mesh[] }>();
       ids.forEach((id, k) => {
         const car = createCarMesh(id, colors[k % colors.length], this.shadows);
         car.animate({ spin: 0.4, steer: 0, speed: 0, time: 0.4, grounded: true });
         const [lat, fwd] = spots[k % spots.length];
-        cars.set(id, { root: car.root, lat: lat * CAR_SCALE, fwd: fwd * CAR_SCALE });
+        cars.set(id, { root: car.root, lat: lat * CAR_SCALE, fwd: fwd * CAR_SCALE, flames: car.flames });
         car.root.rotation.y = heading;
         group.add(car.root);
       });
@@ -862,12 +916,57 @@ export class Game {
       this.sun.intensity = 3;
       this.hemi.color.set(0xffffff);
       this.hemi.groundColor.set(0x404040);
-      this.hemi.intensity = 0.9;
+      // (ambiente baixo: quem modela o volume é o sol, o recorte e os reflexos — não luz chapada)
+      this.hemi.intensity = 0.45;
       if (fill) {
         fill.color.set(0xffffff);
-        fill.intensity = 0.8;
+        fill.intensity = 0.5;
       }
-      this.showcase = { group, cam, center: new THREE.Vector3(mid.x, mid.h, mid.z), heading, light, cars };
+      // estúdio: reflexos de sala neutra (pintura e metal deixam de ficar foscos)
+      const pmrem = new THREE.PMREMGenerator(this.renderer);
+      const room = new RoomEnvironment();
+      const env = pmrem.fromScene(room, 0.04).texture;
+      pmrem.dispose();
+      room.traverse((o) => (o as THREE.Mesh).geometry?.dispose());
+      const oldEnv = this.scene.environment;
+      const oldEnvI = this.scene.environmentIntensity;
+      this.scene.environment = env;
+      this.scene.environmentIntensity = 1.1;
+      // luz de recorte forte por trás dos carros (reposicionada a cada ângulo da câmera)
+      const rim = new THREE.DirectionalLight(0xffffff, 4.5);
+      group.add(rim, rim.target);
+      // piso escuro e brilhante sob os carros, esmaecendo nas bordas (a pista some em volta)
+      const fc = document.createElement('canvas');
+      fc.width = fc.height = 256;
+      const fg = fc.getContext('2d')!;
+      const grd = fg.createRadialGradient(128, 128, 0, 128, 128, 128);
+      grd.addColorStop(0, 'rgba(255,255,255,0.96)');
+      grd.addColorStop(0.62, 'rgba(255,255,255,0.9)');
+      grd.addColorStop(1, 'rgba(255,255,255,0)');
+      fg.fillStyle = grd;
+      fg.fillRect(0, 0, 256, 256);
+      const floorTex = new THREE.CanvasTexture(fc);
+      const floor = new THREE.Mesh(
+        new THREE.CircleGeometry(1, 48).rotateX(-Math.PI / 2),
+        new THREE.MeshStandardMaterial({ color: 0x0a0b0e, map: floorTex, transparent: true, depthWrite: false, roughness: 0.28, metalness: 0.4, polygonOffset: true, polygonOffsetFactor: -2 }),
+      );
+      floor.position.set(mid.x, mid.h + 0.02, mid.z);
+      floor.receiveShadow = this.shadows;
+      floor.renderOrder = -1;
+      group.add(floor);
+      // vinheta forte nas bordas da tela (só na vitrine)
+      const vignette = document.createElement('div');
+      vignette.style.cssText = 'position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at 50% 55%, rgba(0,0,0,0) 45%, rgba(0,0,0,0.35) 75%, rgba(0,0,0,0.6) 100%)';
+      this.renderer.domElement.parentElement?.appendChild(vignette);
+      this.showcase = {
+        group,
+        cam,
+        center: new THREE.Vector3(mid.x, mid.h, mid.z),
+        heading,
+        light,
+        cars,
+        studio: { env, oldEnv, oldEnvI, rim, floor, vignette },
+      };
     }
     const sc = this.showcase;
     this.phase = 'menu';
@@ -882,6 +981,10 @@ export class Game {
     const solo = only && sc.cars.has(only) ? only : null;
     for (const [id, c] of sc.cars) {
       c.root.visible = !solo || id === solo;
+      for (const f of c.flames) {
+        f.visible = nitro;
+        f.scale.setScalar(1.15);
+      }
       const lat = solo ? 0 : c.lat;
       const fwd = solo ? 0 : c.fwd;
       c.root.position.set(
@@ -906,6 +1009,12 @@ export class Game {
     sc.cam.aspect = this.width / this.height;
     sc.cam.updateProjectionMatrix();
     sc.cam.updateMatrixWorld();
+    // recorte: do lado oposto à câmera, alto; piso do tamanho do grupo (ou de um carro)
+    const st = sc.studio;
+    st.rim.position.set(sc.center.x - Math.sin(a) * 20, sc.center.y + 11, sc.center.z - Math.cos(a) * 20);
+    st.rim.target.position.copy(look);
+    st.rim.target.updateMatrixWorld();
+    st.floor.scale.setScalar(solo ? 5.5 : 13 * CAR_SCALE);
     this.sun.position.copy(sc.center).addScaledVector(SUN_DIR, 90);
     this.sun.target.position.copy(sc.center);
     this.sun.target.updateMatrixWorld();
@@ -930,6 +1039,14 @@ export class Game {
       fill.color.copy(l.fill);
       fill.intensity = l.fillI;
     }
+    const st = this.showcase.studio;
+    // devolve os reflexos do planeta (se o planeta não foi trocado enquanto isso)
+    if (this.scene.environment === st.env) {
+      this.scene.environment = st.oldEnv;
+      this.scene.environmentIntensity = st.oldEnvI;
+    }
+    st.env.dispose();
+    st.vignette.remove();
     this.scene.remove(this.showcase.group);
     disposeTree(this.showcase.group);
     this.showcase = null;
@@ -946,6 +1063,9 @@ export class Game {
     this.loadTrack(trackById(setup.trackId));
     // projéteis, minas e poças da corrida anterior não passam para a próxima
     this.effects.reset();
+    // nem os avisos de acerto/dinheiro
+    this.hud.clearToasts();
+    this.lastHitBy = -1;
     if (setup.online) {
       // online: o grid, as voltas e a semente vêm do host (iguais em todos os aparelhos)
       const race = setup.online.race;
@@ -1030,10 +1150,10 @@ export class Game {
     return g;
   }
 
-  private startRace(): void {
+  /** `midRace`: convidado online voltando a uma corrida já largada (sem contagem nem bipe). */
+  private startRace(midRace = false): void {
     this.createRace();
-    // corrida nova: sem vídeo agora, ela já nasce "com vídeo perdido" (não cobra; frame() a pausa)
-    this.glLostThisRace = this.glLost;
+    // corrida nova sem vídeo: frame() a pausa (sair enquanto o vídeo está fora não cobra)
     this.settled = null;
     this.countdown = COUNTDOWN;
     this.phase = 'countdown';
@@ -1044,8 +1164,20 @@ export class Game {
       if (token === this.prepToken) this.preparing = false;
     };
     prepareSfx();
+    this.announcer.prepare();
     // degraus da queda automática que trocam shaders entram agora (o warmup compila os novos)
     this.applyPendingDegrade();
+    // resolução da corrida já no preparo: a primeira corrida retoma a escala em que a anterior
+    // terminou (salva por nível) e a troca da resolução do menu para a da corrida (canvas e alvos do
+    // bloom) acontece aqui, antes do desenho do preparo — antes ela ficava para o primeiro quadro e os
+    // degraus da resolução dinâmica realocavam tudo logo depois da largada
+    if (this.races++ === 0 && this.dynRes.enabled) {
+      const saved = loadDynScale(this.quality.level);
+      if (saved !== null) this.dynRes.restore(saved);
+    }
+    this.perfEvent('preparo', `escala ${this.dynRes.scale.toFixed(2)} degrau ${this.autoDeg.level} bloom ${this.postfx ? 1 : 0}`);
+    this.menuRes = false;
+    this.resize();
     // o preparo também desenha a sombra (compila os shaders dela antes da contagem)
     this.renderer.shadowMap.needsUpdate = true;
     // câmera encaixada no carro e HUD zerado já no primeiro quadro do preparo (antes, a tela
@@ -1065,8 +1197,10 @@ export class Game {
     this.menus.hideAll();
     this.hud.setVisible(true);
     this.hud.setLap(1, this.world.laps);
-    this.hud.message('3', 0, 'count');
-    sfxCountdown(false);
+    if (!midRace) {
+      this.hud.message('3', 0, 'count');
+      sfxCountdown(false);
+    }
     this.music.play(this.track.def.theme, 'race');
   }
 
@@ -1121,7 +1255,7 @@ export class Game {
 
   /** Menu de pausa offline com a regra da corrida (largou, vídeo caiu nesta corrida, vídeo fora agora). */
   private showPauseMenu(): void {
-    this.menus.showPause(false, this.world.started, this.glLostThisRace, this.glLost);
+    this.menus.showPause(false, this.world.started, this.glLost);
   }
 
   /** Pausa na tela (não as opções por cima dela): refaz o menu com o estado atual do vídeo. */
@@ -1167,7 +1301,11 @@ export class Game {
       this.sizeH = h;
       this.renderer.setPixelRatio(pr);
       this.renderer.setSize(w, h);
-      this.postfx?.setSize(w, h, pr);
+      const fx = this.postfx?.setSize(w, h, pr) ?? false;
+      this.perfEvent('resize', `${w}x${h}@${pr.toFixed(2)}${fx ? ' +bloom' : ''} ${this.phase}${this.preparing ? ':preparando' : ''}`);
+      // retângulo do canvas para as etiquetas dos rivais (lido aqui, uma vez, não por rival no desenho)
+      const rc = this.renderer.domElement.getBoundingClientRect();
+      setTagCanvasRect(rc.left, rc.top, rc.width, rc.height);
     }
     this.rig.resize(w, h);
     const mirror = this.mirrorRect();
@@ -1246,6 +1384,9 @@ export class Game {
       // pausa e resultados congelados: imagem parada, só redesenha quando pedido (redimensionar etc.)
       if (!this.redraw) return this.sleep();
     } else if (this.idleDt < this.minFrameDt(behindMenu || capped) && !this.redraw) return;
+    // contagem com qps muito baixo: o tempo acima do teto de 0,1 s por quadro anda só o relógio da
+    // contagem (sem física), senão os "3, 2, 1" viravam câmera lenta em aparelho muito lento
+    if (this.phase === 'countdown' && !this.net && this.idleDt > 0.1) this.countdownSkip(Math.min(this.idleDt, 0.5) - 0.1);
     frameDt = Math.min(this.idleDt, 0.1);
     this.idleDt = 0;
     this.redraw = false;
@@ -1284,7 +1425,12 @@ export class Game {
     if (racingNow) {
       const work = (performance.now() - workStart) / 1000;
       const cost = Math.max(work, capped ? frameDt / 2 : frameDt);
-      if (this.dynRes.update(frameDt, cost)) this.resize();
+      if (this.dynRes.update(frameDt, cost)) {
+        this.perfEvent('dynRes', this.dynRes.scale.toFixed(2));
+        // a próxima corrida (mesmo depois de recarregar) já começa nesta escala
+        saveDynScale(this.quality.level, this.dynRes.scale);
+        this.resize();
+      }
       if (this.phase === 'racing') {
         this.autoDegrade(frameDt, cost);
         this.ecoWatch(frameDt);
@@ -1384,44 +1530,36 @@ export class Game {
    */
   private autoDegrade(dt: number, cost: number): void {
     if (NO_CAP30 || this.cap30) return;
-    this.slowAvg += (cost - this.slowAvg) * 0.03;
-    this.degradeCd -= dt;
-    if (this.degradeCd > 0 || this.slowAvg <= 1 / 42 || this.dynRes.scale > this.dynRes.min + 1e-3) return;
-    this.degradeCd = 3;
-    this.slowAvg = 1 / 60;
-    while (this.degrade < 5) {
-      const step = this.degrade++;
+    const shots = this.autoDeg.update(dt, cost, this.dynRes.scale <= this.dynRes.min + 1e-3, {
+      flashLights: this.quality.flashLights,
+      bloom: !!this.postfx,
+      shadow: this.sun.castShadow,
+      particles: this.quality.particles > 0.4,
+    });
+    if (!shots) return;
+    for (const a of shots) {
+      this.perfEvent('degrade', `${this.autoDeg.level}:${a}`);
       // luzes dos clarões: tirá-las muda a chave dos shaders (recompilação no meio da corrida =
-      // engasgo); saem na próxima largada, com warmup. Não gasta a espera: segue para o próximo degrau
-      if (step === 0 && this.quality.flashLights) {
-        this.pendingNoFlash = true;
-        continue;
-      }
+      // engasgo); saem na próxima largada, com warmup
+      if (a === 'flash') this.pendingNoFlash = true;
       // bloom: desliga já e desenha direto na tela. As variantes de shader da tela foram compiladas
-      // no preparo da largada (warmup): nada recompila. A sombra suave vira PCF na próxima largada
-      if (step === 1 && this.postfx) {
+      // e desenhadas de verdade no preparo da largada (warmup): nada recompila. A sombra suave vira
+      // PCF na próxima largada
+      else if (a === 'bloom' && this.postfx) {
         this.postfx.dispose();
         this.postfx = null;
         if (this.renderer.shadowMap.type === THREE.PCFSoftShadowMap) this.pendingPcf = true;
-        return;
       }
       // sombra: agora só some (intensidade 0, uniforme) e o mapa deixa de ser redesenhado (ver
       // render); castShadow=false (outro shader) fica para a próxima largada
-      if (step === 2 && this.sun.castShadow) {
+      else if (a === 'shadow') {
         this.sun.shadow.intensity = 0;
         this.pendingNoShadow = true;
-        return;
-      }
-      if (step === 3 && this.quality.particles > 0.4) {
-        this.effects.setDensity(this.particleDensity());
-        return;
-      }
-      if (step === 4) {
-        this.cap30 = true;
-        return;
-      }
+      } else if (a === 'particles') this.effects.setDensity(this.particleDensity());
+      else if (a === 'cap30') this.cap30 = true;
     }
   }
+
 
   /** Resultados na tela fora do online: a prova para de simular e de soar (imagem parada atrás). */
   private frozenResults(): boolean {
@@ -1564,6 +1702,17 @@ export class Game {
     e.n++;
     if (d > e.maior) e.maior = d;
     return now;
+  }
+
+  /** Adianta só o relógio da contagem (sem física), com os bipes e o número na tela. */
+  private countdownSkip(extra: number): void {
+    const shown = Math.ceil(this.countdown);
+    // a passagem para "VAI!" (largada, locutor) fica para o step()
+    this.countdown = Math.max(this.countdown - extra, Math.min(this.countdown, 0.01));
+    if (Math.ceil(this.countdown) !== shown) {
+      sfxCountdown(false);
+      this.hud.message(String(Math.ceil(this.countdown)), 0, 'count');
+    }
   }
 
   private step(dt: number): void {
@@ -1825,6 +1974,12 @@ export class Game {
     if (this.setup.mode === 'campaign' && this.campaign) {
       // o resultado já foi contado e salvo na chegada (settleCampaignFinish); aqui só é mostrado
       const done = this.settled ?? this.settleCampaignFinish();
+      // dinheiro e abates do jogador: os creditados na chegada (não o que mudou depois dela)
+      const mine = rows.find((r) => r.me);
+      if (done && mine) {
+        mine.money = done.money;
+        mine.kills = done.kills;
+      }
       if (done) {
         const res = done.report;
         report = {
@@ -1869,8 +2024,7 @@ export class Game {
   }
 
   private campaignLabel(): string {
-    const c = this.campaign!;
-    return `${currentPlanet(c).name} — Divisão ${DIVISIONS[c.division]}`;
+    return campaignLabel(this.campaign!);
   }
 
   private hubData(): HubData {
@@ -1917,7 +2071,7 @@ export class Game {
     // hino da vitória: a faixa do menu/abertura (ou a trilha do menu) no volume cheio, com os fogos
     this.music.playAnthem();
     this.menus.showChampion(this.hubData());
-    this.announcer.say('dominating', this.setup.pilot ?? null, 3);
+    this.announcer.say('finishFirst', this.setup.pilot ?? null, 3);
     // fogos de verdade (assobio, estouro grave, crepitar) em ~10 salvas + multidão; o locutor grita
     // "Holy Toledo!" no meio da queima. Sair da tela do final cala tudo.
     const show = finaleShow();
@@ -1952,7 +2106,7 @@ export class Game {
     const r = resolveAbandonedRace(c);
     if (abandoned) saveCampaign(c);
     if (r) {
-      this.pendingNotice = this.forfeitNotice('A corrida foi abandonada: contou como último.', r, boss);
+      this.pendingNotice = leaveNotice(c, 'A corrida foi abandonada: contou como último.', r, boss);
     }
     // aviso extra (ex.: save mais antigo que o jogo aberto) só quando há cena; senão o chamador o mostra
     if (extra && (r || (c.finalePending && c.champion) || c.warpFrom !== undefined)) this.pendingNotice = `${this.pendingNotice} ${extra}`.trim();
@@ -1975,66 +2129,57 @@ export class Game {
   /** aviso da desistência resolvida ao carregar, mostrado na garagem depois da viagem */
   private pendingNotice = '';
 
-  /** Texto do aviso depois de uma desistência (ou corrida encerrada), conforme o que ela causou. */
-  private forfeitNotice(head: string, r: RaceReport, boss: string): string {
-    const c = this.campaign!;
-    switch (r.outcome) {
-      case 'playoff':
-        return `${head} Repescagem contra ${boss}: ${r.playoffLeft === 1 ? 'última chance' : `restam ${r.playoffLeft} duelos`}.`;
-      case 'retry':
-        return `${head} A divisão recomeça — melhore o carro na loja!`;
-      case 'promoted':
-        return `${head} Mesmo assim os pontos bastaram: agora em ${this.campaignLabel()}.`;
-      default:
-        return `${head} ${raceKind(c) === 'boss' ? `Próxima: o duelo contra ${boss}.` : `Pontos: ${c.points}/${seasonInfo(c).promote}.`}`;
-    }
-  }
-
   /**
-   * Desistir no meio de uma corrida da campanha (sair ou reiniciar): fora do Fácil conta como último
-   * lugar (0 pontos, sem o dinheiro da corrida; num duelo gasta a tentativa). Devolve o aviso para a
-   * garagem, ou null quando não custou nada. Se o jogador já tinha cruzado a chegada, vale a colocação.
+   * Sair ou reiniciar no meio de uma corrida da campanha: a regra (campaignFlow.resolveLeave/afterLeave)
+   * decide o que conta e a cena seguinte; aqui só salva e executa. Fora da campanha: null.
    */
-  private campaignForfeit(): string | null {
-    this.lastForfeit = null;
+  private campaignLeave(action: 'quit' | 'restart'): AfterLeave | null {
     const c = this.campaign;
     if (this.setup.mode !== 'campaign' || !c) return null;
     const p = this.player;
-    const leave = leaveRace(c, { started: this.world.started, finished: !!this.settled, resolved: this.resultsShown, videoLostThisRace: this.glLostThisRace });
-    if (leave === 'none' || leave === 'free') {
-      // (no Fácil/depois do título a marca nem existe; por garantia não fica no save)
-      if (leave === 'free' && c.raceInProgress) {
-        delete c.raceInProgress;
-        saveCampaign(c);
-      }
-      return null;
-    }
-    this.resultsShown = true; // a corrida está resolvida: nada de contar de novo
-    if (leave === 'video') {
-      // o vídeo caiu nesta corrida: não dava para correr, sair ou reiniciar não cobra (como diz a pausa)
-      delete c.raceInProgress;
-      saveCampaign(c);
-      return 'O vídeo caiu no meio da corrida: ela não contou para a temporada.';
-    }
-    if (leave === 'counted') {
-      // já contou (e foi salva) na chegada: só o aviso; viagem/final já ficaram pendentes
-      const done = this.settled!;
-      this.lastForfeit = done.report;
-      return this.forfeitNotice(`Corrida encerrada: ${p.finishPlace || p.place}º lugar.`, done.report, done.boss);
-    }
-    const fromPlanet = c.planet;
-    const boss = currentPlanet(c).local;
-    const r = forfeitRace(c)!;
-    this.lastForfeit = r;
-    const scene = sceneAfter(c, fromPlanet, r);
-    if (scene === 'warp') this.warpFrom = fromPlanet;
-    this.championPending = scene === 'champion';
-    saveCampaign(c);
-    return this.forfeitNotice('Você desistiu: contou como último lugar, sem prêmio.', r, boss);
+    const hadMark = !!c.raceInProgress;
+    const o = resolveLeave(c, { started: this.world.started, finished: !!this.settled, resolved: this.resultsShown, videoLostNow: this.glLost }, this.settled, p.finishPlace || p.place);
+    if (o.kind !== 'none') this.resultsShown = true; // a corrida está resolvida: nada de contar de novo
+    if (o.kind === 'forfeit' || (hadMark && !c.raceInProgress)) saveCampaign(c);
+    return afterLeave(c, action, o);
   }
 
-  /** relatório da última saída/desistência resolvida por campaignForfeit (null: não contou) */
-  private lastForfeit: RaceReport | null = null;
+  /**
+   * Evento 'storage': outra aba do jogo salvou o slot em uso. Na garagem/loja recarrega a campanha (o
+   * save mais novo vale); no menu principal só troca o "Continuar"; no meio da corrida avisa (ao
+   * terminar, o save desta aba passa por cima).
+   */
+  private onOtherTabSave(key: string | null): void {
+    const slot = slotChangedElsewhere(key);
+    if (slot < 0 || this.net) return;
+    if (this.phase === 'menu' && this.screen === 'main') {
+      this.campaign = loadCampaign();
+      return;
+    }
+    if (!this.campaign || this.setup.mode !== 'campaign') return;
+    if (this.phase === 'menu' && this.screen === 'hub' && this.menus.isShowingGarage()) {
+      const fresh = loadFromSlot(slot);
+      if (!fresh) return; // apagado na outra aba: segue com o jogo em memória
+      this.campaign = fresh;
+      this.toHub('Este jogo foi salvo em outra aba: a garagem foi recarregada com o save mais novo.');
+    } else if (this.phase !== 'menu') {
+      this.hud.showToast('Atenção: este jogo foi salvo em outra aba. Use uma aba só para não perder progresso.');
+    }
+  }
+
+  /** Executa a cena de depois da saída (final, viagem, garagem ou largar a próxima). */
+  private runAfterLeave(a: AfterLeave): void {
+    this.championPending = false;
+    if (a.scene === 'champion') return this.showChampion();
+    if (a.scene === 'warp') {
+      this.pendingNotice = a.notice;
+      return this.showPlanetWarp();
+    }
+    if (a.scene === 'hub') return this.toHub(a.notice);
+    this.setup = this.campaignSetup(this.campaign!);
+    this.startRace();
+    if (a.notice) this.hud.showToast(a.notice);
+  }
 
   private toHub(notice = ''): void {
     const c = this.campaign!;
@@ -2137,6 +2282,14 @@ export class Game {
         // preço da campanha (planeta × dificuldade), o mesmo mostrado na loja
         this.buy(campaignChargePrice(c, kind), () => c.car.charges[kind]++, 'Carga extra');
       },
+      buyPaint: () => {
+        const c = this.campaign!;
+        // gasto opcional do último planeta: a cor muda na loja, na garagem e na corrida
+        this.buy(paintPrice(c), () => {
+          c.paint = 'champion';
+          c.color = CHAMPION_PAINT.color;
+        }, 'Pintura de campeão');
+      },
       showPassword: () => this.menus.showPassword(exportSave(this.campaign!)),
       championSeen: () => {
         // o final foi visto (ou pulado): sai do save; fechar no meio dele o mostra de novo ao voltar
@@ -2221,29 +2374,16 @@ export class Game {
       resume: () => this.togglePause(),
       restart: () => {
         unlockAudio();
-        // campanha (fora do Fácil): "Desistir e ir para a próxima" conta como último e larga a corrida
-        // seguinte, com o aviso do que a desistência causou
         // sem vídeo a corrida largaria às cegas (a pausa desabilita o botão; aqui, por garantia)
         if (this.glLost && !this.net) {
           this.showGlNotice(true, 'Aguardando o vídeo voltar para reiniciar a corrida…');
           return;
         }
-        const notice = this.campaignForfeit();
-        if (notice !== null) {
-          if (this.championPending) {
-            this.championPending = false;
-            return this.showChampion();
-          }
-          if (this.warpFrom >= 0) {
-            this.pendingNotice = notice;
-            return this.showPlanetWarp();
-          }
-          // a temporada mudou (repescagem, divisão recomeçou, duelo): garagem com o aviso, não largada direta
-          if (nextAfterForfeit(this.lastForfeit) === 'hub') return this.toHub(notice);
-          this.setup = this.campaignSetup(this.campaign!);
-        }
+        // campanha: "Desistir e ir para a próxima" conta como último (fora do Fácil) e larga a seguinte
+        // ou vai à garagem/viagem/final conforme o que a desistência causou (campaignFlow.afterLeave)
+        const after = this.campaignLeave('restart');
+        if (after) return this.runAfterLeave(after);
         this.startRace();
-        if (notice) this.hud.showToast(notice);
       },
       onlineCreate: (o: OnlineOptions) => {
         beginAudio();
@@ -2258,26 +2398,9 @@ export class Game {
       onlineLobby: () => this.onlineBackToLobby(),
       quit: () => {
         unlockAudio();
-        if (this.setup.mode === 'campaign' && this.campaign) {
-          const started = this.world.started && !this.resultsShown;
-          const notice = this.campaignForfeit();
-          if (notice !== null && this.championPending) {
-            this.championPending = false;
-            return this.showChampion();
-          }
-          if (notice !== null && this.warpFrom >= 0) {
-            this.pendingNotice = notice;
-            return this.showPlanetWarp();
-          }
-          this.toHub(
-            notice ??
-              (!started
-                ? 'Você saiu antes da largada: a corrida não contou.'
-                : this.campaign.champion
-                  ? 'Corrida abandonada — depois do título sair não conta.'
-                  : 'Corrida abandonada — no Fácil sair não conta para a temporada.'),
-          );
-        } else this.toMenu();
+        const after = this.campaignLeave('quit');
+        if (after) this.runAfterLeave(after);
+        else this.toMenu();
       },
       resultsContinue: () => {
         const c = this.campaign!;
@@ -2397,7 +2520,7 @@ export class Game {
       predErr: { x: 0, y: 0, z: 0, h: 0 },
       queues: {}, seats: new RejoinBook(), notes: new Map(), prevEvents: [], firstFinishAt: null, lastConfirm: false,
       taps: new TapCounter(), cmds: [], token: '', hello: null, reconnecting: false, gone: false, hostAway: false, timer: null, ticks: 0, minK: 0,
-      stall: new StallGuard(), echo: new LocalEcho(), prevIn: emptyInput(), recvAt: performance.now(), fxCd: 0,
+      hostCpu: false, evId: 0, important: [], progKeys: [], seenEv: new Set(), evMin: 0, progs: [], lastK: -1, lastAck: -1, stall: new StallGuard(), jitter: new JitterBuffer(), echo: new LocalEcho(), prevIn: emptyInput(), recvAt: performance.now(), fxCd: 0,
     };
     net.timer = setInterval(() => this.onlineTick(net), 1000);
     return net;
@@ -2475,10 +2598,34 @@ export class Game {
     if (!net?.host) return;
     const m = parseHello(msg, vehicleIds());
     if (!m) return net.host.kick(id);
+    // a mesma ficha com outra conexão aberta, de outra aba: se a antiga responde, recusa a nova
+    // (aba duplicada; sem isso as duas se derrubavam em ciclo); se não responde, é recarga: volta
+    const held = net.seats.peek(m.rejoin);
+    if (held && dupPlan(held, id, m.inst, net.host.connected(held.peerId)) === 'probe') {
+      const host = net.host;
+      void host.probe(held.peerId).then((alive) => {
+        if (this.net !== net || !host.connected(id)) return;
+        if (!alive) return this.hostAdmit(id, m);
+        host.send(id, { t: 'dup' } satisfies HostMsg);
+        setTimeout(() => host.kick(id), 500);
+      });
+      return;
+    }
+    this.hostAdmit(id, m);
+  }
+
+  /** Host: `hello` aceito: volta com a ficha (mesma vaga e carro) ou entra na sala. */
+  private hostAdmit(id: string, m: NonNullable<ReturnType<typeof parseHello>>): void {
+    const net = this.net;
+    if (!net?.host) return;
     const now = performance.now();
     // voltando com a ficha de sessão: mesma vaga, mesmo carro
     const seat = net.seats.rejoin(m.rejoin, id, now);
-    if (seat) return this.hostRejoin(id, seat.peerId, seat.player, seat.racer);
+    if (seat) {
+      this.hostRejoin(id, seat.peerId, seat.player, seat.racer);
+      if (m.inst) net.seats.setInst(id, m.inst);
+      return;
+    }
     if (net.players.length >= MAX_PLAYERS) {
       net.host.send(id, { t: 'full' } satisfies HostMsg);
       setTimeout(() => net.host?.kick(id), 500);
@@ -2490,7 +2637,7 @@ export class Game {
     net.players = net.players.filter((p) => p.id !== id);
     const player: LobbyPlayer = { id, name, color, vehicleId };
     net.players.push(player);
-    net.seats.add(newToken(), id, player);
+    net.seats.add(newToken(), id, player, undefined, m.inst || undefined);
     net.host.accept(id);
     this.hud.showToast(`🌐 ${name} entrou na sala`);
     this.lobbyChanged();
@@ -2514,15 +2661,16 @@ export class Game {
     const race = this.setup.online?.race;
     const r = racer !== undefined ? this.world.racers[racer] : undefined;
     if (net.racing && race && r && this.setup.mode === 'online') {
-      // o carro volta para o piloto (a CPU segurava enquanto ele reconectava); quem já tinha
-      // terminado também recebe a corrida de volta e, com ela, o placar
-      r.ai = null;
+      // o carro volta para o piloto no primeiro comando dele (até lá a CPU segue pilotando: sem
+      // inputAt, cpuTakesOver); quem já tinha terminado também recebe a corrida e o placar.
+      // `re`: corrida já largada (o convidado pula a contagem)
       net.racerOf.set(id, racer!);
       net.queues[racer!] = new InputQueue();
-      net.inputAt[racer!] = performance.now();
+      delete net.inputAt[racer!];
       net.inputs[racer!] = emptyInput();
+      net.progKeys = []; // o progresso de todos vai de novo (quem voltou não tem)
       net.notes.delete(racer!);
-      host.send(id, { t: 'start', race, you: racer!, token: net.seats.tokenOf(id), k: net.seq } satisfies HostMsg);
+      host.send(id, { t: 'start', race, you: racer!, token: net.seats.tokenOf(id), k: net.seq, ...(this.world.started && { re: true }), ev: net.evId } satisfies HostMsg);
     } else if (racer !== undefined) net.notes.delete(racer);
     this.hud.showToast(`🌐 ${player.name} voltou`);
     this.lobbyChanged();
@@ -2649,7 +2797,7 @@ export class Game {
     this.menus.showOnlineWait(`Entrando na sala ${code}…`);
     // recarregou a página no meio da corrida: volta para o mesmo carro
     const rejoin = storedRejoin(code);
-    const hello: ClientMsg = { t: 'hello', name: o.name, color: o.color, vehicleId: o.vehicleId, ...(rejoin ? { rejoin } : {}) };
+    const hello: ClientMsg = { t: 'hello', name: o.name, color: o.color, vehicleId: o.vehicleId, inst: INSTANCE, ...(rejoin ? { rejoin } : {}) };
     NetClient.join(code, hello).then(
       (client) => {
         if (token !== this.netToken) return client.close();
@@ -2664,6 +2812,16 @@ export class Game {
         if (token !== this.netToken) return;
         // a sala da ficha guardada não existe mais: esquece a ficha (e o ?sala= da barra)
         if (rejoin) storeRejoin(code, null);
+        // sala inexistente (link velho ou código errado): tira o ?sala= da barra e pede o código certo
+        if ((err as { type?: string })?.type === 'peer-unavailable') {
+          const url = new URL(location.href);
+          if (url.searchParams.has('sala')) {
+            url.searchParams.delete('sala');
+            history.replaceState(null, '', url);
+          }
+          this.menus.showOnline('', `A sala ${code} não existe ou já foi fechada. Confira o código com quem convidou ou volte ao menu inicial.`, code);
+          return;
+        }
         this.menus.showOnline(code, netErrorText(err));
       },
     );
@@ -2748,6 +2906,11 @@ export class Game {
 
   private guestMessage(msg: unknown): void {
     const net = this.net;
+    // estado do host: binário (ver encodeSnapMsg)
+    if (msg instanceof ArrayBuffer) {
+      if (net) this.guestSnap(net, msg);
+      return;
+    }
     // tudo que vem do host é conferido antes de usar (vai para a simulação e para o HTML)
     const m = msg as { t?: unknown } & Record<string, unknown>;
     if (!net || typeof m !== 'object' || m === null) return;
@@ -2789,6 +2952,12 @@ export class Game {
         net.own = null;
         net.pred = null;
         net.stall = new StallGuard();
+        net.jitter.reset();
+        net.seenEv.clear();
+        net.evMin = Number.isSafeInteger(m.ev) ? (m.ev as number) : 0;
+        net.progs = [];
+        net.lastK = -1;
+        net.lastAck = -1;
         net.echo.clear();
         net.prevIn = emptyInput();
         net.recvAt = performance.now();
@@ -2799,32 +2968,33 @@ export class Game {
         net.notes.clear();
         this.netResults = {};
         this.setup = this.onlineSetup(start.race, start.you);
-        this.startRace();
+        // reentrada no meio da corrida: sem contagem, bipe nem abertura do locutor
+        const mid = m.re === true;
+        this.startRace(mid);
+        if (mid) {
+          this.phase = 'racing';
+          this.countdown = 0;
+          this.world.started = true;
+          this.commentary.start();
+          this.announcer.stop();
+        }
         net.lastSnapAt = performance.now();
         break;
       }
-      case 'snap': {
+      case 'prog': {
+        // volta, tempos, dinheiro e abates: aplicados junto com o estado a que pertencem (applySnaps)
         if (this.setup.mode !== 'online' || this.phase === 'menu' || !net.racing) return;
-        const n = this.world.racers.length;
-        const s = validateSnap(m.s, n, this.track.pieces.length);
-        if (!s || !Number.isSafeInteger(m.k) || (m.k as number) <= (net.snaps.at(-1)?.k ?? net.curK) || (m.k as number) < net.minK) return;
-        const a = Array.isArray(m.a) ? m.a.map((x) => (Number.isSafeInteger(x) ? (x as number) : -1)) : [];
-        const cd = typeof m.cd === 'number' && Number.isFinite(m.cd) ? clamp(m.cd, 0, COUNTDOWN) : 0;
-        net.snaps.push({ s, k: m.k as number, a, cd, pe: validateEvents(m.pe, n), aw: parseRacerList(m.aw, n), dc: parseRacerList(m.dc, n) });
-        // aba oculta ou rede travada: guarda só os mais novos
-        if (net.snaps.length > SNAP_QUEUE) net.snaps.splice(0, net.snaps.length - SNAP_QUEUE);
-        // o próprio carro usa sempre o estado mais novo (previsão), sem a folga dos outros
-        const rs = s.racers[this.playerId];
-        const me = this.playerId;
-        // empurrão do host no próprio carro (tiro, mina, óleo): a previsão pula direto para ele
-        const kicked = [...s.events, ...(net.snaps.at(-1)?.pe ?? [])].some((e) => (e.type === 'hit' && e.target === me) || (e.type === 'spin' && e.racer === me));
-        net.recvAt = performance.now();
-        if (rs) {
-          const d: DriverState = { car: rs.car, slipTime: rs.slipTime ?? 0, spinTime: rs.spinTime, spinTotal: Math.max(0.05, rs.spinTotal ?? 1), oilGrace: rs.oilGrace ?? 0 };
-          net.own = { d, ack: a[me] ?? -1, kick: kicked || !!net.own?.kick };
-        }
+        const p = parseProg(m, this.world.racers.length);
+        if (!p || p.k < net.minK) return;
+        net.progs.push(p);
+        if (net.progs.length > 60) net.progs.shift();
         break;
       }
+      case 'dup':
+        // a mesma ficha está aberta em outra aba (que ainda responde): esta desiste, sem tentar voltar
+        storeRejoin(net.code, null);
+        this.onlineLost('Esta sala já está aberta em outra aba deste navegador.');
+        break;
       case 'end': {
         const wasRacing = net.racing;
         net.racing = false;
@@ -2852,6 +3022,31 @@ export class Game {
         net.client?.setPatience(away || document.hidden ? REJOIN_MS : DROP_MS);
         break;
       }
+    }
+  }
+
+  /** Convidado: estado binário do host (conferido em decodeSnapMsg). */
+  private guestSnap(net: Online, buf: ArrayBuffer): void {
+    if (this.setup.mode !== 'online' || this.phase === 'menu' || !net.racing) return;
+    const m: SnapMsg | null = decodeSnapMsg(buf, this.world.racers.length, this.track.pieces.length);
+    if (!m || m.k <= (net.snaps.at(-1)?.k ?? net.curK) || m.k < net.minK) return;
+    const { s, a } = m;
+    const cd = clamp(m.cd, 0, COUNTDOWN);
+    net.snaps.push({ s, k: m.k, a, cd, pe: m.pe ?? [], aw: m.aw ?? [], dc: m.dc ?? [], ie: m.ie ?? [] });
+    // aba oculta ou rede travada: guarda só os mais novos
+    if (net.snaps.length > SNAP_QUEUE) net.snaps.splice(0, net.snaps.length - SNAP_QUEUE);
+    // o próprio carro usa sempre o estado mais novo (previsão), sem a folga dos outros
+    const rs = s.racers[this.playerId];
+    const me = this.playerId;
+    // empurrão do host no próprio carro (tiro, mina, óleo): a previsão pula direto para ele
+    const kicked = [...s.events, ...(net.snaps.at(-1)?.pe ?? [])].some((e) => (e.type === 'hit' && e.target === me) || (e.type === 'spin' && e.racer === me));
+    net.recvAt = performance.now();
+    net.jitter.add(m.k, net.recvAt, SNAP_S * 1000);
+    net.lastK = m.k;
+    net.lastAck = a[me] ?? -1;
+    if (rs) {
+      const d: DriverState = { car: rs.car, slipTime: rs.slipTime ?? 0, spinTime: rs.spinTime, spinTotal: Math.max(0.05, rs.spinTotal ?? 1), oilGrace: rs.oilGrace ?? 0 };
+      net.own = { d, ack: a[me] ?? -1, kick: kicked || !!net.own?.kick };
     }
   }
 
@@ -2960,21 +3155,39 @@ export class Game {
     if (finished && this.onlineResultsOpen(net)) this.refreshOnlineResults();
     if (++net.tick % SNAP_EVERY !== 0) return;
     const a = this.world.racers.map((r) => net.ack[r.id] ?? -1);
-    const msg: HostMsg = { t: 'snap', s: takeSnapshot(this.world, net.events), k: net.seq++, a, cd: this.phase === 'countdown' ? this.countdown : 0 };
+    const k = net.seq++;
+    // eventos importantes (chegada, volta, explosão...) ganham id e vão repetidos por ~1 s; os
+    // outros vão no estado e, de novo, no seguinte (pe)
+    const normal: WorldEvent[] = [];
+    for (const e of net.events) {
+      if (isImportant(e)) net.important.push({ id: net.evId++, e, k });
+      else normal.push(e);
+    }
+    while (net.important.length && k - net.important[0].k >= IMPORTANT_RESEND) net.important.shift();
+    const msg: SnapMsg = { t: 'snap', s: takeSnapshot(this.world, normal), k, a, cd: this.phase === 'countdown' ? this.countdown : 0 };
+    if (net.important.length) msg.ie = net.important.map((x) => ({ i: x.id, e: x.e }));
     if (net.prevEvents.length) msg.pe = net.prevEvents;
+    // progresso, dinheiro e abates: só quando mudam, pelo canal confiável
+    const changed = this.world.racers.map((r, i) => progEntry(i, r)).filter((e) => {
+      const key = progKey(e);
+      if (net.progKeys[e.i] === key) return false;
+      net.progKeys[e.i] = key;
+      return true;
+    });
+    if (changed.length) host.broadcast({ t: 'prog', k, r: changed } satisfies HostMsg);
     if (net.notes.size) {
       msg.aw = [];
       msg.dc = [];
       for (const [racer, note] of net.notes) (note === 'fora da tela' ? msg.aw : msg.dc).push(racer);
     }
-    host.broadcastFast(msg);
-    net.prevEvents = net.events;
+    host.broadcastFast(encodeSnapMsg(msg));
+    net.prevEvents = normal;
     net.events = [];
   }
 
   /**
    * Convidado: aplica os estados do host seguindo um relógio de reprodução ~100 ms atrás do mais
-   * novo (SNAP_BUFFER pacotes). Os pacotes chegam em rajadas irregulares; com a folga, os carros
+   * novo (folga medida pelo JitterBuffer: 2 a 5 estados). Os pacotes chegam em rajadas irregulares; com a folga, os carros
    * dos outros andam lisos. O relógio acompanha o host devagar e só salta se ficar muito longe.
    */
   private applySnaps(net: Online, dt: number): void {
@@ -2982,13 +3195,13 @@ export class Game {
     const me = this.playerId;
     if (net.pred) this.views[me].prev = snap(this.world.racers[me].car);
     if (q.length) {
-      const target = q[q.length - 1].k - SNAP_BUFFER;
+      const target = q[q.length - 1].k - net.jitter.packets;
       if (net.curK < 0) net.playK = target;
       net.playK += dt / SNAP_S;
       const err = target - net.playK;
       if (Math.abs(err) > 8) net.playK = target;
       else net.playK += err * Math.min(1, dt * 2);
-    } else if (net.curK >= 0) net.playK = Math.min(net.playK + dt / SNAP_S, net.curK);
+    } else if (net.curK >= 0) net.playK = Math.min(net.playK + dt / SNAP_S, net.curK + EXTRAP_PKTS);
     const events: WorldEvent[] = [];
     const finishedBefore = this.world.finishedCount;
     while (q.length && q[0].k <= Math.floor(net.playK) + 1) {
@@ -3000,6 +3213,14 @@ export class Game {
       if (net.curK >= 0 && m.k === net.curK + 2) for (const e of m.pe) events.push(e);
       applySnapshot(this.world, m.s);
       for (const e of m.s.events) events.push(e);
+      // eventos importantes: cada id uma vez só (vêm repetidos em vários estados)
+      for (const { i, e } of m.ie) {
+        if (i < net.evMin || net.seenEv.has(i)) continue;
+        net.seenEv.add(i);
+        events.push(e);
+      }
+      if (net.seenEv.size > 500) for (const i of [...net.seenEv].slice(0, 250)) net.seenEv.delete(i);
+      while (net.progs.length && net.progs[0].k <= m.k) applyProg(this.world, net.progs.shift()!);
       net.curK = m.k;
       net.lastSnapAt = performance.now();
       net.notes.clear();
@@ -3013,10 +3234,22 @@ export class Game {
     if (this.world.finishedCount !== finishedBefore && this.onlineResultsOpen(net)) this.refreshOnlineResults();
   }
 
+  /**
+   * Convidado: quanto (s) o carro previsto está à frente do estado do host que aparece na tela: os
+   * estados ainda na fila de reprodução mais os comandos que o host não aplicou (até 0,5 s).
+   * `ahead`: o tanto que os projéteis já andam além do estado aplicado.
+   */
+  private ownShotLead(ahead: number): number {
+    const net = this.net;
+    if (!net || !this.isGuestRace() || !net.pred || net.curK < 0) return 0;
+    const pending = net.history.reduce((n, h) => (h.n > net.lastAck ? n + 1 : n), 0);
+    return clamp((net.lastK - net.curK) * SNAP_S + pending * DT - ahead, 0, 0.5);
+  }
+
   /** Posição de interpolação entre o estado anterior e o aplicado por último (0..1). */
   private guestAlpha(net: Online): number {
     if (net.curK < 0) return 1;
-    return clamp(net.playK + this.accumulator / SNAP_S - (net.curK - 1), 0, 1);
+    return clamp(net.playK + this.accumulator / SNAP_S - (net.curK - 1), 0, 1 + EXTRAP_PKTS);
   }
 
   /**
@@ -3040,8 +3273,13 @@ export class Game {
     // rivais entram logo depois do movimento
     const human = !r.ai && this.world.difficulty !== 'hard';
     const hazards = this.world.hazards;
-    const contacts = (c: VehicleState) => this.predictContacts(net, c, r);
-    const drive = (d: DriverState, i: ControlInput) => stepDriver(d, r.spec, i, this.playerId, human, this.track, hazards, dt, contacts);
+    // rivais na posição em que aparecem na tela: batidas logo depois do movimento e vácuo (mesmas regras do host)
+    const rivals = r.finishPlace ? [] : this.shownRivals(net);
+    const cars = rivals.map((o) => o.car);
+    const contacts = (c: VehicleState) => {
+      for (const o of rivals) carContact(c, r.spec.mass, o.car, o.mass);
+    };
+    const drive = (d: DriverState, i: ControlInput) => stepDriver(d, r.spec, i, this.playerId, human, this.track, hazards, dt, contacts, cars);
     let fired = false;
     if (net.own || !net.pred) {
       const before = net.pred?.car;
@@ -3093,25 +3331,27 @@ export class Game {
   }
 
   /**
-   * Batidas do carro previsto contra os rivais na posição interpolada em que aparecem na tela
-   * (mesma regra da simulação; só o próprio carro é mexido, os rivais vêm do host).
+   * Rivais vivos e na disputa na posição interpolada (ou extrapolada pela velocidade, até
+   * EXTRAP_PKTS pacotes, quando a fila de estados esvazia) em que aparecem na tela. A previsão do
+   * próprio carro bate e pega vácuo contra eles (os rivais vêm do host: cópias, nunca mexidas).
    */
-  private predictContacts(net: Online, car: VehicleState, me: Racer): void {
-    if (me.finishPlace) return;
+  private shownRivals(net: Online): { car: VehicleState; mass: number }[] {
     const al = this.guestAlpha(net);
+    const out: { car: VehicleState; mass: number }[] = [];
     const racers = this.world.racers;
     for (let i = 0; i < racers.length; i++) {
       const o = racers[i];
       if (i === this.playerId || !o.alive || o.finishPlace) continue;
       const p = this.views[i]?.prev;
       if (!p) continue;
-      const tmp = (this.contactTmp ??= { ...o.car });
-      Object.assign(tmp, o.car);
-      tmp.x = lerp(p.x, o.car.x, al);
-      tmp.y = lerp(p.y, o.car.y, al);
-      tmp.z = lerp(p.z, o.car.z, al);
-      carContact(car, me.spec.mass, tmp, o.spec.mass);
+      const car = { ...o.car };
+      const pos = shownPos(p, o.car, al);
+      car.x = pos.x;
+      car.y = pos.y;
+      car.z = pos.z;
+      out.push({ car, mass: o.spec.mass });
     }
+    return out;
   }
 
   /** Host online: a largada espera o "pronto" de todos os convidados (com prazo). */
@@ -3141,10 +3381,29 @@ export class Game {
     }
     if (net.host) {
       net.host.broadcast({ t: 'hostAway', away: hidden } satisfies HostMsg);
+      this.hostCpu(net, hidden);
       if (hidden && this.setup.mode === 'online') {
         this.hiddenLast = performance.now();
         this.hiddenTicker.start();
       } else this.hiddenTicker.stop();
+    }
+  }
+
+  /**
+   * Host com a aba oculta: a CPU pilota o carro dele (senão ficava parado na pista) e os convidados
+   * veem "fora da tela"; ao voltar, o carro é devolvido.
+   */
+  private hostCpu(net: Online, away: boolean): void {
+    const r = this.world.racers[this.playerId];
+    const racing = this.setup.mode === 'online' && net.racing && !!r;
+    if (away && racing && !r.finishPlace && !r.ai) {
+      r.ai = LEFT_PLAYER_AI;
+      net.hostCpu = true;
+      net.notes.set(this.playerId, 'fora da tela');
+    } else if (!away && net.hostCpu) {
+      if (r && racing) r.ai = null;
+      net.hostCpu = false;
+      net.notes.delete(this.playerId);
     }
   }
 
@@ -3240,6 +3499,9 @@ export class Game {
     net.events = [];
     net.prevEvents = [];
     net.notes.clear();
+    net.hostCpu = false;
+    net.important = [];
+    net.progKeys = [];
     net.firstFinishAt = null;
     net.tick = 0;
     net.racing = true;
@@ -3386,9 +3648,9 @@ export class Game {
         if (dist < 3.2 || block) want = 0;
         if (t > -0.3 && t < 1.1 && dist < 8) lift = Math.max(lift, 1 - dist / 8);
       }
-      const g = view.ghost ?? 1;
-      view.ghost = want > g ? Math.min(1, g + dt / 0.25) : Math.max(0, g - dt / 0.1);
-      if (view.ghost < 0.5) root.visible = false;
+      // só na perseguição; nas outras câmeras volta a 1 na hora (sem depender de dt > 0)
+      view.ghost = nextGhost(view.ghost, want, dt, chase);
+      if (!ghostVisible(view.ghost)) root.visible = false;
     }
     this.rig.chaseLift = lift;
   }
@@ -3400,30 +3662,35 @@ export class Game {
     let playerPose: { x: number; y: number; z: number; heading: number } | null = null;
     const poseOut = this.playerPoseTmp;
 
-    world.racers.forEach((r, i) => {
+    // laço simples (sem closure por quadro)
+    for (let i = 0; i < world.racers.length; i++) {
+      const r = world.racers[i];
       const view = this.views[i];
       const v = r.car;
       const p = view.prev;
       // convidado online: o próprio carro é previsto a cada passo local (interpola como fora do online)
       const al = i === this.playerId && this.net?.pred ? this.accumulator / DT : alpha;
-      const x = lerp(p.x, v.x, al);
-      const y = lerp(p.y, v.y, al);
-      const z = lerp(p.z, v.z, al);
-      const heading = lerpAngle(p.heading, v.heading, al);
+      // convidado sem estado novo: os rivais seguem pela velocidade (al > 1, ver shownPos)
+      const ext = al > 1 ? shownPos(p, v, al) : null;
+      const x = ext ? ext.x : lerp(p.x, v.x, al);
+      const y = ext ? ext.y : lerp(p.y, v.y, al);
+      const z = ext ? ext.z : lerp(p.z, v.z, al);
+      const heading = lerpAngle(p.heading, v.heading, Math.min(al, 1));
       const visual = view.visual;
       visual.root.visible = !this.showcase && r.alive && (r.invuln <= 0 || Math.sin(this.clock * 30) > -0.3);
       // cruzou a chegada: o carro para e escurece, fora da disputa (como no original)
       setCarDark(view, !!r.finishPlace && !this.showcase);
       visual.root.position.set(x, y, z);
-      visual.root.rotation.set(-lerp(p.pitch, v.pitch, al), heading, lerp(p.roll, v.roll, al), 'YXZ');
+      visual.root.rotation.set(-lerp(p.pitch, v.pitch, Math.min(al, 1)), heading, lerp(p.roll, v.roll, Math.min(al, 1)), 'YXZ');
       visual.animate({ spin: v.wheelSpin, steer: v.steer, speed: forwardSpeed(v), time: this.clock, grounded: v.grounded, roll: view.susp.roll, pitch: view.susp.pitch });
       this.suspension(view, r, frameDt, i === this.playerId);
       // chamas do nitro: apagadas no carro que já chegou (escurecido); coladas na câmera
       // (perseguição/cockpit, < 6 m) encolhem para não estourar a tela
-      const camD = i === this.playerId && this.rig.mode !== 'iso' ? Math.hypot(x - this.rig.active.position.x, y - this.rig.active.position.y, z - this.rig.active.position.z) : 99;
+      // (também os rivais: as turbinas do Havac à frente viravam discos brancos no cockpit)
+      const camD = this.rig.mode !== 'iso' ? Math.hypot(x - this.rig.active.position.x, y - this.rig.active.position.y, z - this.rig.active.position.z) : 99;
       for (const f of visual.flames) {
         f.visible = r.alive && v.nitroTime > 0 && !r.finishPlace;
-        if (f.visible) f.scale.setScalar((0.8 + Math.random() * 0.5) * (camD < 6 ? Math.max(0.35, camD / 6) : 1));
+        if (f.visible) f.scale.setScalar((0.8 + Math.random() * 0.5) * (camD < 10 ? Math.max(0.3, camD / 10) : 1));
       }
       // sombra de contato no chão, some conforme o carro sobe num salto
       const ground = world.track.query(x, z, v.pieceIndex).height;
@@ -3437,7 +3704,10 @@ export class Game {
       if (view.label) {
         // no cockpit e bem de perto na perseguição, a etiqueta taparia a visão
         const near = this.rig.mode !== 'iso' && Math.hypot(x - this.rig.active.position.x, z - this.rig.active.position.z) < 9;
-        view.label.sprite.visible = r.alive && !r.finishPlace && this.phase !== 'menu' && this.rig.mode !== 'cockpit' && !near;
+        // colado no jogador (< 3 m) a etiqueta cairia sobre o carro dele
+        const pc = world.racers[this.playerId]?.car;
+        const onPlayer = !!pc && Math.hypot(x - pc.x, z - pc.z) < 3;
+        view.label.sprite.visible = r.alive && !r.finishPlace && this.phase !== 'menu' && this.rig.mode !== 'cockpit' && !near && !onPlayer && !this.showcase;
         view.label.sprite.position.set(x, y + 3.4, z);
         view.label.update(r.armor / r.spec.armor, r.place, this.net?.notes.get(i) ?? '');
       }
@@ -3487,7 +3757,7 @@ export class Game {
         poseOut.heading = heading;
         playerPose = poseOut;
       }
-    });
+    }
 
     const pv = this.views[this.playerId].visual;
     const pose = playerPose ?? ZERO_POSE;
@@ -3508,7 +3778,16 @@ export class Game {
     );
     this.chaseOcclusion(pose, frameDt);
     if (pf) t0 = this.lap('render:carros', t0);
-    this.effects.update(world, simulating ? frameDt : 0, simulating ? ahead : 0);
+    // convidado: os tiros dele saem do carro previsto (à frente do estado do host): desenha os
+    // projéteis dele adiantados pelo mesmo tanto, senão nasciam atrás do carro
+    const lead = simulating ? this.ownShotLead(ahead) : 0;
+    if (lead > 0) {
+      const real = world.projectiles;
+      const me = this.playerId;
+      world.projectiles = real.map((p) => (p.owner === me ? { ...p, x: p.x + forwardX(p.heading) * p.speed * lead, z: p.z + forwardZ(p.heading) * p.speed * lead } : p));
+      this.effects.update(world, frameDt, ahead);
+      world.projectiles = real;
+    } else this.effects.update(world, simulating ? frameDt : 0, simulating ? ahead : 0);
     if (pf) t0 = this.lap('render:efeitos', t0);
 
     // na vitrine a sombra acompanha os carros expostos (fora do grid)

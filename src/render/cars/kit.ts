@@ -155,10 +155,12 @@ function flameGeometry(r: number, len: number): THREE.BufferGeometry {
     const pos = g.getAttribute('position');
     const col: number[] = [];
     for (let i = 0; i < pos.count; i++) {
-      const c = flameColor(pos.getY(i) / l + 0.5, core);
-      col.push(c.r, c.g, c.b);
+      const t = pos.getY(i) / l + 0.5;
+      const c = flameColor(t, core);
+      // alfa por vértice: cheio na boca e sumindo para a ponta (ponta translúcida, sem borda dura)
+      col.push(c.r, c.g, c.b, Math.pow(1 - t, 1.6));
     }
-    g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(col, 4));
     // ponta (+y) para trás (−z), base na origem
     return g.translate(0, l / 2, 0).rotateX(-Math.PI / 2);
   };

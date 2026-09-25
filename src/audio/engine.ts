@@ -1,23 +1,27 @@
 import { audio, isAudioLite } from './context';
-import { ENGINE_LOOPS, getBuffer, loadBuffer } from './samples';
+import { ENGINE_LOOPS, getBuffer, loadBuffer, loopBounds } from './samples';
 
 /**
  * Loops de motor GRAVADO (V8 de um Chevrolet Caprice, romanholtwick, CC0; ver CREDITOS.md) e a
- * frequência de queima de cada um. A gravação só tem rotações baixas (~44 e ~58 Hz) e motor_1 é o
- * loop de ~58 Hz 1,4x acima (rubberband, formantes preservados). Nenhum loop toca mais que ±25%
- * fora do próprio tom (REC_MAX_SHIFT): acima de ~100 Hz de queima a gravação sai e a síntese de
- * ciclos de V8 assume (esticar a marcha lenta até 5x soava artificial).
+ * frequência de queima de cada um. A gravação só tem rotações baixas (~44 e ~58 Hz); motor_1,
+ * motor_2, motor_3 e motor_4 são o loop de ~58 Hz levado a ~81, ~120, ~170 e ~240 Hz (rubberband,
+ * formantes preservados: o corpo grave do escapamento continua no giro de corrida). Nenhum loop toca
+ * mais que ±30% fora do próprio tom (REC_MAX_SHIFT): acima de ~290 Hz de queima (nitro) a
+ * gravação sai e a síntese de ciclos de V8 assume.
  */
 const REC_LOOP_F: Record<(typeof ENGINE_LOOPS)[number], number> = {
   motor_lenta: 44,
   motor_0: 58,
   motor_1: 58 * 1.4,
+  motor_2: 120,
+  motor_3: 170,
+  motor_4: 240,
 };
-const REC_MAX_SHIFT = 1.25;
+const REC_MAX_SHIFT = 1.3;
 /** Intervalo mínimo (s) entre atualizações dos parâmetros dos motores. */
 const AUDIO_TICK = 1 / 30;
-/** Faixa de queima (Hz) em que a gravação cede lugar à síntese (motor_1 x 1,25 = ~101 Hz). */
-const REC_FADE: [number, number] = [80, 100];
+/** Faixa de queima (Hz) em que a gravação cede lugar à síntese (motor_4 x 1,3 = 312 Hz): só o nitro é síntese pura. */
+const REC_FADE: [number, number] = [285, 312];
 
 /** Peso da gravação (0..1) para a frequência de queima `f`. */
 export function recWeight(f: number): number {
@@ -25,7 +29,7 @@ export function recWeight(f: number): number {
   return x <= 0 ? 1 : x >= 1 ? 0 : 0.5 + 0.5 * Math.cos(Math.PI * x);
 }
 
-/** Taxa de reprodução de um loop gravado de frequência `loopF` para soar em `f` (±25% no máximo). */
+/** Taxa de reprodução de um loop gravado de frequência `loopF` para soar em `f` (±30% no máximo). */
 function recRate(f: number, loopF: number): number {
   return Math.max(1 / REC_MAX_SHIFT, Math.min(REC_MAX_SHIFT, f / loopF));
 }
@@ -237,6 +241,8 @@ export class EngineSound {
   private squealGain!: GainNode;
   private windGain!: GainNode;
   private out!: GainNode;
+  /** corte de 800–1500 Hz que cresce com a rotação (o giro de corrida soava "médio", sem corpo) */
+  private midCut!: BiquadFilterNode;
   /** loops gravados (quando carregados): fonte, ganho e frequência de queima original */
   private rec: { src: AudioBufferSourceNode; gain: GainNode; f: number; gate: LayerGate }[] = [];
   /** camadas que passam a maior parte do tempo caladas (nitro, pneus, vento, admissão, gravação) */
@@ -266,7 +272,13 @@ export class EngineSound {
     const t = ctx.currentTime;
     this.out = ctx.createGain();
     this.out.gain.value = 0;
-    this.out.connect(a.engine);
+    this.midCut = ctx.createBiquadFilter();
+    this.midCut.type = 'peaking';
+    this.midCut.frequency.value = 1100;
+    this.midCut.Q.value = 0.7;
+    this.midCut.gain.value = 0;
+    this.out.connect(this.midCut);
+    this.midCut.connect(a.engine);
     // loops gravados: passa-baixa suave que abre com a rotação e a carga
     this.recTone = ctx.createBiquadFilter();
     this.recTone.type = 'lowpass';
@@ -284,11 +296,14 @@ export class EngineSound {
         const src = ctx.createBufferSource();
         src.buffer = b;
         src.loop = true;
+        const [l0, l1] = loopBounds(b as AudioBuffer);
+        src.loopStart = l0;
+        src.loopEnd = l1;
         const gain = ctx.createGain();
         gain.gain.value = 0;
         src.connect(gain);
         gain.connect(this.recTone);
-        src.start(t0, Math.random() * (b as AudioBuffer).duration);
+        src.start(t0, l0 + Math.random() * (l1 - l0));
         this.srcs.push(src);
         // mesma instabilidade lenta de rotação da síntese: as camadas andam juntas, sem batimento
         this.drift.connect(src.detune);
@@ -490,6 +505,7 @@ export class EngineSound {
     this.gen++;
     const t = a.ctx.currentTime;
     const out = this.out;
+    const midCut = this.midCut;
     out.gain.setTargetAtTime(0, t, 0.08);
     const srcs = this.srcs;
     this.srcs = [];
@@ -503,6 +519,7 @@ export class EngineSound {
     const release = () => {
       try {
         out.disconnect();
+        midCut.disconnect();
       } catch {
         /* já desconectado */
       }
@@ -637,7 +654,9 @@ export class EngineSound {
         r.gate.set(w * recW, t);
       });
       this.recTone.frequency.setTargetAtTime(700 + Math.min(1, rpm) * 2000 + load * 800, t, k);
-      this.recBus.gain.setTargetAtTime(recW * REC_LEVEL * (0.75 + load * 0.35), t, 0.06);
+      // giro alto e nitro mais fortes (a gravação aguda é mais magra que a lenta; o nitro precisa rugir por cima)
+      const up = Math.max(0, Math.min(1, (rpm - 0.4) / 0.3));
+      this.recBus.gain.setTargetAtTime(recW * REC_LEVEL * (0.75 + load * 0.35) * (1 + 0.35 * up) * (boosting ? 1.35 : 1), t, 0.06);
     }
     this.sub.frequency.setTargetAtTime(f / 2, t, k);
     this.subTone.frequency.setTargetAtTime(f * 3.5, t, k);
@@ -647,7 +666,10 @@ export class EngineSound {
     this.drive.gain.setTargetAtTime(boosting ? 1.5 : 1, t, boosting ? 0.06 : 0.25);
     // peito: acompanha a meia-ordem e ganha +4 dB no nitro (o nitro não pode "afinar")
     this.chest.frequency.setTargetAtTime(Math.max(110, Math.min(170, f / 2)), t, k);
-    this.chest.gain.setTargetAtTime(3 + (boosting ? 4 : 0), t, 0.08);
+    // rodada 12: +4 dB também no giro alto (piso de corpo onde a gravação já saiu)
+    const high = Math.max(0, Math.min(1, (rpm - 0.4) / 0.3));
+    this.chest.gain.setTargetAtTime(Math.min(9, 3 + high * 4 + (boosting ? 4 : 0)), t, 0.08);
+    this.midCut.gain.setTargetAtTime(-7 * high, t, 0.1);
     this.fire.frequency.setTargetAtTime(f, t, k);
     this.lope.frequency.setTargetAtTime(f / 8, t, k);
     this.lopeDepth.gain.setTargetAtTime(0.22 - rpm * 0.16, t, 0.1);
@@ -657,15 +679,16 @@ export class EngineSound {
     this.formant1.gain.setTargetAtTime(4 + load * 3, t, 0.08);
     this.formant2.frequency.setTargetAtTime(650 + rpm * 950, t, k);
     // formante alto limitado (no nitro subia +4 dB e o ronco virava chiado de médios)
-    this.formant2.gain.setTargetAtTime(Math.min(boosting ? 5 : 6, 1 + load * 4 + rpm * 2), t, 0.08);
+    this.formant2.gain.setTargetAtTime(Math.min(boosting ? 5 : 6, 1 + load * 4 + rpm * 2) - 3 * high, t, 0.08);
     this.fireBand.frequency.setTargetAtTime(350 + rpm * 900, t, k);
     // queima: dominante na síntese pura; com a gravação vira só textura por cima
-    this.fireGain.gain.setTargetAtTime((0.55 + load * 1.1) * (1 - recW * 0.55), t, 0.05);
+    this.fireGain.gain.setTargetAtTime((0.55 + load * 1.1) * (1 - recW * 0.55) * (1 - 0.35 * high), t, 0.05);
     // sub: a gravação já tem o grave; outra fonte no mesmo tom por baixo só criaria batimento
     // o grave cresce com a rotação e a carga (antes caía: o giro alto ficava sem peso)
     // rodada 11: cresce bem mais com a rotação (o giro de corrida ficava sem corpo abaixo de 150 Hz)
     const rr = Math.min(1, rpm);
-    this.subGain.gain.setTargetAtTime((0.1 + rr * 0.2 + load * 0.05) * (1 - recW * 0.8), t, 0.1);
+    // piso de corpo no giro alto: sem a gravação, o sub nunca fica abaixo de 0,35
+    this.subGain.gain.setTargetAtTime(Math.max(0.35 * high, (0.1 + rr * 0.2 + load * 0.05) * (1 - recW * 0.8)), t, 0.1);
     this.crankGain.gain.setTargetAtTime(Math.max(0, rr - 0.2) * (0.35 + load * 0.15) * (1 - recW * 0.8), t, 0.1);
     this.intake.frequency.setTargetAtTime(350 + rpm * 900, t, k);
     const intakeLevel = load * (0.02 + rpm * 0.07);
@@ -725,7 +748,7 @@ export class RivalEngines {
     cyc: AudioBufferSourceNode;
     cycGain: GainNode;
     /** loops gravados (os mesmos do jogador), um por faixa de rotação */
-    rec: { src: AudioBufferSourceNode; gain: GainNode; f: number }[];
+    rec: { src: AudioBufferSourceNode; gain: GainNode; f: number; gate: LayerGate }[];
     fire: OscillatorNode;
     fireBand: BiquadFilterNode;
     fireGain: GainNode;
@@ -821,12 +844,16 @@ export class RivalEngines {
           const src = ctx.createBufferSource();
           src.buffer = b;
           src.loop = true;
+          const [l0, l1] = loopBounds(b as AudioBuffer);
+          src.loopStart = l0;
+          src.loopEnd = l1;
           const g = ctx.createGain();
           g.gain.value = 0;
           src.connect(g);
           g.connect(v.tone);
-          src.start(t0, Math.random() * (b as AudioBuffer).duration);
-          return { src, gain: g, f: REC_LOOP_F[ENGINE_LOOPS[i]] };
+          src.start(t0, l0 + Math.random() * (l1 - l0));
+          // loop calado sai do grafo (5 loops por voz: só os 2 vizinhos da rotação tocam)
+          return { src, gain: g, f: REC_LOOP_F[ENGINE_LOOPS[i]], gate: new LayerGate(g, v.tone) };
         });
       }
     };
@@ -916,6 +943,7 @@ export class RivalEngines {
           const w = j === i ? Math.cos((x * Math.PI) / 2) : j === i + 1 ? Math.sin((x * Math.PI) / 2) : 0;
           rr.gain.gain.setTargetAtTime(recW * w * REC_LEVEL * 0.8, t, 0.05);
           rr.src.playbackRate.setTargetAtTime(recRate(f, rr.f), t, 0.06);
+          rr.gate.set(recW * w, t);
         });
       }
       v.fire.frequency.setTargetAtTime(f, t, 0.06);

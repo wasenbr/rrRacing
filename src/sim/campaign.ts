@@ -75,8 +75,9 @@ export const PLANET_MONEY = [0.7, 1, 1.4, 1.9, 2.1, 2.1];
 
 /**
  * Teto relativo à loja: com mais dinheiro no bolso do que tudo o que a loja ainda pode vender (ver
- * shopHeadroom), prêmios, dinheiro da pista e bônus rendem só esta fração. Sem isso quem repetia
- * divisões juntava $1–3 milhões sem ter onde gastar.
+ * shopHeadroom), o dinheiro da pista (coletas, abates, voltas) e os prêmios de 2º/3º rendem só esta
+ * fração. Sem isso quem repetia divisões juntava $1–3 milhões sem ter onde gastar. O prêmio do 1º
+ * lugar, os prêmios dos duelos e o bônus do chefe nunca caem (o clímax paga cheio).
  */
 export const HOARD_MONEY = 0.25;
 export const HOARD_CAP = 0.05;
@@ -86,6 +87,13 @@ export const SHOP_LEVEL = [1, 2, 3, 3, 3, 3];
 
 /** Bônus por vencer o duelo contra o chefe do planeta (antes do multiplicador de dinheiro). */
 export const BOSS_BONUS = 20000;
+
+/**
+ * Pintura de campeão: gasto opcional no último planeta da campanha, para o dinheiro que sobra depois
+ * das peças e cargas (preço antes do multiplicador do planeta × dificuldade). Troca a cor do carro por
+ * laranja-brasa, que nenhum outro piloto usa.
+ */
+export const CHAMPION_PAINT = { price: 50000, color: 0xff5a00 };
 
 /** Pistas de um planeta (as que existirem em TRACKS com o tema do planeta). */
 export function planetTracks(p: PlanetDef): string[] {
@@ -179,6 +187,8 @@ export interface CampaignState {
    * ao voltar conta como desistência (resolveAbandonedRace)
    */
   raceInProgress?: boolean;
+  /** pintura especial comprada no último planeta (CHAMPION_PAINT) */
+  paint?: 'champion';
 }
 
 export function newCampaign(characterId: string, color: number, difficulty: Difficulty = 'normal'): CampaignState {
@@ -281,7 +291,7 @@ function upgradesTo(setup: CarSetup, level: number): number {
  * (guardar dinheiro não barateia a loja). Assim uma carga pesa igual no começo e no fim da campanha.
  */
 export function chargeScale(s: CampaignState): number {
-  return PLANET_MONEY[s.planet] * rulesOf(s).money;
+  return prizeScale(s);
 }
 
 /** Preço da próxima carga extra na loja da campanha (null = já no máximo). */
@@ -330,10 +340,12 @@ export function shopHeadroom(s: CampaignState): number {
   // as cargas faltantes também contam (são compras de verdade na loja), mas só as dos carros deste
   // planeta: ninguém junta dinheiro para as cargas de um carro que ainda nem está à venda
   let most = upgradesTo(s.car, level) + chargesTo(s, s.car);
+  // no último planeta, a pintura de campeão também é compra de verdade (o sobrante tem onde ir)
+  const paint = paintPrice(s) ?? 0;
   for (const id of ids)
     if (order.indexOf(id) > mine)
       most = Math.max(most, carSwapCost(s.car, id) + upgradesTo(newCarSetup(id), level) + (here.has(id) ? chargesTo(s, newCarSetup(id)) : 0));
-  return most;
+  return most + paint;
 }
 
 /**
@@ -341,7 +353,12 @@ export function shopHeadroom(s: CampaignState): number {
  * que a loja tem para vender, só HOARD_MONEY disso.
  */
 export function moneyScale(s: CampaignState): number {
-  return PLANET_MONEY[s.planet] * rulesOf(s).money * hoardFactor(s);
+  return prizeScale(s) * hoardFactor(s);
+}
+
+/** Multiplicador sem o teto (planeta × dificuldade): 1º lugar, duelos, bônus do chefe e preços da loja. */
+export function prizeScale(s: CampaignState): number {
+  return PLANET_MONEY[s.planet] * rulesOf(s).money;
 }
 
 /**
@@ -354,23 +371,48 @@ export function hoardFactor(s: CampaignState): number {
   return s.money <= room * 2 + 100000 ? HOARD_MONEY : HOARD_CAP;
 }
 
-/** Dinheiro acima de tudo o que a loja ainda vende: os prêmios rendem menos (hoardFactor). */
+/** Dinheiro acima de tudo o que a loja ainda vende: pista e 2º/3º rendem menos (hoardFactor). */
 export function moneyCapped(s: CampaignState): boolean {
   return hoardFactor(s) < 1;
 }
 
 
-/** Prêmios da campanha: os do original ($10.000 / $7.000 / $4.000) × planeta × dificuldade. */
+/**
+ * Prêmios da campanha: os do original ($10.000 / $7.000 / $4.000) × planeta × dificuldade. O teto
+ * (hoardFactor) só reduz o 2º e o 3º lugar (e o prêmio de consolação do duelo); o 1º, o vencedor do
+ * duelo e o bônus do chefe pagam sempre cheio.
+ */
 export function prizesFor(s: CampaignState): number[] {
-  const k = moneyScale(s);
-  const prizes = CAMPAIGN_PRIZES.map((p) => roundMoney(p * k));
-  // duelo: o vencedor leva o 1º prêmio, o perdedor o do 3º
+  const k = prizeScale(s);
+  const hoard = hoardFactor(s);
+  const prizes = CAMPAIGN_PRIZES.map((p, i) => roundMoney(p * k * (i === 0 ? 1 : hoard)));
+  // duelo: o vencedor leva o 1º prêmio (cheio), o perdedor o do 3º
   return raceKind(s) === 'normal' ? prizes : [prizes[0], prizes[2]];
 }
 
-/** Bônus por derrotar o chefe (ou vencer a repescagem). */
+/** Bônus por derrotar o chefe (ou vencer a repescagem): sem o teto, é o clímax do planeta. */
 export function bossBonus(s: CampaignState): number {
-  return roundMoney(BOSS_BONUS * moneyScale(s));
+  return roundMoney(BOSS_BONUS * prizeScale(s));
+}
+
+/** Pintura de campeão à venda: só no último planeta da campanha e enquanto não comprada. */
+export function paintForSale(s: CampaignState): boolean {
+  return s.planet === planetCount(s) - 1 && s.paint !== 'champion';
+}
+
+/** Preço da pintura de campeão (null: não está à venda aqui). */
+export function paintPrice(s: CampaignState): number | null {
+  return paintForSale(s) ? roundMoney(CHAMPION_PAINT.price * prizeScale(s)) : null;
+}
+
+/** Compra a pintura (muta o estado); devolve se comprou. */
+export function buyPaint(s: CampaignState): boolean {
+  const price = paintPrice(s);
+  if (price === null || price > s.money) return false;
+  s.money -= price;
+  s.paint = 'champion';
+  s.color = CHAMPION_PAINT.color;
+  return true;
 }
 
 export function playerSpec(s: CampaignState, vehicles: Record<string, VehicleSpec>): VehicleSpec {
@@ -393,19 +435,19 @@ const LEVEL3_FROM_TIER = 4;
  * o que mais pesa na volta (~0,6 s por nível): na chegada a um planeta com carro novo e caro (Bogmire,
  * Nho) o local ainda não vem com o motor no talo, para o jogador ter tempo de juntar dinheiro.
  */
-export const LOCAL_ENGINE = [0, 0, 1, 1, 0, 2, 2, 3, 2, 2, 3, 3];
+export const LOCAL_ENGINE = [0, 0, 1, 1, 1, 2, 2, 3, 3, 3, 3, 3];
 /**
- * Ritmo do piloto local (multiplica velocidade final e arranque) por tier e dificuldade: o ajuste fino
- * que o nível inteiro das peças não dá. Calibrado para que um jogador mediano (ver o teste "degrau de
- * dificuldade") perca do local por uma diferença que cresce aos poucos ao longo da campanha, até
- * ~0,8 s por volta no fim do Difícil, sem picos (antes: 1,5 s em Bogmire no Normal, 2,4 s no Difícil).
- * No Fácil o local anda colado no mediano (de 0 a ~0,3 s por volta, crescendo): antes ficava até 0,5 s
- * mais lento e a campanha não tinha desafio.
+ * Ritmo dos rivais (multiplica velocidade final e arranque) por tier e dificuldade: o ajuste fino que o
+ * nível inteiro das peças não dá. Rodada 11: calibrado contra o piloto de referência (`referenceInput`:
+ * centro da pista, acelera sempre, só DERRAPAR, sem tiro) com o carro do jogador mediano, em corridas
+ * completas contra os 3 rivais: ele vence ~1/3 no Normal, bem mais no Fácil e pouco no Difícil. Em cada
+ * tier Fácil ≤ Normal ≤ Difícil (antes o Difícil tinha rivais mais lentos que o Normal em Bogmire, Nho
+ * e New Mojave) — o resto da dificuldade vem de habilidade, agressividade, peças e dano.
  */
 export const LOCAL_PACE: Record<Difficulty, number[]> = {
-  easy: [1.05, 1.075, 1.053, 1.066, 1.065, 1.062],
-  normal: [1.023, 1.037, 0.989, 0.996, 1.039, 0.981, 1.032, 0.984, 1.015, 1.032],
-  hard: [1.012, 1.036, 0.992, 0.994, 1.026, 0.974, 0.976, 0.978, 0.95, 0.957, 0.959, 1.012],
+  easy: [0.9, 0.86, 0.79, 0.8, 0.825, 0.82],
+  normal: [0.915, 0.875, 0.805, 0.815, 0.86, 0.855, 0.855, 0.855, 0.85, 0.83],
+  hard: [0.925, 0.885, 0.815, 0.825, 0.87, 0.865, 0.865, 0.865, 0.86, 0.84, 0.837, 0.849],
 };
 /** Na Divisão A do Inferno todos vêm com a preparação máxima (peças no 3 não bastam para evoluir). */
 const INFERNO_PACE = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1.01, 1.025];
@@ -429,15 +471,16 @@ export function rivalEngine(t: number, index: number, difficulty: Difficulty = '
   const tt = tierIndex(t);
   // Rip e Shred nunca com motor acima do piloto local
   const base = index === 2 ? LOCAL_ENGINE[tt] : Math.min(RIVAL_LEVEL[tt], LOCAL_ENGINE[tt]);
-  return clamp(base + Math.min(0, DIFFICULTY[difficulty].rivalUpgrade), 0, rivalLevel(t, index, difficulty));
+  // (rodada 11: o Fácil não tira mais um nível de motor — com ele o piloto de referência vencia 96%)
+  return clamp(base, 0, rivalLevel(t, index, difficulty));
 }
 
 /** Ritmo (velocidade final e arranque) de cada rival: o local segue LOCAL_PACE; no Inferno A todos aceleram. */
-export function rivalPace(t: number, index: number, difficulty: Difficulty = 'normal'): number {
+export function rivalPace(t: number, _index: number, difficulty: Difficulty = 'normal'): number {
   const tt = tierIndex(t);
   const local = LOCAL_PACE[difficulty][Math.min(tt, LOCAL_PACE[difficulty].length - 1)];
-  // Rip e Shred: nunca acima do local nem abaixo do carro de fábrica
-  return (index === 2 ? local : Math.min(1, local)) * INFERNO_PACE[tt];
+  // o mesmo ritmo para os três (Rip e Shred já vêm com carro e peças abaixo do local)
+  return local * INFERNO_PACE[tt];
 }
 
 /** Cargas extras de cada arma dos rivais: crescem a cada divisão e meia (o local ganha uma a mais a partir de Bogmire). */
@@ -727,6 +770,7 @@ export function validSave(s: CampaignState): boolean {
   if (s.warpFrom !== undefined && !isInt(s.warpFrom, 0, s.planet - 1)) return false;
   if (s.finalePending !== undefined && (typeof s.finalePending !== 'boolean' || (s.finalePending && !s.champion))) return false;
   if (s.raceInProgress !== undefined && typeof s.raceInProgress !== 'boolean') return false;
+  if (s.paint !== undefined && s.paint !== 'champion') return false;
   if (s.id !== undefined && (typeof s.id !== 'string' || s.id.length > 32)) return false;
   // estatísticas faltando (save antigo) não invalidam: decodeSave completa com zeros
   const st = s.stats;

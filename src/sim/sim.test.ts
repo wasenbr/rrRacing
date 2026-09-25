@@ -73,7 +73,8 @@ describe('veículo', () => {
         min = Math.min(min, Math.hypot(v.vx, v.vz));
       }
       expect(Math.atan2(v.vx, v.vz), id).toBeLessThanOrEqual(-Math.PI / 2 + 0.05);
-      expect(1 - min / s0, id).toBeLessThanOrEqual(0.08);
+      // (rodada 11: 8 → 9%: com o arranque mais baixo o tanque recupera menos dentro da curva)
+      expect(1 - min / s0, id).toBeLessThanOrEqual(0.09);
     }
   });
 

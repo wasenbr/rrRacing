@@ -1,4 +1,4 @@
-import type { ThemeId, TrackDef } from '../../sim/track';
+import type { BranchDef, ThemeId, TrackDef } from '../../sim/track';
 
 /**
  * As 36 pistas do Rock n' Roll Racing original (SNES), por planeta e na ordem do jogo.
@@ -9,10 +9,12 @@ import type { ThemeId, TrackDef } from '../../sim/track';
  *    sentido da corrida lido da seta de cada mapa completo (VGMaps);
  *  - relevo (rampas U/D, lombadas B, setas de warp `>` e warp reverso `<`, poças fixas) transcrito
  *    dos mapas completos em scripts/pistas/relevo.json; pistas ainda sem transcrição ficam só com
- *    o traçado (nenhum relevo inventado).
+ *    o traçado (nenhum relevo inventado);
+ *  - desvios (bifurcações do original, ex.: atalho de Inferno 4) transcritos à mão dos mapas
+ *    completos em scripts/pistas/tracado.json (campo `desvios`).
  * Todas são verificadas por teste: o circuito precisa fechar.
  */
-const t = (planet: ThemeId, order: number, name: string, layout: string, slime = 0, puddles?: number[], laps = 4): TrackDef => ({
+const t = (planet: ThemeId, order: number, name: string, layout: string, slime = 0, puddles?: number[], laps = 4, branches?: BranchDef[]): TrackDef => ({
   id: `${planet}-${order}`,
   name,
   planet: PLANET_NAMES[planet],
@@ -23,6 +25,7 @@ const t = (planet: ThemeId, order: number, name: string, layout: string, slime =
   order,
   ...(puddles ? { puddles } : {}),
   ...(HALF_OF[planet] ? { halfWidth: HALF_OF[planet] } : {}),
+  ...(branches ? { branches } : {}),
 });
 
 /** Meia-largura por planeta (m), quando difere do padrão. */
@@ -51,7 +54,7 @@ export const TRACKS: TrackDef[] = [
   t('drakonis', 5, 'Eclipse', 'F S S R L R S D S S S R S S S S S R L R S S U S S R S S', 3, [9, 13, 16]),
   // Bogmire
   t('bogmire', 1, 'Lamaçal', 'F S S R S> U S S U S R S S R D D R L S L S S L S S S S R S R S> S S S D S R U> S S', 5, [6, 7, 8, 32, 33], 3),
-  t('bogmire', 2, 'Costa Azul', 'F L S S S S R S S D R S D S R S L S S R S U S U R S R S', 1, [25]),
+  t('bogmire', 2, 'Costa Azul', 'F D D L S S R S L S U S L U S S L S S S S R S S L S L S', 1, [25], 4, [{ from: 16, to: 24, layout: 'S S S L S B B B S' }]),
   t('bogmire', 3, 'Mangue', 'F S S L S D L S R S S S L S D S L R L S U S L U R S L S', 3, [11, 13, 25]),
   t('bogmire', 4, 'Brejo Fundo', 'F X U S S R S R S S> S X D S L S L S S L S X S X U S L S S L D S L S'),
   t('bogmire', 5, 'Maré Alta', 'F R S U X S L U X S R S R S R D X S L D X S S R S S R S'),
@@ -76,7 +79,7 @@ export const TRACKS: TrackDef[] = [
   t('inferno', 1, 'Caldeirão', 'F L S L S D S J Gv U L S L S S R S X D S R U S R S S R S S> X U X S R S S R S R S S X S R', 1, [35], 3),
   t('inferno', 2, 'Rio de Lava', 'F U> R U S R L R S L S D R S S D R S J Gv S S> R U S L R S', 2, [13, 23]),
   t('inferno', 3, 'Enxofre', 'F L S S S S L S S X D L S S L S L S U X U L S S D L D S> J G S D L S> U U S S', 2, [7, 23]),
-  t('inferno', 4, 'Forja', 'F R D S> D S D S> R S U S S U U R S S S S> S S R S R S L S L S R S', 3, [9, 10, 11]),
+  t('inferno', 4, 'Forja', 'F R D S> D S D S> R S U S S U U R S S S S> S S R S R S L S L S R S', 3, [9, 10, 11], 4, [{ from: 18, to: 28, layout: 'R S S S L S S' }]),
   t('inferno', 5, 'Brasa', 'F R S S L U S R S D S R S> S< S> D D S R S U S S U S< R S S', 4, [2, 3, 19, 22]),
   t('inferno', 6, 'Portão do Inferno', 'F S U S U S L S U S D S S L S D> J G S D L S L S S U S> R S S R S S S D L S L', 4, [5, 9, 12, 32]),
   t('inferno', 7, 'Apocalipse', 'F S> S R S U S S S S> R S J G S R S X D S R S R S S R U X S R S J Gv S R S S S', 4, [4, 19, 23, 24]),

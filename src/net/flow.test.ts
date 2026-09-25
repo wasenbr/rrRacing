@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DataConnection, Peer as PeerType } from 'peerjs';
-import { DROP_MS, NetClient, NetHost } from './peer';
+import { DROP_MS, fromWire, NetClient, NetHost, PROBE_MS, toWire } from './peer';
 import {
-  cpuTakesOver, CPU_TAKEOVER_MS, guestDropPlan, LEAVE_FLUSH_MS, loadSession, LocalEcho, newToken, onlineMenuToggle, REJOIN_MS, RejoinBook, saveSession, SESSION_KEY, StallGuard, STALL_MS, STALL_STEPS,
+  cpuTakesOver, CPU_TAKEOVER_MS, dupPlan, guestDropPlan, LEAVE_FLUSH_MS, loadSession, LocalEcho, newToken, onlineMenuToggle, REJOIN_MS, RejoinBook, saveSession, SESSION_KEY, StallGuard, STALL_MS, STALL_STEPS,
 } from './session';
 import { parseHello } from './sync';
 
@@ -47,7 +47,7 @@ class FakeConn extends Emitter {
   }
   send(msg: unknown): void {
     if (!this.open || this.cut) return;
-    const copy = JSON.parse(JSON.stringify(msg)) as unknown;
+    const copy = msg instanceof ArrayBuffer ? msg.slice(0) : (JSON.parse(JSON.stringify(msg)) as unknown);
     this.other.emit('data', copy);
   }
   close(): void {
@@ -219,6 +219,43 @@ describe('fluxos da sessão online (transporte simulado)', () => {
     expect(loadSession(store)).toBeNull();
     saveSession(store, null);
     expect(mem.has(SESSION_KEY)).toBe(false);
+  });
+
+  it('aba duplicada com a mesma ficha: a conexão antiga responde e a nova é recusada; recarregada, não responde', async () => {
+    const net = new FakeNet();
+    const h = makeHost(net);
+    const a = join(net, 'Caio');
+    vi.advanceTimersByTime(0);
+    const seat = { peerId: a.gp.id, leftAt: null, inst: 'aaaaaaaa' };
+    expect(dupPlan(seat, 'g-nova', 'bbbbbbbb', true)).toBe('probe');
+    // a mesma aba reconectando, a conexão antiga já fechada ou vaga livre: volta direto
+    expect(dupPlan(seat, 'g-nova', 'aaaaaaaa', true)).toBe('accept');
+    expect(dupPlan(seat, 'g-nova', 'bbbbbbbb', false)).toBe('accept');
+    expect(dupPlan({ ...seat, leftAt: 5 }, 'g-nova', 'bbbbbbbb', true)).toBe('accept');
+    expect(dupPlan(undefined, 'g-nova', 'bbbbbbbb', true)).toBe('accept');
+    const alive = h.host.probe(a.gp.id);
+    vi.advanceTimersByTime(PROBE_MS);
+    expect(await alive).toBe(true);
+    // página recarregada: a conexão velha fica muda (o host ainda não notou a queda)
+    a.gp.unplug();
+    vi.advanceTimersByTime(10);
+    const dead = h.host.probe(a.gp.id);
+    vi.advanceTimersByTime(PROBE_MS);
+    expect(await dead).toBe(false);
+  });
+
+  it('canal rápido cru: objetos como texto JSON, estado binário; o confiável leva binário em base64', () => {
+    const buf = new Uint8Array([1, 2, 250]).buffer;
+    expect(toWire(true, { t: 'ping', ts: 1 })).toBe('{"t":"ping","ts":1}');
+    expect(toWire(true, buf)).toBe(buf);
+    const rel = toWire(false, buf);
+    expect(new Uint8Array(fromWire(rel, 1000, true) as ArrayBuffer)).toEqual(new Uint8Array([1, 2, 250]));
+    // do convidado: só texto curto, nada de binário
+    expect(fromWire('{"t":"input"}', 1024, false)).toEqual({ t: 'input' });
+    expect(fromWire('x'.repeat(2000), 1024, false)).toBeUndefined();
+    expect(fromWire('{quebrado', 1024, false)).toBeUndefined();
+    expect(fromWire(buf, 1024, false)).toBeUndefined();
+    expect(fromWire({ t: 'bin', b: '%%%' }, 1000, true)).toBeUndefined();
   });
 
   it('host sai: a despedida chega antes de a conexão fechar e o convidado não tenta voltar', () => {

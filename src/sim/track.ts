@@ -42,6 +42,21 @@ export interface TrackDef {
   surface?: Surface;
   /** meia-largura da pista (m); se omitida, HALF_WIDTH (as de Nho são mais largas no original) */
   halfWidth?: number;
+  /**
+   * Desvios (bifurcações do original: atalho de Inferno 4, laço de Bogmire 2). Cada ramo sai da
+   * casa `from` do laço principal (mesma entrada) e volta na casa `to` (mesma saída), com as suas
+   * próprias peças; as duas casas de junção são dividas pelas duas passagens (placa em T).
+   */
+  branches?: BranchDef[];
+}
+
+export interface BranchDef {
+  /** casa do laço principal onde o ramo começa (a peça do ramo começa junto com ela) */
+  from: number;
+  /** casa do laço principal onde o ramo termina (a última peça do ramo termina junto com ela) */
+  to: number;
+  /** peças do ramo, de `from` a `to` inclusive */
+  layout: string;
 }
 
 export const SURFACE_OF_THEME: Record<ThemeId, Surface> = {
@@ -112,6 +127,10 @@ export interface Piece {
   cz: number;
   /** +1 seta de warp, -1 warp reverso, 0 nada */
   warp: number;
+  /** -1 no laço principal; nos desvios, o índice do ramo em `Track.branches` */
+  branch: number;
+  /** metros de progresso (dist) por metro andado: 1 no laço; nos ramos, comprimento do trecho principal equivalente / do ramo */
+  distScale: number;
 }
 
 export interface TrackSample {
@@ -194,6 +213,17 @@ export class Track {
   readonly crossRole: ('none' | 'flat' | 'over' | 'under')[];
   /** erro de fechamento do circuito (posição, direção, altura) — deve ser ~0 */
   readonly closure: { dx: number; dz: number; dHeading: number; dh: number };
+  /**
+   * Peças do laço principal: `pieces[0..loop-1]`. As peças dos desvios vêm depois (índices a
+   * partir de `loop`), na ordem de cada ramo; a distância (`dist`) delas é a do trecho principal
+   * equivalente, então voltas, posições e a volta pela metade valem pelos dois caminhos.
+   */
+  readonly loop: number;
+  readonly branches: { from: number; to: number; first: number; last: number; startDist: number; endDist: number; closure: { dx: number; dz: number; dHeading: number; dh: number } }[];
+  /** peças candidatas na consulta com dica (vizinhas no caminho, incluindo as dos ramos) */
+  private readonly near: number[][];
+  /** ramo em uso por pointAtDist (ver withRoute); -1 = laço principal */
+  private route = -1;
 
   constructor(def: TrackDef) {
     this.def = def;
@@ -212,7 +242,7 @@ export class Track {
       const dh = code === 'U' ? RAMP_HEIGHT : code === 'D' || (code === 'G' && drop) ? -RAMP_HEIGHT : 0;
       const cx = x + turn * leftX(heading) * ARC_RADIUS;
       const cz = z + turn * leftZ(heading) * ARC_RADIUS;
-      const piece: Piece = { index, code, turn, x0: x, z0: z, heading0: heading, h0: h, dh, length, startDist: dist, cx, cz, warp };
+      const piece: Piece = { index, code, turn, x0: x, z0: z, heading0: heading, h0: h, dh, length, startDist: dist, cx, cz, warp, branch: -1, distScale: 1 };
       pieces.push(piece);
       const end = this.pointOn(piece, length);
       x = end.x;
@@ -223,6 +253,65 @@ export class Track {
     });
     this.pieces = pieces;
     this.totalLength = dist;
+    const n = pieces.length;
+    this.loop = n;
+    this.branches = [];
+    (def.branches ?? []).forEach((b, bi) => {
+      if (!(b.from >= 0 && b.to > b.from && b.to < n)) throw new Error(`Desvio ${bi} inválido (${b.from}->${b.to})`);
+      const a = pieces[b.from];
+      const z0 = pieces[b.to];
+      const startDist = a.startDist;
+      const endDist = z0.startDist + z0.length;
+      const bp = parsePieces(b.layout);
+      const lens = bp.map((q) => (q.code === 'L' || q.code === 'R' ? (Math.PI / 2) * ARC_RADIUS : TILE));
+      const scale = (endDist - startDist) / lens.reduce((u, v) => u + v, 0);
+      let bx = a.x0;
+      let bz = a.z0;
+      let bh = a.h0;
+      let bhd = a.heading0;
+      let bd = startDist;
+      const first = pieces.length;
+      bp.forEach(({ code, warp, drop }, k) => {
+        const turn: 0 | 1 | -1 = code === 'L' ? 1 : code === 'R' ? -1 : 0;
+        const dh = code === 'U' ? RAMP_HEIGHT : code === 'D' || (code === 'G' && drop) ? -RAMP_HEIGHT : 0;
+        const cx = bx + turn * leftX(bhd) * ARC_RADIUS;
+        const cz = bz + turn * leftZ(bhd) * ARC_RADIUS;
+        const piece: Piece = { index: pieces.length, code, turn, x0: bx, z0: bz, heading0: bhd, h0: bh, dh, length: lens[k], startDist: bd, cx, cz, warp, branch: bi, distScale: scale };
+        pieces.push(piece);
+        const end = this.pointOn(piece, piece.length);
+        bx = end.x;
+        bz = end.z;
+        bhd = end.heading;
+        bh += dh;
+        bd += lens[k] * scale;
+      });
+      const endPt = this.pointOn(z0, z0.length);
+      this.branches.push({
+        from: b.from,
+        to: b.to,
+        first,
+        last: pieces.length - 1,
+        startDist,
+        endDist,
+        closure: { dx: bx - endPt.x, dz: bz - endPt.z, dHeading: wrapAngle(bhd - endPt.heading), dh: bh - (z0.h0 + z0.dh) },
+      });
+    });
+    // vizinhas de cada peça no caminho (a de trás, ela, e duas à frente), mais as do outro caminho
+    // nas casas de junção: é o que mantém o carro na passagem certa e deixa trocar de ramo na placa
+    const near: number[][] = pieces.map((p) => (p.branch < 0 ? [-1, 0, 1, 2].map((d) => (((p.index + d) % n) + n) % n) : []));
+    this.branches.forEach((b) => {
+      const chain = [(b.from - 1 + n) % n, ...Array.from({ length: b.last - b.first + 1 }, (_, k) => b.first + k), (b.to + 1) % n, (b.to + 2) % n];
+      for (let k = 1; k <= b.last - b.first + 1; k++) {
+        const set = new Set([chain[k - 1], chain[k], chain[k + 1], chain[k + 2]]);
+        if (k <= 2) set.add(b.from);
+        if (k >= b.last - b.first) set.add(b.to);
+        near[chain[k]] = [...set];
+      }
+      // do laço para o ramo: perto da saída e da chegada do desvio
+      for (let d = -2; d <= 1; d++) near[(b.from + d + n) % n].push(b.first, Math.min(b.first + 1, b.last));
+      for (let d = -1; d <= 1; d++) near[(b.to + d) % n].push(b.last, Math.max(b.last - 1, b.first));
+    });
+    this.near = near.map((l) => [...new Set(l)]);
     this.crossPartner = pieces.map(() => -1);
     this.crossRole = pieces.map(() => 'none');
     for (const a of pieces) {
@@ -238,8 +327,65 @@ export class Track {
   }
 
   get isClosed(): boolean {
-    const c = this.closure;
-    return Math.hypot(c.dx, c.dz) < 1e-6 && Math.abs(c.dHeading) < 1e-6 && Math.abs(c.dh) < 1e-6;
+    const ok = (c: { dx: number; dz: number; dHeading: number; dh: number }) => Math.hypot(c.dx, c.dz) < 1e-6 && Math.abs(c.dHeading) < 1e-6 && Math.abs(c.dh) < 1e-6;
+    return ok(this.closure) && this.branches.every((b) => ok(b.closure));
+  }
+
+  /** Peça seguinte no caminho (no fim de um ramo, a casa depois da junção de chegada). */
+  nextIndex(i: number): number {
+    const p = this.pieces[i];
+    if (p.branch < 0) return (i + 1) % this.loop;
+    const b = this.branches[p.branch];
+    return i < b.last ? i + 1 : (b.to + 1) % this.loop;
+  }
+
+  /** Peça anterior no caminho (no começo de um ramo, a casa antes da junção de saída). */
+  prevIndex(i: number): number {
+    const p = this.pieces[i];
+    if (p.branch < 0) return (i - 1 + this.loop) % this.loop;
+    const b = this.branches[p.branch];
+    return i > b.first ? i - 1 : (b.from - 1 + this.loop) % this.loop;
+  }
+
+  /**
+   * Casa de junção de um desvio: a peça do laço e a do ramo que dividem a mesma casa (placa em T).
+   * Devolve a outra peça da casa, ou -1.
+   */
+  junctionPartner(i: number): number {
+    for (const b of this.branches) {
+      if (i === b.from) return b.first;
+      if (i === b.first) return b.from;
+      if (i === b.to) return b.last;
+      if (i === b.last) return b.to;
+    }
+    return -1;
+  }
+
+  /**
+   * Executa `fn` com pointAtDist seguindo um ramo: o do carro, se ele já está num desvio, ou o que
+   * ele escolhe (`pick`) ao chegar perto de uma bifurcação. Fora disso, o laço principal.
+   * A IA usa para mirar pelo caminho em que está (sem isso, miraria no outro, atrás da mureta).
+   */
+  withRoute<T>(pieceIndex: number, pick: (branch: number) => boolean, fn: () => T): T {
+    const prev = this.route;
+    this.route = this.routeFor(pieceIndex, pick);
+    try {
+      return fn();
+    } finally {
+      this.route = prev;
+    }
+  }
+
+  private routeFor(pieceIndex: number, pick: (branch: number) => boolean): number {
+    const p = this.pieces[pieceIndex];
+    if (!p) return -1;
+    if (p.branch >= 0) return p.branch;
+    const n = this.loop;
+    for (let k = 0; k < this.branches.length; k++) {
+      const ahead = (this.branches[k].from - pieceIndex + n) % n;
+      if (ahead <= 3 && pick(k)) return k;
+    }
+    return -1;
   }
 
   pointOn(p: Piece, s: number): { x: number; z: number; heading: number } {
@@ -296,7 +442,7 @@ export class Track {
       pieceIndex: p.index,
       s,
       lateral: pr.lateral,
-      dist: p.startDist + s,
+      dist: p.startDist + s * p.distScale,
       heading: this.pointOn(p, s).heading,
       height: this.heightOn(p, s),
       outside: pr.outside,
@@ -318,9 +464,8 @@ export class Track {
     let best = -1;
     let bestScore = Infinity;
     // só a peça vencedora vira amostra completa
-    if (hint >= 0) {
-      for (let d = -1; d <= 2; d++) {
-        const i = (((hint + d) % n) + n) % n;
+    if (hint >= 0 && hint < n) {
+      for (const i of this.near[hint]) {
         const score = this.score(this.pieces[i], x, z, y);
         if (score < bestScore) {
           bestScore = score;
@@ -355,8 +500,17 @@ export class Track {
   pointAtDist(dist: number): { x: number; z: number; heading: number; h: number; pieceIndex: number } {
     const T = this.totalLength;
     const d = ((dist % T) + T) % T;
+    const b = this.route >= 0 ? this.branches[this.route] : undefined;
+    if (b && d >= b.startDist && d < b.endDist) {
+      let k = b.first;
+      while (k < b.last && this.pieces[k + 1].startDist <= d) k++;
+      const p = this.pieces[k];
+      const s = Math.min(p.length, (d - p.startDist) / p.distScale);
+      const pt = this.pointOn(p, s);
+      return { ...pt, h: this.heightOn(p, s), pieceIndex: p.index };
+    }
     let lo = 0;
-    let hi = this.pieces.length - 1;
+    let hi = this.loop - 1;
     while (lo < hi) {
       const mid = (lo + hi + 1) >> 1;
       if (this.pieces[mid].startDist <= d) lo = mid;
@@ -369,14 +523,15 @@ export class Track {
   }
 
   /** Amostra a linha central a cada `step` metros (usado para malha, minimapa e IA). */
-  sampleCenterline(step: number): CenterPoint[] {
+  sampleCenterline(step: number, branch = -1): CenterPoint[] {
     const out: CenterPoint[] = [];
     for (const p of this.pieces) {
+      if (p.branch !== branch) continue;
       const count = Math.max(1, Math.ceil(p.length / step));
       for (let i = 0; i < count; i++) {
         const s = (p.length * i) / count;
         const pt = this.pointOn(p, s);
-        out.push({ x: pt.x, z: pt.z, h: this.heightOn(p, s), heading: pt.heading, dist: p.startDist + s, pieceIndex: p.index });
+        out.push({ x: pt.x, z: pt.z, h: this.heightOn(p, s), heading: pt.heading, dist: p.startDist + s * p.distScale, pieceIndex: p.index });
       }
     }
     return out;
@@ -388,7 +543,7 @@ export class Track {
    */
   isBreak(i: number): boolean {
     const c = this.pieces[i].code;
-    return c === 'G' || (c === 'X' && this.crossRole[i] !== 'under');
+    return c === 'G' || (c === 'X' && this.crossRole[i] !== 'under') || this.junctionPartner(i) >= 0;
   }
 
   /**
@@ -399,18 +554,21 @@ export class Track {
    */
   meshRuns(step: number): CenterPoint[][] {
     const pts = this.sampleCenterline(step);
-    const n = this.pieces.length;
+    const n = this.loop;
     if (!this.pieces.some((_, i) => this.isBreak(i))) {
       pts.push({ ...pts[0], dist: this.totalLength });
       return [pts];
     }
     const byPiece: CenterPoint[][] = this.pieces.map(() => []);
     for (const q of pts) byPiece[q.pieceIndex].push(q);
+    this.branches.forEach((_, b) => {
+      for (const q of this.sampleCenterline(step, b)) byPiece[q.pieceIndex].push(q);
+    });
     const endPoint = (pi: number, dist: number): CenterPoint => {
       const p = this.pieces[pi];
       const pt = this.pointOn(p, 0);
       // altura do fim da peça anterior (num vão com queda, o início do vão já está no nível do pouso)
-      const prev = this.pieces[(pi - 1 + n) % n];
+      const prev = this.pieces[this.prevIndex(pi)];
       return { x: pt.x, z: pt.z, h: this.heightOn(prev, prev.length), heading: pt.heading, dist, pieceIndex: pi };
     };
     // começa logo depois de uma interrupção, para nenhum trecho ficar partido no fim da lista
@@ -431,6 +589,21 @@ export class Track {
         continue;
       }
       for (const q of byPiece[pi]) cur.push(offset ? { ...q, dist: q.dist + offset } : q);
+    }
+    // desvios: entre as duas casas de junção (que viram placas em T, ver render/trackFeatures.ts)
+    for (const b of this.branches) {
+      cur = [];
+      for (let pi = b.first; pi <= b.last; pi++) {
+        if (this.isBreak(pi)) {
+          if (cur.length) {
+            cur.push(endPoint(pi, this.pieces[pi].startDist));
+            runs.push(cur);
+            cur = [];
+          }
+          continue;
+        }
+        cur.push(...byPiece[pi]);
+      }
     }
     return runs.filter((r) => r.length > 1);
   }

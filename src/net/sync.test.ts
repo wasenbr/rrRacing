@@ -4,7 +4,7 @@ import { VEHICLES } from '../data/vehicles';
 import { newCampaign, opponentsFor } from '../sim/campaign';
 import { Track } from '../sim/track';
 import { createWorld, stepWorld } from '../sim/world';
-import { applySnapshot, cleanName, parseHello, parseLobbyPlayers, parseStart, pickColor, sanitizeInput, takeSnapshot, validateSnap } from './sync';
+import { applyProg, applySnapshot, cleanName, decodeSnapMsg, encodeSnapMsg, parseHello, parseLobbyPlayers, parseProg, parseStart, pickColor, progEntry, sanitizeInput, takeSnapshot, validateSnap, type SnapMsg } from './sync';
 
 const DT = 1 / 60;
 
@@ -32,12 +32,83 @@ describe('sincronização online', () => {
     expect(guest.started).toBe(true);
   });
 
-  it('o estado de uma corrida de 4 carros cabe num pacote pequeno', () => {
+  it('o estado binário de uma corrida de 4 carros cabe em menos de 1200 bytes', () => {
     const track = new Track(TRACKS[0]);
     const w = createWorld(track, opponentsFor(newCampaign('jake', 0), VEHICLES), 2, 3);
     w.started = true;
-    for (let i = 0; i < 60 * 10; i++) stepWorld(w, {}, DT);
-    expect(JSON.stringify(takeSnapshot(w, [])).length).toBeLessThan(8000);
+    let worst = 0;
+    for (let i = 0; i < 60 * 30; i++) {
+      stepWorld(w, {}, DT);
+      if (i % 3 === 0) {
+        const msg: SnapMsg = { t: 'snap', s: takeSnapshot(w, w.events), k: i, a: [1, 2, 3, 4], cd: 0, pe: w.events };
+        worst = Math.max(worst, encodeSnapMsg(msg).byteLength);
+      }
+    }
+    expect(worst).toBeLessThan(1200);
+  });
+
+  it('estado binário: o convidado fica igual ao host (quantizado) e o progresso vem à parte', () => {
+    const track = new Track(TRACKS[0]);
+    const entries = opponentsFor(newCampaign('jake', 0), VEHICLES);
+    const host = createWorld(track, entries, 2, 9);
+    const guest = createWorld(track, entries.map((e) => ({ ...e })), 2, 9);
+    host.started = true;
+    for (let i = 0; i < 60 * 40; i++) stepWorld(host, {}, DT);
+    const ev = [{ type: 'lap' as const, racer: 1, lap: 2 }];
+    const buf = encodeSnapMsg({ t: 'snap', s: takeSnapshot(host, host.events), k: 7, a: [3, -1, 5, 9].slice(0, host.racers.length), cd: 0, aw: [2], dc: [0], ie: [{ i: 4, e: ev[0] }] });
+    const m = decodeSnapMsg(buf, host.racers.length, track.pieces.length)!;
+    expect(m.k).toBe(7);
+    expect(m.a).toEqual([3, -1, 5, 9].slice(0, host.racers.length));
+    expect(m.aw).toEqual([2]);
+    expect(m.dc).toEqual([0]);
+    expect(m.ie).toEqual([{ i: 4, e: ev[0] }]);
+    applySnapshot(guest, m.s);
+    const prog = parseProg(JSON.parse(JSON.stringify({ t: 'prog', k: 7, r: host.racers.map((r, i) => progEntry(i, r)) })), host.racers.length)!;
+    applyProg(guest, prog);
+    host.racers.forEach((r, i) => {
+      const g = guest.racers[i];
+      expect(g.car.x).toBeCloseTo(r.car.x, 2);
+      expect(g.car.z).toBeCloseTo(r.car.z, 2);
+      expect(g.car.heading).toBeCloseTo(r.car.heading, 3);
+      expect(g.car.vx).toBeCloseTo(r.car.vx, 2);
+      expect(g.progress.lap).toBe(r.progress.lap);
+      expect(g.progress.lastDist).toBeCloseTo(r.progress.lastDist, 1);
+      expect(g.money).toBe(r.money);
+      expect(g.place).toBe(r.place);
+      expect(g.armor).toBeCloseTo(r.armor, 2);
+    });
+    expect(guest.projectiles.length).toBe(host.projectiles.length);
+    expect(guest.hazards.length).toBe(host.hazards.length);
+    expect(guest.pickups.map((p) => p.active)).toEqual(host.pickups.map((p) => p.active));
+  });
+
+  it('estado binário inválido é recusado inteiro', () => {
+    const track = new Track(TRACKS[0]);
+    const w = createWorld(track, opponentsFor(newCampaign('jake', 0), VEHICLES), 2, 3);
+    w.started = true;
+    for (let i = 0; i < 60 * 5; i++) stepWorld(w, {}, DT);
+    const n = w.racers.length;
+    const np = track.pieces.length;
+    const buf = encodeSnapMsg({ t: 'snap', s: takeSnapshot(w, [{ type: 'spin', racer: 1 }]), k: 1, a: [], cd: 0 });
+    expect(decodeSnapMsg(buf, n, np)).not.toBeNull();
+    expect(decodeSnapMsg(buf.slice(0, buf.byteLength - 3), n, np)).toBeNull(); // cortado
+    const extra = new Uint8Array(buf.byteLength + 1);
+    extra.set(new Uint8Array(buf));
+    expect(decodeSnapMsg(extra.buffer, n, np)).toBeNull(); // sobra
+    expect(decodeSnapMsg(buf, n - 1, np)).toBeNull(); // outro número de carros
+    expect(decodeSnapMsg(buf, n, 1)).toBeNull(); // peça fora da pista
+    expect(decodeSnapMsg('lixo', n, np)).toBeNull();
+    expect(decodeSnapMsg(new ArrayBuffer(0), n, np)).toBeNull();
+    const nan = new DataView(buf.slice(0));
+    nan.setFloat32(1 + 4 + 4 + 4 + 3, NaN, true); // x do primeiro carro
+    expect(decodeSnapMsg(nan.buffer, n, np)).toBeNull();
+    // evento com carro inexistente é descartado (o resto vale)
+    const bad = encodeSnapMsg({ t: 'snap', s: takeSnapshot(w, [{ type: 'spin', racer: 99 }]), k: 1, a: [], cd: 0 });
+    expect(decodeSnapMsg(bad, n, np)?.s.events).toEqual([]);
+    // progresso: forma conferida
+    expect(parseProg({ t: 'prog', k: 1, r: [{ i: 9, progress: {} }] }, n)).toBeNull();
+    expect(parseProg({ t: 'prog', k: 1, r: [{ i: 0, progress: { lap: 1, lapTimes: ['x'] } }] }, n)).toBeNull();
+    expect(parseProg({ t: 'prog', k: 1, r: [{ i: 0, progress: { lap: 2, lapTimes: [30.5] }, money: 'x', kills: 2 }] }, n)?.r[0].money).toBe(0);
   });
 });
 

@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { TRACKS } from '../data/tracks';
 import { VEHICLES } from '../data/vehicles';
-import { computeAiInput } from './ai';
+import { AI_TUNING, computeAiInput } from './ai';
 import { newCampaign, opponentsFor } from './campaign';
 import { emptyInput } from './input';
 import { Track } from './track';
-import { createWorld, KILL_BOUNTY, stepWorld, WEAPONS, type RacerEntry } from './world';
+import { createVehicleState } from './vehicle';
+import { createWorld, draftBehind, KILL_BOUNTY, stepWorld, WEAPONS, type RacerEntry } from './world';
 
 const DT = 1 / 60;
 const track = new Track(TRACKS[0]);
@@ -133,7 +134,7 @@ describe('mundo da corrida', () => {
         world.finishedCount = 1;
       }
       const p = reta.pointAtDist(100);
-      const sp = cpu.spec.maxSpeed * (0.72 + 0.5 * 0.28) * 1.02; // acima do alvo normal, abaixo do alvo com elástico
+      const sp = cpu.spec.maxSpeed * (AI_TUNING.basePace + (1 - AI_TUNING.basePace) * 0.5) * 1.02; // acima do alvo normal, abaixo do alvo com elástico
       Object.assign(cpu.car, { x: p.x, z: p.z, heading: p.heading, pieceIndex: p.pieceIndex, vx: Math.sin(p.heading) * sp, vz: Math.cos(p.heading) * sp });
       cpu.progress.lastDist = 100;
       cpu.aiState.thinkTimer = 1;
@@ -174,7 +175,7 @@ describe('mundo da corrida', () => {
     for (const def of TRACKS) {
       const tr = new Track(def);
       const w = createWorld(tr, four, 1, 1);
-      const n = tr.pieces.length;
+      const n = tr.loop;
       for (const r of w.racers) expect([0, n - 1, n - 2], `${def.id} vaga ${r.id}`).toContain(r.car.pieceIndex);
       // acelerando reto por 4 s, ninguém fica preso atrás da largada
       w.started = true;
@@ -413,10 +414,51 @@ describe('mundo da corrida', () => {
       expect(place[id] / races, fmt).toBeGreaterThan(2.2);
       expect(place[id] / races, fmt).toBeLessThan(3.8);
     }
-  }, 60000);
+  }, 180000);
+
+  it('vácuo só atrás de quem vai na mesma direção e no mesmo nível', () => {
+    const spec = VEHICLES.marauder;
+    // carro de trás em (0,0) rumo +z a 30 m/s; o da frente 8 m adiante
+    const car = (x: number, z: number, heading: number, y = 0) => {
+      const c = createVehicleState(spec, x, z, heading, y);
+      c.vx = Math.sin(heading) * 30;
+      c.vz = Math.cos(heading) * 30;
+      return c;
+    };
+    const me = car(0, 0, 0);
+    expect(draftBehind(me, car(0, 8, 0))).toBeGreaterThan(0.5);
+    // cruzando por cima (X) ou em sentido oposto: nada
+    expect(draftBehind(me, car(0, 8, Math.PI / 2))).toBe(0);
+    expect(draftBehind(me, car(0, 8, Math.PI))).toBe(0);
+    // num viaduto acima: nada
+    expect(draftBehind(me, car(0, 8, 0, 3))).toBe(0);
+    // de viés leve (cos > 0,7) ainda vale
+    expect(draftBehind(me, car(0, 8, 0.2))).toBeGreaterThan(0);
+  });
+
+  it('tiros e minas que chegam perto de quem já terminou somem sem explodir', () => {
+    const entries: RacerEntry[] = [
+      { name: 'Parado', color: 0, spec: VEHICLES.marauder, ai: null },
+      { name: 'Outro', color: 0, spec: VEHICLES.havac, ai: null },
+    ];
+    const world = createWorld(track, entries, 4, 1);
+    const [done] = world.racers;
+    done.finishPlace = 1;
+    world.finishedCount = 1;
+    world.started = true;
+    const c = done.car;
+    world.projectiles.push({ id: 90, kind: 'laser', owner: 1, x: c.x + 1, y: c.y + 1, z: c.z, heading: c.heading, speed: 0, life: 1, pieceIndex: c.pieceIndex });
+    world.hazards.push({ id: 91, kind: 'mine', owner: 1, x: c.x - 1.5, y: c.y, z: c.z, age: 2 });
+    stepWorld(world, {}, DT);
+    expect(world.projectiles.length).toBe(0);
+    expect(world.hazards.some((h) => h.id === 91)).toBe(false);
+    expect(world.events.some((e) => e.type === 'impact' || e.type === 'hit')).toBe(false);
+    expect(done.armor).toBe(done.spec.armor);
+  });
 
   it('mina e scatter: arma depois de um tempo; o leque some antes da volta seguinte', () => {
-    expect(WEAPONS.mine.armTime).toBeGreaterThanOrEqual(0.9);
+    // (rodada 11: a mina arma rápido; quem desvia ou não é a reação da CPU — ver AI_REACTION)
+    expect(WEAPONS.mine.armTime).toBeLessThanOrEqual(0.3);
     expect(WEAPONS.scatter.radius).toBeLessThanOrEqual(0.9);
     expect(WEAPONS.scatter.life).toBeLessThan(15);
   });

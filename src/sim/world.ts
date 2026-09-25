@@ -1,4 +1,5 @@
 import { computeAiInput, createAiState, type AiProfile, type AiState } from './ai';
+export { referenceInput } from './ai';
 import { emptyInput, type ControlInput } from './input';
 import { clamp, createRng, forwardX, forwardZ, leftX, leftZ, wrapAngle } from './math';
 import { createProgress, updateProgress, type RacerProgress } from './race';
@@ -19,8 +20,9 @@ export const WEAPONS = {
    *  `chase`: só persegue nos primeiros segundos, depois segue reto (dá para fugir dele) */
   //  (dano 14 → 22: com 30–57 acertos por corrida ele quase não destruía ninguém — rodada 10)
   sundog: { speed: 42, life: 2.2, damage: 22, knock: 2, hop: 0, turnRate: 1.7, chase: 1.2 },
-  /** Bear Claw Mines (arma 0,9 s depois de cair: quem vem colado passa antes; rodada 10, acerto ~80% → ~45%) */
-  mine: { damage: 32, hop: 9, radius: 1.6, armTime: 0.9, life: 40 },
+  /** Bear Claw Mines: arma 0,2 s depois de cair (rodada 11: com 0,9 s o perseguidor passava antes e só
+   *  16% dos acertos eram nele); quem acerta ou erra é o desvio da CPU, que enxerga a mina de longe */
+  mine: { damage: 32, hop: 9, radius: 1.6, armTime: 0.2, life: 40 },
   /** KO Scatterpack: leque de minas pequenas atrás do carro (raio 0,9: dá para passar entre elas; dura
    *  12 s — com 25 s o leque da volta anterior cobria a pista toda e ~80% dos leques acertavam alguém) */
   scatter: { count: 4, spread: 3.2, damage: 12, hop: 6, radius: 0.9, armTime: 0.35, life: 12 },
@@ -56,7 +58,8 @@ export const DIFFICULTY_LABEL: Record<Difficulty, string> = { easy: 'Fácil', no
  */
 export const DIFFICULTY: Record<Difficulty, { damageToHuman: number; skill: number; aggression: number; aheadSlow: number; behindBoost: number; rivalUpgrade: number }> = {
   // elástico leve de propósito (a crítica do original reclamou de rubber-band exagerado)
-  easy: { damageToHuman: 0.7, skill: -0.14, aggression: 0.6, aheadSlow: 0.9, behindBoost: 1.02, rivalUpgrade: -1 },
+  // (rodada 11: habilidade −0,14 → −0,03; com o ritmo dos rivais do Fácil ≤ Normal, o Fácil ficava sem desafio)
+  easy: { damageToHuman: 0.7, skill: -0.03, aggression: 0.6, aheadSlow: 0.9, behindBoost: 1.02, rivalUpgrade: -1 },
   normal: { damageToHuman: 1, skill: 0, aggression: 1, aheadSlow: 0.95, behindBoost: 1.04, rivalUpgrade: 0 },
   hard: { damageToHuman: 1.25, skill: 0.07, aggression: 1.2, aheadSlow: 1, behindBoost: 1.05, rivalUpgrade: 1 },
 };
@@ -446,8 +449,9 @@ function stepProjectiles(world: World, dt: number): void {
     p.pieceIndex = q.pieceIndex;
     p.y += (q.height + 1.0 - p.y) * clamp(dt * 12, 0, 1);
 
-    let dead = p.life <= 0;
-    if (Math.abs(q.lateral) > track.halfWidth + 0.1 || q.height + 0.3 > p.y + 0.8) {
+    // (perto de quem já terminou e está estacionado, some sem explodir)
+    let dead = p.life <= 0 || nearFinished(world, p.x, p.z);
+    if (!dead && (Math.abs(q.lateral) > track.halfWidth + 0.1 || q.height + 0.3 > p.y + 0.8)) {
       dead = true; // bateu na mureta ou na face de um salto
       world.events.push({ type: 'impact', x: p.x, y: p.y, z: p.z, kind: p.kind });
     }
@@ -476,6 +480,14 @@ function stepProjectiles(world: World, dt: number): void {
   world.projectiles = alive;
 }
 
+/** Distância (m) de um carro que já terminou em que tiros e minas somem sem explodir. */
+const FINISHED_CLEAR = 3;
+function nearFinished(world: World, x: number, z: number): boolean {
+  if (!world.finishedCount) return false;
+  for (const r of world.racers) if (r.finishPlace && Math.hypot(r.car.x - x, r.car.z - z) < FINISHED_CLEAR) return true;
+  return false;
+}
+
 function stepHazards(world: World, dt: number): void {
   const keep: Hazard[] = [];
   for (const h of world.hazards) {
@@ -483,7 +495,8 @@ function stepHazards(world: World, dt: number): void {
     let dead = false;
     if (h.kind === 'mine' || h.kind === 'scatter') {
       const w = WEAPONS[h.kind];
-      if (h.age > w.life) dead = true;
+      // (perto de quem já terminou e está estacionado, some sem explodir)
+      if (h.age > w.life || nearFinished(world, h.x, h.z)) dead = true;
       else if (h.age > w.armTime) {
         for (const r of world.racers) {
           if (!r.alive || !r.car.grounded || r.finishPlace || ((h.spared ?? 0) & (1 << r.id)) !== 0) continue;
@@ -604,7 +617,8 @@ export function driveTraction(d: DriverState, spec: VehicleSpec, id: number, inp
  * Um passo de um carro só, sem o resto do mundo: derrapagem, giro no óleo, poças fixas e manchas de
  * óleo, na mesma ordem de `stepWorld` (as poças agem depois do movimento). Previsão do convidado
  * online: não mexe nas poças (quem conta os giros e o dano é o host). `contacts`: batidas contra os
- * rivais logo depois do movimento, como em `collideCars`.
+ * rivais logo depois do movimento, como em `collideCars`. `draftCars`: rivais para o vácuo
+ * (mesma regra de `draftFactor`).
  */
 export function stepDriver(
   d: DriverState,
@@ -616,10 +630,14 @@ export function stepDriver(
   hazards: readonly Hazard[],
   dt: number,
   contacts?: (car: VehicleState) => void,
+  draftCars?: readonly VehicleState[],
 ): void {
   d.oilGrace = Math.max(0, d.oilGrace - dt);
   const t = driveTraction(d, spec, id, input, dt);
-  stepVehicle(d.car, t.spec, t.input, track, dt);
+  // vácuo contra os carros dados (o chamador passa só os rivais vivos, na disputa, com a corrida andando)
+  let draft = 0;
+  if (draftCars) for (const o of draftCars) draft = Math.max(draft, draftBehind(d.car, o));
+  stepVehicle(d.car, draftSpec(t.spec, draft), t.input, track, dt);
   contacts?.(d.car);
   for (const h of hazards) {
     if (h.kind === 'oil') {
@@ -770,8 +788,12 @@ function parkInput(world: World, r: Racer): { input: ControlInput; hold: boolean
 /** Vácuo (rodada 10: corridas "em fila"): até quanto a final cresce colado atrás de outro carro. */
 export const DRAFT_SPEED = 0.1;
 const DRAFT_MIN = 2.5;
-const DRAFT_MAX = 18;
+// (rodada 11: 18 → 24 m — dá para encostar e sair de lado para passar)
+const DRAFT_MAX = 24;
 const DRAFT_LATERAL = 1.7;
+/** Vácuo só com os dois na mesma direção (cos da diferença de rumo) e no mesmo nível (viaduto: m). */
+const DRAFT_ALIGN = 0.7;
+const DRAFT_LEVEL = 1.5;
 
 /**
  * Quanto `r` está no vácuo de alguém (0..1): outro carro à frente, na mesma linha (até DRAFT_LATERAL m
@@ -779,22 +801,32 @@ const DRAFT_LATERAL = 1.7;
  * velocidade (acima de 18 m/s os dois).
  */
 export function draftFactor(world: World, r: Racer): number {
-  const c = r.car;
-  if (forwardSpeed(c) < 18) return 0;
   let best = 0;
-  for (const o of world.racers) {
-    if (o === r || !o.alive || o.finishPlace || forwardSpeed(o.car) < 18) continue;
-    const dx = o.car.x - c.x;
-    const dz = o.car.z - c.z;
-    const fx = forwardX(o.car.heading);
-    const fz = forwardZ(o.car.heading);
-    const along = dx * fx + dz * fz;
-    if (along < DRAFT_MIN || along > DRAFT_MAX) continue;
-    const side = Math.abs(dx * fz - dz * fx);
-    if (side > DRAFT_LATERAL || Math.abs(o.car.y - c.y) > 1.5) continue;
-    best = Math.max(best, 1 - (along - DRAFT_MIN) / (DRAFT_MAX - DRAFT_MIN) * 0.6);
-  }
+  for (const o of world.racers) if (o !== r && o.alive && !o.finishPlace) best = Math.max(best, draftBehind(r.car, o.car));
   return best;
+}
+
+/**
+ * Vácuo de `c` atrás de um carro só (0..1), a regra de `draftFactor` (função pura: a previsão do
+ * convidado online usa a mesma conta contra os rivais na posição em que aparecem na tela).
+ */
+export function draftBehind(c: VehicleState, o: VehicleState): number {
+  if (forwardSpeed(c) < 18 || forwardSpeed(o) < 18) return 0;
+  const dx = o.x - c.x;
+  const dz = o.z - c.z;
+  const fx = forwardX(o.heading);
+  const fz = forwardZ(o.heading);
+  const along = dx * fx + dz * fz;
+  if (along < DRAFT_MIN || along > DRAFT_MAX) return 0;
+  const side = Math.abs(dx * fz - dz * fx);
+  // mesma direção (nada de vácuo de quem cruza por cima num X ou vem no sentido oposto) e mesmo nível
+  if (side > DRAFT_LATERAL || Math.abs(o.y - c.y) > DRAFT_LEVEL || Math.cos(o.heading - c.heading) < DRAFT_ALIGN) return 0;
+  return 1 - ((along - DRAFT_MIN) / (DRAFT_MAX - DRAFT_MIN)) * 0.6;
+}
+
+/** Carro no vácuo (fator 0..1): final maior e menos arrasto. */
+export function draftSpec(spec: VehicleSpec, draft: number): VehicleSpec {
+  return draft > 0 ? { ...spec, maxSpeed: spec.maxSpeed * (1 + DRAFT_SPEED * draft), drag: spec.drag * (1 - 0.6 * draft) } : spec;
 }
 
 export function stepWorld(world: World, humanInputs: Record<number, ControlInput>, dt: number): void {
@@ -825,7 +857,7 @@ export function stepWorld(world: World, humanInputs: Record<number, ControlInput
     let spec = traction.spec;
     // vácuo: colado atrás de outro carro, anda mais (final e menos arrasto) — é assim que se passa na reta
     const draft = world.started && !r.finishPlace ? draftFactor(world, r) : 0;
-    if (draft > 0) spec = { ...spec, maxSpeed: spec.maxSpeed * (1 + DRAFT_SPEED * draft), drag: spec.drag * (1 - 0.6 * draft) };
+    spec = draftSpec(spec, draft);
     input = traction.input;
     r.lastInput = input;
     const px = r.car.x;

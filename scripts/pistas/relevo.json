@@ -10,7 +10,7 @@
     "o sentido da corrida diz se é U ou D. Dinheiro/blindagem não aparecem nos mapas (continuam espalhados pela pista).",
     "Pistas sem entrada aqui ficam só com o traçado (sem relevo inventado). Leitura com scripts de apoio: rótulo de casa projetado no mapa isométrico (casa (i,j) -> x=1550+175*(i-j), y=70+44*(i+j+1)).",
     "Cruzamentos (X) no mesmo nível dividem a placa; com um nível (RAMP_HEIGHT) ou mais de diferença viram viaduto: a passagem de cima é uma ponte.",
-    "Ainda fora do modelo: atalhos/bifurcações (inferno-4, entre 18 e 28) e o laço extra de bogmire-2 (não está no traçado extraído dos minimapas)."
+    "Desvios (bifurcações: atalho de inferno-4 entre 18 e 28, laço de cima de bogmire-2) ficam em tracado.json ('desvios'); o relevo do ramo vai em 'desvios': {índice do ramo: {pecas}} (casa 0 = junção de saída)."
   ],
   "chem6-1": {
     "pecas": {
@@ -126,15 +126,24 @@
   },
   "bogmire-2": {
     "pecas": {
-      "9": "D",
-      "12": "D",
-      "21": "U",
-      "23": "U"
+      "1": "D",
+      "2": "D",
+      "10": "U",
+      "13": "U"
     },
     "pocas": [
       25
     ],
-    "nota": "Faixas de rampa no trecho da frente (9 e 12) e no de cima-esquerda (21 e 23); poça d'água na casa 25. O laço extra de cima-direita do mapa não está no nosso traçado."
+    "desvios": {
+      "0": {
+        "pecas": {
+          "5": "B",
+          "6": "B",
+          "7": "B"
+        }
+      }
+    },
+    "nota": "Retranscrita no sentido do mapa (largada na coluna da esquerda, descendo). Rampas da coluna da largada em 1 e 2 (no mapa, uma fica logo antes da linha; foi para depois dela para o grid ficar plano); subidas em 10 (fundo) e 13 (direita). Laço de cima à direita como desvio (16->24) com as três elevações do trecho de cima como lombadas. Poça d'água na casa 25; a do desvio (canto de cima à direita) não entra (poças fixas só no laço)."
   },
   "bogmire-3": {
     "pecas": {
@@ -470,7 +479,7 @@
       10,
       11
     ],
-    "nota": "Três degraus descendo no trecho de baixo e três subindo no da esquerda. A faixa de 29 e a da casa 31 (grid) ficaram planas para o circuito fechar; o atalho do mapa entre 18 e 28 não está no traçado."
+    "nota": "Três degraus descendo no trecho de baixo e três subindo no da esquerda. Atalho entre 18 e 28 é um desvio plano (bifurcação: IA escolhe o ramo). As faixas de 29 e 31 seguem planas: o trecho 18-28 fica num nível só nos dois caminhos e a 31 é grid."
   },
   "inferno-5": {
     "pecas": {

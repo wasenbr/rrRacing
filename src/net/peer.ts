@@ -97,6 +97,8 @@ export function netErrorText(err: unknown): string {
 /** Intervalo do ping e silêncio máximo antes de considerar a conexão perdida. */
 export const PING_MS = 1000;
 export const DROP_MS = 8000;
+/** Espera pela resposta da conexão antiga quando a mesma ficha chega de outra aba. */
+export const PROBE_MS = 1500;
 /** Quem conecta e não se apresenta nesse prazo é desligado. */
 const HELLO_MS = 10000;
 /** Taxa máxima de mensagens do convidado (balde de fichas: 60/s, rajada de 120). */
@@ -123,6 +125,55 @@ function withoutRetransmits<T>(open: () => T): T {
     proto.createDataChannel = orig;
   }
 }
+
+/**
+ * O canal rápido é "cru" (sem a serialização do PeerJS): objetos vão como texto JSON e o estado do
+ * host como binário (ArrayBuffer). No canal confiável (JSON), um binário vai como `{ t: 'bin', b }`
+ * em base64 (enquanto o rápido não abriu).
+ */
+export function toWire(fast: boolean, msg: unknown): unknown {
+  if (msg instanceof ArrayBuffer) return fast ? msg : { t: 'bin', b: toBase64(msg) };
+  return fast ? JSON.stringify(msg) : msg;
+}
+
+/** Mensagem recebida: texto JSON (até `maxLen`), binário, ou `{ t: 'bin' }` do canal confiável. Inválida: undefined. */
+export function fromWire(msg: unknown, maxLen: number, allowBinary: boolean): unknown {
+  if (typeof msg === 'string') {
+    if (msg.length > maxLen) return undefined;
+    try {
+      return JSON.parse(msg) as unknown;
+    } catch {
+      return undefined;
+    }
+  }
+  if (msg instanceof ArrayBuffer) return allowBinary && msg.byteLength <= maxLen ? msg : undefined;
+  if (allowBinary && kind(msg) === 'bin') {
+    const b = (msg as { b?: unknown }).b;
+    return typeof b === 'string' && b.length <= maxLen * 2 ? fromBase64(b) : undefined;
+  }
+  return msg;
+}
+
+function toBase64(buf: ArrayBuffer): string {
+  let bin = '';
+  const u = new Uint8Array(buf);
+  for (let i = 0; i < u.length; i++) bin += String.fromCharCode(u[i]);
+  return btoa(bin);
+}
+
+function fromBase64(s: string): ArrayBuffer | undefined {
+  try {
+    const bin = atob(s);
+    const u = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+    return u.buffer;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Maior mensagem aceita do host (binário ou texto). */
+const MAX_HOST_MSG = 65536;
 
 type Msg = { t?: unknown; ts?: unknown } | null;
 const kind = (m: unknown): unknown => (m as Msg)?.t;
@@ -257,10 +308,13 @@ export class NetHost {
       if (old && old !== conn) old.close();
       this.fast.set(id, conn);
     });
-    conn.on('data', (msg) => {
+    conn.on('data', (raw) => {
       if (this.fast.get(id) !== conn || !this.accepted.has(id)) return;
       this.lastSeen.set(id, performance.now());
-      if (!allow() || this.control(id, conn, msg) || jsonSize(msg) > MAX_CLIENT_MSG) return;
+      if (!allow()) return;
+      // texto JSON curto; binário do convidado não existe
+      const msg = fromWire(raw, MAX_CLIENT_MSG, false);
+      if (msg === undefined || this.control(id, conn, msg) || jsonSize(msg) > MAX_CLIENT_MSG) return;
       this.onMessage(id, msg);
     });
     const gone = () => {
@@ -275,7 +329,7 @@ export class NetHost {
     const t = kind(msg);
     if (t === 'ping') {
       const p = pong(msg);
-      if (p && conn.open) void conn.send(p);
+      if (p && conn.open) void conn.send(toWire(conn.label === FAST, p));
       return true;
     }
     if (t === 'pong') {
@@ -328,14 +382,32 @@ export class NetHost {
   /** Canal confiável. */
   send(peerId: string, msg: unknown): void {
     const c = this.conns.get(peerId);
-    if (c?.open) void c.send(msg);
+    if (c?.open) void c.send(toWire(false, msg));
   }
 
-  /** Canal rápido (cai no confiável enquanto ele não abriu). */
+  /** Canal rápido (cai no confiável enquanto ele não abriu). Aceita binário (ArrayBuffer). */
   sendFast(peerId: string, msg: unknown): void {
     const f = this.fast.get(peerId);
-    if (f?.open) void f.send(msg);
+    if (f?.open) void f.send(toWire(true, msg));
     else this.send(peerId, msg);
+  }
+
+  /** O convidado está conectado (canal confiável aberto)? */
+  connected(peerId: string): boolean {
+    return !!this.conns.get(peerId)?.open;
+  }
+
+  /**
+   * A conexão de `peerId` ainda responde? Manda um ping e espera `ms`: qualquer mensagem dela nesse
+   * prazo (a resposta ou outra) conta. Usado para recusar a mesma ficha aberta em outra aba.
+   */
+  probe(peerId: string, ms = PROBE_MS): Promise<boolean> {
+    const c = this.conns.get(peerId);
+    if (!c?.open) return Promise.resolve(false);
+    const sent = performance.now();
+    void c.send({ t: 'ping', ts: sent });
+    this.sendFast(peerId, { t: 'ping', ts: sent });
+    return new Promise((resolve) => setTimeout(() => resolve((this.lastSeen.get(peerId) ?? -Infinity) >= sent), ms));
   }
 
   /** Manda só para os convidados aceitos na sala (canal confiável). */
@@ -386,12 +458,14 @@ export class NetClient {
     private conn: DataConnection,
     readonly code: string,
   ) {
-    const onData = (msg: unknown, c: DataConnection) => {
+    const onData = (raw: unknown, c: DataConnection) => {
       this.lastSeen = performance.now();
+      const msg = fromWire(raw, MAX_HOST_MSG, true);
+      if (msg === undefined) return;
       const t = kind(msg);
       if (t === 'ping') {
         const p = pong(msg);
-        if (p && c.open) void c.send(p);
+        if (p && c.open) void c.send(toWire(c.label === FAST, p));
       } else if (t === 'pong') this.rtt.add(pongSample(msg, performance.now()));
       else if (!this.closed) this.onMessage(msg);
     };
@@ -407,7 +481,7 @@ export class NetClient {
     conn.on('error', gone);
     // canal rápido, sem ordem, para estados e comandos (sem ele, tudo vai pelo confiável)
     try {
-      const f = withoutRetransmits(() => peer.connect(PREFIX + code, { reliable: false, serialization: 'json', label: FAST }));
+      const f = withoutRetransmits(() => peer.connect(PREFIX + code, { reliable: false, serialization: 'raw', label: FAST }));
       f.on('open', () => {
         if (!this.closed) this.fast = f;
       });
@@ -473,12 +547,12 @@ export class NetClient {
 
   /** Canal confiável. */
   send(msg: unknown): void {
-    if (this.conn.open) void this.conn.send(msg);
+    if (this.conn.open) void this.conn.send(toWire(false, msg));
   }
 
   /** Canal rápido (cai no confiável enquanto ele não abriu). */
   sendFast(msg: unknown): void {
-    if (this.fast?.open) void this.fast.send(msg);
+    if (this.fast?.open) void this.fast.send(toWire(true, msg));
     else this.send(msg);
   }
 

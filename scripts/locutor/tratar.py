@@ -51,6 +51,20 @@ def loudness(path):
     return float(v[-1]) if v else -70.0
 
 
+def loudness_max(path, alvo=LOUD_ALVO):
+    """
+    Loudness momentâneo máximo (LUFS, janela de 400 ms) da fala depois de normalizada para `alvo`
+    LUFS integrados (o que o tratar.py faz): é o "loudness cru" de som() em scripts/evidencias.mjs.
+    Mede quanto o pico do grito sobe acima da média da fala.
+    """
+    r = run([FFMPEG, '-hide_banner', '-i', path, '-af', 'aloop=loop=2:size=2000000,ebur128', '-f', 'null', '-']).stderr
+    integ = re.findall(r'I:\s+(-?[\d.]+) LUFS', r)
+    mom = [float(v) for v in re.findall(r'\sM:\s*(-?[\d.]+)', r)]
+    if not integ or not mom:
+        return -70.0
+    return round(max(mom) - float(integ[-1]) + alvo, 1)
+
+
 def f0(path):
     """
     F0 mediano (Hz) e faixa de entonação (semitons, percentis 10–90). Usa o Praat (parselmouth,

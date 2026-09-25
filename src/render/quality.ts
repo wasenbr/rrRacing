@@ -101,9 +101,18 @@ export class DynamicResolution {
   private ceiling = 1;
   private clock = 0;
   private lastUp = -Infinity;
-  private readonly enabled = !new URLSearchParams(location.search).has('q');
+  /** desligada com ?q= (as evidências ligam de volta para medir) */
+  enabled = typeof location === 'undefined' || !new URLSearchParams(location.search).has('q');
+  /** trocas de escala [relógio da resolução (s), escala] — as últimas 32, para as evidências */
+  readonly history: [number, number][] = [];
 
   constructor(public min = 0.6) {}
+
+  /** Começa numa escala conhecida (a da corrida anterior), limitada ao piso e ao teto atuais. */
+  restore(scale: number): void {
+    if (!Number.isFinite(scale)) return;
+    this.scale = Math.min(this.ceiling, Math.max(this.min, scale));
+  }
 
   /**
    * Piso efetivo (o jogo calcula pela tela: abaixo dele um degrau não mudaria nenhum pixel). Se o
@@ -139,9 +148,76 @@ export class DynamicResolution {
     if (Math.abs(next - this.scale) < 1e-6) return false;
     this.cooldown = next < this.scale ? 1.2 : 5;
     this.scale = next;
+    if (this.history.length >= 32) this.history.shift();
+    this.history.push([+this.clock.toFixed(2), +next.toFixed(3)]);
     // a medição recomeça no novo degrau
     this.slow = 0;
     return true;
+  }
+}
+
+/** Escala da resolução dinâmica em que a última corrida terminou, por nível (sobrevive à recarga). */
+const SCALE_KEY = 'rr.dynScale.';
+export function loadDynScale(level: QualityLevel): number | null {
+  try {
+    const v = parseFloat(localStorage.getItem(SCALE_KEY + level) ?? '');
+    return Number.isFinite(v) && v > 0 && v <= 1 ? v : null;
+  } catch {
+    return null;
+  }
+}
+export function saveDynScale(level: QualityLevel, scale: number): void {
+  try {
+    localStorage.setItem(SCALE_KEY + level, scale.toFixed(3));
+  } catch {
+    /* sem armazenamento: começa do padrão */
+  }
+}
+
+/** O que cada degrau da queda automática faz (ver AutoDegrade). */
+export type DegradeAction = 'flash' | 'bloom' | 'shadow' | 'particles' | 'cap30';
+/** O que ainda existe para desligar. */
+export interface DegradeCaps {
+  flashLights: boolean;
+  bloom: boolean;
+  shadow: boolean;
+  particles: boolean;
+}
+
+/**
+ * Queda automática de nível quando a resolução dinâmica já está no piso e o jogo ainda não segura
+ * ~42 qps: primeiro as luzes dos clarões (pendente até a próxima largada: não gasta a espera), depois
+ * o bloom (o maior custo do alto), a sombra, metade das partículas e, por fim, a trava em 30 qps.
+ * Um degrau com efeito a cada 3 s. Nenhum degrau troca programas no meio da corrida: o jogo aplica
+ * o que muda shader só no preparo da próxima largada.
+ */
+export class AutoDegrade {
+  level = 0;
+  private slowAvg = 1 / 60;
+  private cd = 0;
+
+  /** Chamado a cada quadro desenhado na corrida. Retorna as ações do degrau (ou null). */
+  update(dt: number, cost: number, atFloor: boolean, caps: DegradeCaps): DegradeAction[] | null {
+    this.slowAvg += (cost - this.slowAvg) * 0.03;
+    this.cd -= dt;
+    if (this.cd > 0 || this.slowAvg <= 1 / 42 || !atFloor || this.level >= 5) return null;
+    this.cd = 3;
+    this.slowAvg = 1 / 60;
+    const out: DegradeAction[] = [];
+    while (this.level < 5) {
+      const step = this.level++;
+      if (step === 0 && caps.flashLights) {
+        out.push('flash');
+        continue;
+      }
+      const a: DegradeAction | null =
+        step === 1 && caps.bloom ? 'bloom' : step === 2 && caps.shadow ? 'shadow' : step === 3 && caps.particles ? 'particles' : step === 4 ? 'cap30' : null;
+      if (a) {
+        out.push(a);
+        break;
+      }
+    }
+    return out.length ? out : null;
   }
 }
 

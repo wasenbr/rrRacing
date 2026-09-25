@@ -43,6 +43,8 @@ export interface Seat<P> {
   racer?: number;
   /** quando saiu (null = conectado) */
   leftAt: number | null;
+  /** id da aba (ver `dupPlan`) */
+  inst?: string;
 }
 
 /**
@@ -52,8 +54,13 @@ export interface Seat<P> {
 export class RejoinBook<P> {
   private seats = new Map<string, Seat<P>>();
 
-  add(token: string, peerId: string, player: P, racer?: number): void {
-    this.seats.set(token, { peerId, player, racer, leftAt: null });
+  add(token: string, peerId: string, player: P, racer?: number, inst?: string): void {
+    this.seats.set(token, { peerId, player, racer, leftAt: null, inst });
+  }
+
+  /** A vaga dessa ficha (sem mexer nela). */
+  peek(token: unknown): Readonly<Seat<P>> | undefined {
+    return isToken(token) ? this.seats.get(token) : undefined;
   }
 
   tokenOf(peerId: string): string | undefined {
@@ -88,6 +95,12 @@ export class RejoinBook<P> {
     s.peerId = peerId;
     s.leftAt = null;
     return { ...s, peerId: old };
+  }
+
+  /** Nova aba dona da vaga (depois de uma volta aceita). */
+  setInst(peerId: string, inst: string): void {
+    const t = this.tokenOf(peerId);
+    if (t) this.seats.get(t)!.inst = inst;
   }
 
   /** Vagas vencidas saem (devolve as que venceram agora). */
@@ -266,4 +279,51 @@ export class LocalEcho {
   clear(): void {
     this.pending = [[], [], []];
   }
+}
+
+/** Folga de reprodução do convidado (em estados do host): mínimo, máximo. */
+export const SNAP_BUFFER_MIN = 2;
+export const SNAP_BUFFER_MAX = 5;
+
+/**
+ * Convidado: mede a irregularidade (jitter) da chegada dos estados do host e escolhe a folga de
+ * reprodução: o atraso de chegada de cada estado em relação ao mais adiantado dos últimos ~5 s; o
+ * percentil 95 disso, em estados, mais um. Rede lisa: 2 (~100 ms); rede irregular: até 5.
+ */
+export class JitterBuffer {
+  private offs: number[] = [];
+  private sorted: number[] = [];
+  packets = SNAP_BUFFER_MIN;
+
+  constructor(private readonly window = 100) {}
+
+  /** Chegou o estado `k` em `nowMs` (host manda um a cada `periodMs`). */
+  add(k: number, nowMs: number, periodMs: number): void {
+    if (!Number.isFinite(k) || !Number.isFinite(nowMs) || periodMs <= 0) return;
+    this.offs.push(nowMs - k * periodMs);
+    if (this.offs.length > this.window) this.offs.shift();
+    if (this.offs.length < 8) return;
+    const s = this.sorted;
+    s.length = 0;
+    for (const o of this.offs) s.push(o);
+    s.sort((a, b) => a - b);
+    const late = s[Math.min(s.length - 1, Math.floor(s.length * 0.95))] - s[0];
+    this.packets = Math.min(SNAP_BUFFER_MAX, Math.max(SNAP_BUFFER_MIN, Math.ceil(late / periodMs) + 1));
+  }
+
+  reset(): void {
+    this.offs = [];
+    this.packets = SNAP_BUFFER_MIN;
+  }
+}
+
+/**
+ * Host: a ficha de `hello` chegou; a vaga dela ainda está com outra conexão aberta? `accept`: volta
+ * normal (vaga livre, mesma aba reconectando, conexão antiga fechada); `probe`: outra aba com a mesma
+ * ficha (aba duplicada): pergunta à conexão antiga se ela responde; se responder, a nova é recusada.
+ */
+export function dupPlan(seat: { peerId: string; leftAt: number | null; inst?: string } | undefined, peerId: string, inst: string, oldConnected: boolean): 'accept' | 'probe' {
+  if (!seat || seat.leftAt !== null || seat.peerId === peerId || !oldConnected) return 'accept';
+  if (inst && seat.inst && inst === seat.inst) return 'accept';
+  return 'probe';
 }

@@ -33,8 +33,7 @@
       "fadesLast_0.mp3"
     ],
     "finishFirst": [
-      "finishFirst_0.mp3",
-      "finishFirst_1.mp3"
+      "finishFirst_0.mp3"
     ],
     "finishSecond": [
       "finishSecond_0.mp3"
@@ -138,9 +137,7 @@
       "spinOut_0.mp3"
     ],
     "start": [
-      "start_0.mp3",
-      "start_1.mp3",
-      "start_2.mp3"
+      "start_0.mp3"
     ],
     "warp": [
       "warp_0.mp3",

@@ -75,6 +75,7 @@ function addCrossings(group: THREE.Group, track: Track, theme: Theme, shadows: b
     place(cap, q, s, side * (W + WALL / 2), y + 0.46);
     group.add(cap);
   };
+  let hz: THREE.CanvasTexture | null = null;
   for (const p of xs) {
     const other = track.pieces[track.crossPartner[p.index]];
     if (other && other.index < p.index) continue; // o par já foi feito
@@ -98,13 +99,30 @@ function addCrossings(group: THREE.Group, track: Track, theme: Theme, shadows: b
       block.receiveShadow = shadows;
       group.add(block);
       if (top && pair.length > 1) {
-        // faixas de borda contínuas atravessando a outra passagem
-        for (const side of [1, -1]) {
-          const e = new THREE.Mesh(new THREE.PlaneGeometry(0.35, L).rotateX(-Math.PI / 2), edgeMat);
-          place(e, q, L / 2, side * (W - 0.35), 0.012);
-          group.add(e);
-        }
+        // faixas de borda da passagem de cima só até a boca da outra (nada atravessa o miolo da placa)
+        const len = L / 2 - W;
+        if (len > 0.2)
+          for (const side of [1, -1])
+            for (const at of [len / 2, L - len / 2]) {
+              const e = new THREE.Mesh(new THREE.PlaneGeometry(0.35, len).rotateX(-Math.PI / 2), edgeMat);
+              place(e, q, at, side * (W - 0.35), 0.012);
+              group.add(e);
+            }
       }
+    }
+    if (pair.length > 1) {
+      // miolo do cruzamento marcado como caixa de junção: zebra amarela e preta nas quatro bocas
+      hz ??= hazardTexture();
+      const zebraMat = new THREE.MeshStandardMaterial({ map: hz, roughness: 0.6, polygonOffset: true, polygonOffsetFactor: -2 });
+      zebraMat.map = hz.clone();
+      zebraMat.map.needsUpdate = true;
+      zebraMat.map.repeat.set((W * 2) / 2.4, 1);
+      for (const q of pair)
+        for (const s of [L / 2 - W + 0.35, L / 2 + W - 0.35]) {
+          const z = new THREE.Mesh(new THREE.PlaneGeometry(W * 2, 0.7).rotateX(-Math.PI / 2), zebraMat);
+          place(z, q, s, 0, 0.016);
+          group.add(z);
+        }
     }
     // muretas nas 4 quinas da cruz (entre a borda de uma faixa e a da outra)
     const seg = (L - W * 2) / 2;
