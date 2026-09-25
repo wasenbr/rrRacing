@@ -16,7 +16,7 @@ export const WEAPONS = {
   /** Bear Claw Mines */
   mine: { damage: 32, hop: 9, radius: 1.6, armTime: 0.6, life: 40 },
   /** KO Scatterpack: leque de minas pequenas atrás do carro */
-  scatter: { count: 5, spread: 2.4, damage: 13, hop: 6, radius: 1.1, armTime: 0.35, life: 25 },
+  scatter: { count: 4, spread: 3.2, damage: 12, hop: 6, radius: 1.1, armTime: 0.35, life: 25 },
   // óleo (BF's Slipsauce): mancha pequena e desviável; dura 45 s (dá para cair no próprio óleo na
   // volta seguinte) e cada carro tem no máximo OIL_PER_CAR manchas. Esteiras e aerodeslizador giram metade.
   oil: { radius: 1.35, life: 45, spinTime: 0.8, minSpeed: 12 },
@@ -133,6 +133,10 @@ export interface Hazard {
   y: number;
   z: number;
   age: number;
+  /** KO Scatterpack: leque de origem (id da primeira mina); só uma mina do leque acerta cada carro */
+  group?: number;
+  /** máscara de bits (1 << id) dos carros que já levaram uma mina deste leque (as irmãs os ignoram) */
+  spared?: number;
 }
 
 export interface Pickup {
@@ -298,7 +302,7 @@ function updatePlaces(world: World): void {
 }
 
 function damage(world: World, target: Racer, by: number, amount: number, bountyOk = true): void {
-  if (!target.alive || target.invuln > 0) return;
+  if (!target.alive || target.invuln > 0 || target.finishPlace) return;
   target.armor -= target.ai ? amount : amount * DIFFICULTY[world.difficulty].damageToHuman;
   if (target.armor <= 0) {
     target.armor = 0;
@@ -369,12 +373,13 @@ function drop(world: World, r: Racer): void {
   const back = (kind === 'oil' ? 6 : 3.2) * CAR_SCALE;
   const fx = forwardX(car.heading);
   const fz = forwardZ(car.heading);
+  const group = world.nextId;
   const put = (lat: number, extra: number) => {
     const x = car.x - fx * (back + extra) + leftX(car.heading) * lat;
     const z = car.z - fz * (back + extra) + leftZ(car.heading) * lat;
     const q = world.track.query(x, z, car.pieceIndex);
     if (Math.abs(q.lateral) > world.track.halfWidth - 0.3) return;
-    world.hazards.push({ id: world.nextId++, kind, owner: r.id, x, y: q.height, z, age: 0 });
+    world.hazards.push({ id: world.nextId++, kind, owner: r.id, x, y: q.height, z, age: 0, ...(kind === 'scatter' ? { group, spared: 0 } : {}) });
   };
   if (kind === 'scatter') {
     // leque de minas pequenas cobrindo a pista atrás do carro
@@ -404,7 +409,7 @@ function stepProjectiles(world: World, dt: number): void {
       let best: Racer | null = null;
       let bestD = p.kind === 'missile' ? 45 : 60;
       for (const r of world.racers) {
-        if (r.id === p.owner || !r.alive) continue;
+        if (r.id === p.owner || !r.alive || r.finishPlace) continue;
         const dx = r.car.x - p.x;
         const dz = r.car.z - p.z;
         const d = Math.hypot(dx, dz);
@@ -434,7 +439,7 @@ function stepProjectiles(world: World, dt: number): void {
     }
     if (!dead) {
       for (const r of world.racers) {
-        if (r.id === p.owner || !r.alive) continue;
+        if (r.id === p.owner || !r.alive || r.finishPlace) continue;
         if (Math.hypot(r.car.x - p.x, r.car.z - p.z) < CAR_RADIUS + 0.5 && Math.abs(r.car.y + 0.7 - p.y) < 1.8) {
           const w = WEAPONS[p.kind];
           if (r.invuln <= 0) {
@@ -467,7 +472,7 @@ function stepHazards(world: World, dt: number): void {
       if (h.age > w.life) dead = true;
       else if (h.age > w.armTime) {
         for (const r of world.racers) {
-          if (!r.alive || !r.car.grounded) continue;
+          if (!r.alive || !r.car.grounded || r.finishPlace || ((h.spared ?? 0) & (1 << r.id)) !== 0) continue;
           if (Math.hypot(r.car.x - h.x, r.car.z - h.z) < w.radius) {
             if (r.invuln <= 0) {
               r.car.grounded = false;
@@ -477,6 +482,8 @@ function stepHazards(world: World, dt: number): void {
             }
             world.events.push({ type: 'hit', target: r.id, by: h.owner, kind: h.kind, x: h.x, y: h.y, z: h.z });
             damage(world, r, h.owner, w.damage, h.kind !== 'mine');
+            // passar pelo leque custa uma mina só: as irmãs deixam este carro passar (avaliadores, rodada 9)
+            if (h.group !== undefined) for (const o of world.hazards) if (o.group === h.group && o !== h) o.spared = (o.spared ?? 0) | (1 << r.id);
             dead = true;
             break;
           }
@@ -485,7 +492,7 @@ function stepHazards(world: World, dt: number): void {
     } else if (h.kind === 'slime' || h.kind === 'puddle' || h.kind === 'snow' || h.kind === 'lava') {
       const w = WEAPONS[h.kind];
       for (const r of world.racers) {
-        if (!r.alive || !r.car.grounded) continue;
+        if (!r.alive || !r.car.grounded || r.finishPlace) continue;
         // o aerodeslizador ignora poças que só fazem derrapar
         if (h.kind === 'puddle' && r.spec.traction === 'hover') continue;
         if (Math.hypot(r.car.x - h.x, r.car.z - h.z) < w.radius) {
@@ -503,7 +510,7 @@ function stepHazards(world: World, dt: number): void {
       if (h.age > WEAPONS.oil.life) dead = true;
       else {
         for (const r of world.racers) {
-          if (!r.alive || !r.car.grounded || r.spinTime > 0 || r.oilGrace > 0 || (r.id === h.owner && h.age < 1.5)) continue;
+          if (!r.alive || r.finishPlace || !r.car.grounded || r.spinTime > 0 || r.oilGrace > 0 || (r.id === h.owner && h.age < 1.5)) continue;
           if (h.age < 0.25) continue; // a mancha ainda está se espalhando
           if (Math.hypot(r.car.x - h.x, r.car.z - h.z) < WEAPONS.oil.radius && forwardSpeed(r.car) > WEAPONS.oil.minSpeed) {
             // esteiras e aerodeslizador resistem ao óleo (giram metade), mas não são imunes: todos competitivos
@@ -531,7 +538,7 @@ function stepPickups(world: World, dt: number): void {
       continue;
     }
     for (const r of world.racers) {
-      if (!r.alive) continue;
+      if (!r.alive || r.finishPlace) continue;
       if (Math.hypot(r.car.x - p.x, r.car.z - p.z) < 1.9 && Math.abs(r.car.y - p.y) < 2) {
         if (p.kind === 'money') r.money += scaledMoney(world, PICKUP_MONEY);
         else r.armor = Math.min(r.spec.armor, r.armor + PICKUP_ARMOR);
@@ -551,7 +558,7 @@ function collideCars(world: World): void {
     for (let j = i + 1; j < rs.length; j++) {
       const a = rs[i];
       const b = rs[j];
-      if (!a.alive || !b.alive) continue;
+      if (!a.alive || !b.alive || a.finishPlace || b.finishPlace) continue;
       const dx = b.car.x - a.car.x;
       const dz = b.car.z - a.car.z;
       const d = Math.hypot(dx, dz);
@@ -592,6 +599,41 @@ function collideCars(world: World): void {
     }
 }
 
+/** Depois da chegada: para a 30 m da linha (+8 m por colocação), na beira da pista, lados alternados. */
+const PARK_BASE = 30;
+const PARK_GAP = 8;
+const PARK_EDGE = 1.6;
+
+/**
+ * Quem cruzou a chegada sai do traçado: esterça para a beira (1º à esquerda, 2º à direita, ...) e
+ * freia para parar a uma distância que cresce com a colocação, sem amontoar logo depois da linha.
+ * Nunca engata ré; `hold` = já parou (o chamador segura o carro no lugar, até em rampa).
+ */
+function parkInput(world: World, r: Racer): { input: ControlInput; hold: boolean } {
+  const track = world.track;
+  const car = r.car;
+  const speed = forwardSpeed(car);
+  const q = track.query(car.x, car.z, car.pieceIndex);
+  const T = track.totalLength;
+  const d = q.dist > T / 2 ? q.dist - T : q.dist;
+  const rem = PARK_BASE + (r.finishPlace - 1) * PARK_GAP - d;
+  const input = emptyInput();
+  if (rem <= 0.5 || (speed < 1 && rem < 3)) {
+    if (speed > 1) input.brake = 1;
+    return { input, hold: speed <= 1 };
+  }
+  const lane = (r.finishPlace % 2 === 1 ? 1 : -1) * (track.halfWidth - PARK_EDGE);
+  const look = 7 + Math.max(0, speed) * 0.35;
+  const p = track.pointAtDist(q.dist + look);
+  const want = Math.atan2(p.x + Math.cos(p.heading) * lane - car.x, p.z - Math.sin(p.heading) * lane - car.z);
+  input.steer = clamp(-wrapAngle(want - car.heading) * 2.6, -1, 1);
+  // velocidade que ainda dá para parar no ponto com uma freada firme (20 m/s²)
+  const desired = Math.sqrt(2 * 20 * rem);
+  if (speed > desired) input.brake = clamp((speed - desired) / 4, 0.3, 1);
+  else if (speed < Math.min(desired, 12) - 2) input.throttle = 0.5;
+  return { input, hold: false };
+}
+
 /**
  * Avança o mundo um passo fixo. `humanInputs[id]` traz os comandos dos jogadores humanos;
  * os demais são decididos pela IA. Tudo determinístico (mesma semente + mesmos comandos = mesma corrida).
@@ -612,8 +654,10 @@ export function stepWorld(world: World, humanInputs: Record<number, ControlInput
     }
 
     let input: ControlInput;
+    let hold = false;
     if (!world.started) input = emptyInput();
-    else if (r.progress.finished && !r.ai) input = { ...emptyInput(), brake: 0.3 };
+    // como no original: quem cruzou a linha de chegada freia até parar e sai da disputa
+    else if (r.finishPlace) ({ input, hold } = parkInput(world, r));
     else if (r.ai) input = computeAiInput(world, r, dt);
     else input = humanInputs[r.id] ?? emptyInput();
 
@@ -630,7 +674,18 @@ export function stepWorld(world: World, humanInputs: Record<number, ControlInput
       input = { ...input, throttle: 0, steer: 0, nitro: false };
     }
     r.lastInput = input;
+    const px = r.car.x;
+    const pz = r.car.z;
+    const ph = r.car.heading;
     stepVehicle(r.car, spec, input, world.track, dt);
+    if (hold) {
+      // estacionado: não desliza nem recua em rampa
+      r.car.x = px;
+      r.car.z = pz;
+      r.car.heading = ph;
+      r.car.vx = 0;
+      r.car.vz = 0;
+    }
     if (r.car.assistFired) world.events.push({ type: 'assist', racer: r.id, kind: r.spec.assist });
     if (r.car.fell) {
       // caiu por cima da mureta: some e reaparece na pista (sem dano, só perde tempo)

@@ -4,7 +4,7 @@ import { carThumbnail, itemThumbnail, SHOWROOM_COLOR, type CarThumbStyle, type S
 import { planetThumbnail } from '../render/planetThumbs';
 import type { ThemeId } from '../sim/track';
 import {
-  bossBonus, CAMPAIGN_RULES, canAdvanceEarly, carsForSale, DIVISIONS, planetCount, planetForLevel, PLANETS, POINTS, raceKind, rulesOf, seasonInfo, shopLevel, START_MONEY,
+  bossBonus, CAMPAIGN_RULES, canAdvanceEarly, carComingSoon, carsForSale, forfeitCosts, DIVISIONS, planetCount, planetForLevel, PLANETS, POINTS, raceKind, rulesOf, seasonInfo, shopLevel, START_MONEY,
   type CampaignState, type OpponentSetup, type PlanetDef, type RaceKind, type RaceOutcome, RIVALS, CHAMPION_BONUS, seasonSchedule,
 } from '../sim/campaign';
 import {
@@ -19,7 +19,7 @@ import { VEHICLES } from '../data/vehicles';
 import { DIFFICULTIES, DIFFICULTY_LABEL, type Difficulty } from '../sim/world';
 import type { SlotInfo } from '../core/storage';
 import { formatTime } from './hud';
-import { setTiltSteering, tiltSteeringEnabled, tiltSupported } from '../input/controls';
+import { isTouchDevice, setTiltSteering, tiltSteeringEnabled, tiltSupported } from '../input/controls';
 import { portraitSvg, warmPortraits } from './portraits';
 import { trackThumbnail } from './trackThumb';
 import { icon, iconizeHtml } from './icons';
@@ -374,6 +374,22 @@ function planetRoute(current: number, champion = false, count = PLANETS.length):
     const st = champion || i < current ? 'done' : i === current ? 'now' : 'next';
     return `<div class="pr-step ${st}" title="${esc(p.name)}">${planetImg(p.theme, i === current && !champion ? 72 : 48)}<small>${esc(p.name)}</small></div>`;
   }).join('<i class="pr-link"></i>')}</div>`;
+}
+
+/** Troféu da galáxia desenhado em SVG (taça dourada com estrela). `id` separa os gradientes na página. */
+function trophySvg(id: string): string {
+  const g = `trophy-${id}`;
+  return `<svg class="trophy-svg" viewBox="0 0 120 140" aria-hidden="true">
+    <defs><linearGradient id="${g}" x1="0" x2="1"><stop offset="0" stop-color="#8a5a00"/><stop offset=".35" stop-color="#ffe27a"/><stop offset=".6" stop-color="#f2b418"/><stop offset="1" stop-color="#7a4a00"/></linearGradient></defs>
+    <path d="M30 22H15c0 19 8 29 20 31M90 22h15c0 19-8 29-20 31" fill="none" stroke="url(#${g})" stroke-width="7" stroke-linecap="round"/>
+    <path d="M28 12h64v28c0 23-14 39-32 39S28 63 28 40z" fill="url(#${g})" stroke="#5a3600" stroke-width="2"/>
+    <path d="M36 16h8v24c0 12 4 22 10 28-12-4-18-16-18-28z" fill="#fff6c8" opacity=".45"/>
+    <path d="M60 25l4.7 9.5 10.5 1.5-7.6 7.4 1.8 10.4-9.4-4.9-9.4 4.9 1.8-10.4-7.6-7.4 10.5-1.5z" fill="#fff6c8" stroke="#8a5a00" stroke-width="1"/>
+    <rect x="53" y="78" width="14" height="18" fill="url(#${g})" stroke="#5a3600" stroke-width="1.5"/>
+    <path d="M38 96h44l7 14H31z" fill="url(#${g})" stroke="#5a3600" stroke-width="2"/>
+    <rect x="25" y="110" width="70" height="18" rx="3" fill="#2a1a3a" stroke="#f2c318" stroke-width="2"/>
+    <text x="60" y="123.5" text-anchor="middle" font-size="9" font-weight="700" fill="#f2c318" letter-spacing="1">GALÁXIA</text>
+  </svg>`;
 }
 
 /** Pistas conhecidas pela chave `track|id|w|h` (para gerar a miniatura na fila). */
@@ -938,7 +954,7 @@ export class Menus {
     const line = WARP_LINES[n % WARP_LINES.length].replace('{planet}', w.to.name).replace('{boss}', w.to.local);
     this.show(`
       <div class="warp">
-        <div class="warp-stars"></div><div class="warp-stars far"></div>
+        <div class="warp-stars"></div><div class="warp-stars far"></div><div class="warp-streaks"></div><div class="warp-flash"></div>
         <div class="warp-stage">
           <div class="warp-from">${planetImg(w.from.theme, 176)}<span class="warp-check">✓</span><small>${esc(w.from.name)}</small></div>
           <div class="warp-path"><i class="warp-trail"></i><span class="warp-ship">${carImg(w.vehicleId, w.color, 96, 'transparent')}</span></div>
@@ -1043,7 +1059,7 @@ export class Menus {
       const myName = d.vehicles[s.car.vehicleId]?.name ?? s.car.vehicleId;
       body =
         `<p class="small-note">Na troca, a loja fica com o seu ${esc(myName)} e paga <b>${money(trade)}</b> de revenda ` +
-        `(metade do preço do carro${spent ? ` + 1/4 dos ${money(spent)} gastos em peças` : ''}). As peças e as cargas extras vão junto com ele: o carro novo sai de fábrica.</p>` +
+        `(30% do preço do carro${spent ? ` + 1/4 dos ${money(spent)} gastos em peças` : ''}). As peças e as cargas extras vão junto com ele: o carro novo sai de fábrica.</p>` +
         `<div class="shop-cars">${this.allCars
           .map((v) => {
             const mine = v.id === s.car.vehicleId;
@@ -1053,7 +1069,7 @@ export class Menus {
             const action = mine
               ? '<span class="maxed">SEU CARRO</span>'
               : !forSale
-                ? `<span class="maxed">${icon('lock')} NÃO VENDIDO NESTE PLANETA</span>`
+                ? `<span class="maxed">${icon('lock')} ${carComingSoon(s, v.id) ? esc(carComingSoon(s, v.id).toUpperCase()) : 'NÃO VENDIDO NESTE PLANETA'}</span>`
                 : `<button class="buy" data-buycar="${v.id}" data-buyinfo="${esc(`${netText}?`)}" ${net > s.money ? 'disabled' : ''}>${net > 0 ? money(net) : net < 0 ? `+${money(-net)}` : 'TROCAR'}</button>`;
             const priceLine = mine || !forSale ? `Preço: ${money(CAR_PRICES[v.id].price)}` : `Preço ${money(CAR_PRICES[v.id].price)} − revenda ${money(trade)} · ${netText}`;
             return `<div class="shop-carcard ${mine ? 'mine' : ''} ${forSale || mine ? '' : 'locked'}"><div class="car">${this.carCard(v, mine ? s.color : SHOWROOM_COLOR[v.id] ?? s.color, `<small>${priceLine}</small>`)}</div>${action}</div>`;
@@ -1224,32 +1240,108 @@ export class Menus {
   /* ---------------- pausa e resultado ---------------- */
 
   showPause(online = false): void {
+    // campanha (fora do Fácil): sair ou reiniciar no meio conta como último lugar (e gasta o duelo)
+    const st = this.inCampaign ? this.lastHub?.state : undefined;
+    const costs = !online && !!st && forfeitCosts(st);
+    const duel = costs && raceKind(st!) !== 'normal';
+    const quitLabel = online ? 'Sair da sala' : costs ? 'Desistir (conta como último)' : this.inCampaign ? 'Sair da corrida (não conta)' : 'Sair da corrida';
     this.show(`
       <div class="card small pause">
         <h2>${online ? 'MENU' : 'PAUSADO'}</h2>
         ${online ? '<p class="small-note center">No online a corrida não para.</p>' : ''}
         <button class="go" data-act="resume">Continuar</button>
-        ${online ? '' : '<button data-act="restart">Reiniciar corrida</button>'}
+        ${online ? '' : `<button data-act="restart"${costs ? ' data-forfeit="1"' : ''}>${costs ? 'Reiniciar (conta como último)' : 'Reiniciar corrida'}</button>`}
         <button data-act="settings">${icon('gear')} Som e opções</button>
         ${this.fsButtonHtml()}
-        <button class="quit" data-act="${online ? 'online-leave' : 'quit'}">${icon('eject')} ${online ? 'Sair da sala' : this.inCampaign ? 'Sair da corrida (não conta)' : 'Sair da corrida'}</button>
+        <button class="quit" data-act="${online ? 'online-leave' : 'quit'}"${costs ? ' data-forfeit="1"' : ''}>${icon('eject')} ${quitLabel}</button>
+        ${costs ? `<p class="small-note center">Desistir vale como último lugar: 0 pontos e sem o dinheiro da corrida${duel ? ', e gasta esta tentativa do duelo' : ''}.</p>` : ''}
       </div>`);
   }
 
-  /** Tela de campeão da galáxia: rota completa, estatísticas da campanha, fala do locutor e recompensa. */
+  /**
+   * Final da campanha (item 58): palco escuro com holofotes, o troféu desce, o carro do jogador sobe no
+   * pódio, fogos e confete, a rota dos planetas acende um a um, o título entra com impacto, fala do
+   * Loudmouth Larry e os créditos rolam. Tudo em CSS (as capturas congelam as animações em tempos
+   * fixos). Um toque pula para o resumo; no fim dos créditos o resumo entra sozinho. Com
+   * `prefers-reduced-motion` fica o quadro final parado (sem fogos nem confete), à espera do toque.
+   */
   showChampion(d: HubData): void {
+    this.lastHub = d;
+    const s = d.state;
+    const count = planetCount(s);
+    const diff = s.difficulty ?? 'normal';
+    const light = isTouchDevice(); // celular: menos partículas
+    const route = PLANETS.slice(0, count)
+      .map((p, i) => `<div class="fin-pl" style="--i:${i}">${planetImg(p.theme, 64)}<small>${esc(p.name)}</small></div>`)
+      .join('<i class="fin-link"></i>');
+    // posições "aleatórias" fixas (as capturas saem iguais a cada rodada)
+    const rnd = (i: number, k: number) => {
+      const x = Math.sin(i * 127.1 + k * 311.7) * 43758.5453;
+      return x - Math.floor(x);
+    };
+    const FW_COLORS = ['#ffd84a', '#ff5a3a', '#5ad8ff', '#b46bff', '#6bff8a', '#ffffff'];
+    const fireworks = Array.from({ length: light ? 3 : 6 }, (_, i) => {
+      const sparks = Array.from({ length: light ? 10 : 14 }, (_, k) => `<i style="--a:${Math.round((360 / (light ? 10 : 14)) * k)}deg"></i>`).join('');
+      return `<div class="fw" style="--x:${Math.round(10 + rnd(i, 1) * 80)}%;--y:${Math.round(8 + rnd(i, 2) * 34)}%;--d:${(1 + i * 0.55).toFixed(2)}s;--c:${FW_COLORS[i % FW_COLORS.length]}">${sparks}</div>`;
+    }).join('');
+    const confetti = Array.from({ length: light ? 18 : 42 }, (_, i) =>
+      `<i style="--x:${(rnd(i, 3) * 100).toFixed(1)}%;--d:${(0.8 + rnd(i, 4) * 4).toFixed(2)}s;--t:${(3.2 + rnd(i, 5) * 2.4).toFixed(2)}s;--r:${Math.round(rnd(i, 6) * 720 - 360)}deg;--c:${FW_COLORS[i % FW_COLORS.length]}"></i>`,
+    ).join('');
+    const bosses = PLANETS.slice(0, count).map((p) => p.local);
+    const credits = [
+      ['CAMPEÃO DA GALÁXIA', esc(d.character.name)],
+      ['CARRO', esc(d.vehicles[s.car.vehicleId]?.name ?? s.car.vehicleId)],
+      ['DIFICULDADE', esc(DIFFICULTY_LABEL[diff])],
+      ['CHEFES DERROTADOS', bosses.map(esc).join('<br>')],
+      ['SEMPRE NA SUA COLA', 'Rip e Shred'],
+      ['NARRAÇÃO', 'Loudmouth Larry'],
+      ['CORRIDAS', `${s.stats.races} corridas · ${s.stats.wins} vitórias · ${s.stats.kills} abates`],
+      ['HOMENAGEM', 'Rock n’ Roll Racing (1993)'],
+      ['', 'Obrigado por jogar!'],
+    ]
+      .map(([h, v]) => `<div class="fin-cr">${h ? `<small>${h}</small>` : ''}<b>${v}</b></div>`)
+      .join('');
+    this.show(`
+      <div class="finale" role="dialog" aria-label="Campeão da galáxia">
+        <div class="fin-beams"><i></i><i></i></div>
+        <div class="fin-fireworks">${fireworks}</div>
+        <div class="fin-confetti">${confetti}</div>
+        <div class="fin-title"><small>${esc(DIFFICULTY_LABEL[diff].toUpperCase())} · ${count} PLANETAS</small><h2>CAMPEÃO DA GALÁXIA!</h2></div>
+        <div class="fin-stage">
+          <div class="fin-trophy">${trophySvg('fin')}</div>
+          <div class="fin-podium">
+            <div class="fin-car">${carImg(s.car.vehicleId, s.color, 320, 'transparent')}</div>
+            <div class="fin-block"><span>1</span></div>
+          </div>
+          <div class="fin-pilot">${portraitSvg(d.character.id, 96)}<b>${esc(d.character.name)}</b><small>${esc(d.character.homeworld)}</small></div>
+        </div>
+        <div class="fin-route">${route}</div>
+        <p class="fin-larry"><b>Loudmouth Larry:</b> “${esc(d.character.name)} passou por ${esc(planetList(count))} e não sobrou ninguém de pé! Temos um novo campeão — e que venha o rock!”</p>
+        <div class="fin-credits"><div class="fin-roll">${credits}</div></div>
+        <p class="fin-hint">Toque para pular</p>
+      </div>`);
+    const roll = this.el.querySelector<HTMLElement>('.fin-roll');
+    const reduced = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    // fim dos créditos: o resumo entra sozinho (parado de propósito com movimento reduzido)
+    if (roll && !reduced) roll.addEventListener('animationend', () => {
+      if (this.el.contains(roll)) this.showChampionSummary(d);
+    });
+  }
+
+  /** Resumo do título: estatísticas, recompensa e o que fazer agora (garagem ou nova campanha mais difícil). */
+  private showChampionSummary(d: HubData): void {
     this.lastHub = d;
     const s = d.state;
     const st = s.stats;
     const winPct = st.races ? Math.round((st.wins / st.races) * 100) : 0;
     const diff = s.difficulty ?? 'normal';
+    const next = DIFFICULTIES[Math.min(DIFFICULTIES.indexOf(diff) + 1, DIFFICULTIES.length - 1)];
     const stat = (label: string, value: string) => `<div><small>${label}</small><b>${value}</b></div>`;
     this.show(`
       <div class="card wide champion-card">
-        <h2>${icon('trophy')} CAMPEÃO DA GALÁXIA!</h2>
+        <div class="champ-head">${trophySvg('sum')}<div><h2>CAMPEÃO DA GALÁXIA!</h2><small>${esc(DIFFICULTY_LABEL[diff])} · ${planetCount(s)} planetas</small></div></div>
         ${planetRoute(planetCount(s), true, planetCount(s))}
         <div class="me-row">${portraitSvg(d.character.id, 96)}<div><b>${esc(d.character.name)}</b><small>${esc(d.character.homeworld)} · ${esc(DIFFICULTY_LABEL[diff])}</small></div>${carImg(s.car.vehicleId, s.color, 160, 'transparent')}</div>
-        <div class="notice champion"><b>Loudmouth Larry:</b> “${esc(d.character.name)} passou por ${esc(planetList(planetCount(s)))} e não sobrou ninguém de pé! Temos um novo campeão — e que venha o rock!”</div>
         <div class="hub-head">
           ${stat('CORRIDAS', String(st.races))}
           ${stat('VITÓRIAS', `${st.wins} (${winPct}%)`)}
@@ -1257,8 +1349,12 @@ export class Menus {
           ${stat('GANHOS', money(st.earnings))}
         </div>
         <div class="notice promoted">Recompensa: troféu da galáxia e <b class="gold">${money(CHAMPION_BONUS)}</b> de prêmio (saldo: ${money(s.money)}). A garagem continua aberta: corra em ${esc(PLANETS[planetCount(s) - 1].name)} para gastar o prêmio.</div>
-        <button class="go" data-act="hub">Voltar à garagem ${icon('arrowRight')}</button>
-        <button data-act="main">Menu principal</button>
+        <button class="go" data-act="champion-next" data-diff-next="${next}">${diff === next ? 'Nova campanha no' : 'Próximo desafio: campanha no'} ${esc(DIFFICULTY_LABEL[next])} ${icon('arrowRight')}</button>
+        <div class="row-buttons">
+          <button data-act="hub">Voltar à garagem</button>
+          <button data-act="champion-replay">${icon('trophy')} Rever o final</button>
+          <button data-act="main">Menu principal</button>
+        </div>
       </div>`);
   }
 
@@ -1355,6 +1451,11 @@ export class Menus {
   }
 
   private onClick(e: Event): void {
+    // final da campanha: um toque pula para o resumo
+    if ((e.target as HTMLElement).closest('.finale') && this.lastHub) {
+      this.showChampionSummary(this.lastHub);
+      return;
+    }
     // viagem entre planetas: o 1º toque fora do botão adianta a animação para o fim; o 2º continua
     const warp = (e.target as HTMLElement).closest('.warp');
     if (warp && !(e.target as HTMLElement).closest('button')) {
@@ -1515,13 +1616,24 @@ export class Menus {
       case 'resume':
         return this.actions.resume();
       case 'restart':
+        if (d.forfeit && !this.confirmClick(t, 'Conta como último. Reiniciar?')) return;
         return this.actions.restart();
       case 'quit':
+        if (d.forfeit && !this.confirmClick(t, 'Conta como último. Desistir?')) return;
         return this.actions.quit();
       case 'results-continue':
         return this.actions.resultsContinue();
       case 'warp-done':
         return this.actions.warpDone();
+      case 'champion-replay':
+        if (this.lastHub) this.showChampion(this.lastHub);
+        return;
+      case 'champion-next': {
+        // nova campanha na próxima dificuldade, com o mesmo piloto e a mesma cor já escolhidos
+        const st = this.lastHub?.state;
+        if (st) this.newChar = { ...this.newChar, characterId: st.characterId, color: st.color, difficulty: (d.diffNext as Difficulty) ?? 'hard' };
+        return this.showNewCampaign();
+      }
       case 'settings':
         return this.actions.openSettings();
       case 'close-settings':

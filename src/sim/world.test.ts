@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { TRACKS } from '../data/tracks';
 import { VEHICLES } from '../data/vehicles';
+import { computeAiInput } from './ai';
 import { newCampaign, opponentsFor } from './campaign';
 import { emptyInput } from './input';
 import { Track } from './track';
@@ -24,6 +25,129 @@ describe('mundo da corrida', () => {
     // o vencedor leva o prêmio
     const winner = world.racers.find((r) => r.finishPlace === 1)!;
     expect(winner.money).toBeGreaterThanOrEqual(20000);
+  });
+
+  it('quem cruza a chegada para, não recua e fica fora da disputa (como no original)', () => {
+    const world = createWorld(track, aiEntries(), 1, 42);
+    world.started = true;
+    for (let i = 0; i < 60 * 240 && world.finishedCount < 1; i++) stepWorld(world, {}, DT);
+    const done = world.racers.find((r) => r.finishPlace === 1)!;
+    expect(done).toBeDefined();
+    for (let i = 0; i < 60 * 6; i++) stepWorld(world, {}, DT);
+    expect(Math.hypot(done.car.vx, done.car.vz)).toBeLessThan(0.3);
+    // parado: nem dano nem empurrão de quem passa
+    const armor = done.armor;
+    const other = world.racers.find((r) => r !== done)!;
+    other.car.x = done.car.x;
+    other.car.z = done.car.z;
+    const x = done.car.x;
+    stepWorld(world, {}, DT);
+    expect(done.car.x).toBeCloseTo(x, 3);
+    expect(done.armor).toBe(armor);
+  });
+
+  it('quem termina estaciona na beira da pista, sem sobrepor o outro terminado', () => {
+    const world = createWorld(track, aiEntries(), 1, 42);
+    world.started = true;
+    for (let i = 0; i < 60 * 240 && world.finishedCount < 2; i++) stepWorld(world, {}, DT);
+    expect(world.finishedCount).toBeGreaterThanOrEqual(2);
+    for (let i = 0; i < 60 * 8; i++) stepWorld(world, {}, DT);
+    const [a, b] = [1, 2].map((p) => world.racers.find((r) => r.finishPlace === p)!);
+    for (const r of [a, b]) {
+      expect(Math.hypot(r.car.vx, r.car.vz)).toBeLessThan(0.3);
+      expect(Math.abs(track.query(r.car.x, r.car.z, r.car.pieceIndex).lateral)).toBeGreaterThan(2.5);
+    }
+    expect(Math.hypot(a.car.x - b.car.x, a.car.z - b.car.z)).toBeGreaterThan(4);
+  });
+
+  it('terminado parado numa rampa não recua', () => {
+    const ramp = new Track({ id: 'rampa', name: 'rampa', planet: 'x', theme: 'chem6', laps: 1, layout: 'F U S S S R S S S S S S S R S S D S S S S R S S S S S S S R' });
+    const world = createWorld(ramp, [{ name: 'A', color: 0, spec: VEHICLES.marauder, ai: null }], 1, 1);
+    world.started = true;
+    const r = world.racers[0];
+    const p = ramp.pointAtDist(27);
+    Object.assign(r.car, { x: p.x, z: p.z, y: p.h, heading: p.heading, pieceIndex: p.pieceIndex, vx: Math.sin(p.heading) * 3, vz: Math.cos(p.heading) * 3 });
+    r.finishPlace = 1;
+    r.progress.finished = true;
+    world.finishedCount = 1;
+    let last = 27;
+    for (let i = 0; i < 60 * 6; i++) {
+      stepWorld(world, {}, DT);
+      const d = ramp.query(r.car.x, r.car.z, r.car.pieceIndex).dist;
+      expect(d).toBeGreaterThanOrEqual(last - 1e-6);
+      last = d;
+    }
+    const x = r.car.x;
+    const z = r.car.z;
+    for (let i = 0; i < 60 * 3; i++) stepWorld(world, {}, DT);
+    expect(Math.hypot(r.car.x - x, r.car.z - z)).toBeLessThan(1e-6);
+  });
+
+  it('quem terminou não é alvo: míssil, sundog, óleo e elástico da CPU o ignoram', () => {
+    const entries: RacerEntry[] = [
+      { name: 'Alvo', color: 0, spec: VEHICLES.marauder, ai: null },
+      { name: 'Atirador', color: 0, spec: VEHICLES.havac, ai: null },
+    ];
+    const world = createWorld(track, entries, 4, 1);
+    const [target, shooter] = world.racers;
+    target.finishPlace = 1;
+    const fx = Math.sin(target.car.heading), fz = Math.cos(target.car.heading);
+    // sundog atrás, apontado de viés: com alvo válido ele curvaria para o carro
+    world.projectiles.push({ id: 90, kind: 'sundog', owner: 1, x: target.car.x - fx * 10, y: target.car.y + 1, z: target.car.z - fz * 10, heading: target.car.heading + 0.4, speed: 42, life: 2, pieceIndex: target.car.pieceIndex });
+    world.hazards.push({ id: 98, kind: 'oil', owner: 1, x: target.car.x, y: target.car.y, z: target.car.z, age: 5 });
+    target.car.vx = fx * 20;
+    target.car.vz = fz * 20;
+    world.started = true;
+    const h0 = world.projectiles[0].heading;
+    stepWorld(world, {}, DT);
+    expect(world.projectiles.length).toBe(1);
+    expect(world.projectiles[0].heading).toBeCloseTo(h0, 6);
+    expect(target.spinTime).toBe(0);
+    expect(shooter.armor).toBe(shooter.spec.armor);
+  });
+
+  it('elástico da CPU ignora o humano que já terminou', () => {
+    const reta = new Track({ id: 'reta', name: 'reta', planet: 'x', theme: 'chem6', laps: 1, layout: 'F ' + 'S '.repeat(20) + 'R S S S R ' + 'S '.repeat(20) + 'R S S S R' });
+    const throttleWith = (humanFinished: boolean) => {
+      const entries: RacerEntry[] = [
+        { name: 'P', color: 0, spec: VEHICLES.marauder, ai: null },
+        { name: 'C', color: 0, spec: VEHICLES.marauder, ai: { skill: 0.5, aggression: 0, lane: 0 } },
+      ];
+      const world = createWorld(reta, entries, 1, 1);
+      world.started = true;
+      const [human, cpu] = world.racers;
+      // humano uma volta à frente (elástico acelera a CPU enquanto ele corre)
+      human.progress.lap = 2;
+      if (humanFinished) {
+        human.finishPlace = 1;
+        world.finishedCount = 1;
+      }
+      const p = reta.pointAtDist(100);
+      const sp = cpu.spec.maxSpeed * (0.72 + 0.5 * 0.28) * 1.02; // acima do alvo normal, abaixo do alvo com elástico
+      Object.assign(cpu.car, { x: p.x, z: p.z, heading: p.heading, pieceIndex: p.pieceIndex, vx: Math.sin(p.heading) * sp, vz: Math.cos(p.heading) * sp });
+      cpu.progress.lastDist = 100;
+      cpu.aiState.thinkTimer = 1;
+      return computeAiInput(world, cpu, DT).throttle;
+    };
+    expect(throttleWith(false)).toBe(1);
+    expect(throttleWith(true)).toBe(0);
+  });
+
+  it('scatterpack: só uma mina do leque acerta cada carro', () => {
+    const entries: RacerEntry[] = [
+      { name: 'A', color: 0, spec: VEHICLES.marauder, ai: null },
+      { name: 'B', color: 0, spec: VEHICLES.havac, ai: null },
+    ];
+    const world = createWorld(track, entries, 4, 1);
+    const target = world.racers[0];
+    for (let i = 0; i < 3; i++) world.hazards.push({ id: 90 + i, kind: 'scatter', owner: 1, x: target.car.x, y: target.car.y, z: target.car.z, age: 10, group: 90, spared: 0 });
+    world.started = true;
+    stepWorld(world, {}, DT);
+    target.car.grounded = true;
+    target.invuln = 0;
+    stepWorld(world, {}, DT);
+    expect(target.spec.armor - target.armor).toBeCloseTo(WEAPONS.scatter.damage, 6);
+    expect(world.hazards.filter((h) => h.kind === 'scatter').length).toBe(2);
   });
 
   for (const def of TRACKS) {

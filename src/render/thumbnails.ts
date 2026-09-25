@@ -644,6 +644,14 @@ export function itemThumbnail(item: ShopItem, size = 96): Promise<string> {
 export function disposeThumbnails(): void {
   for (const p of cache.values()) void p.then((u) => u.startsWith('blob:') && URL.revokeObjectURL(u));
   cache.clear();
+  releaseThumbRenderer();
+}
+
+/**
+ * Libera só o 2º contexto WebGL (e o que vive nele), mantendo as imagens prontas em cache: na
+ * corrida ele não é usado e ocupava memória de vídeo. `setup` recria tudo na próxima miniatura.
+ */
+export function releaseThumbRenderer(): void {
   envTex?.dispose();
   envTex = null;
   renderer?.dispose();

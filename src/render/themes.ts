@@ -66,8 +66,8 @@ export interface Theme {
  *   olhos vermelhos, chão preto com crateras roxas, totens de ossos.
  * - Bogmire: pista de terra marrom, cabo preto com estrelas de espinhos, paredões de raízes,
  *   oceano azul-profundo com tocos e palmeiras.
- * - New Mojave: piso verde-oliva com grade hexagonal, mureta com luzes amarelas, painéis de metal
- *   cor de areia/ferrugem com rebites, deserto laranja com crateras e ossadas.
+ * - New Mojave: piso verde-oliva com grade hexagonal, mureta com tachas amarelas, paredões de
+ *   chapa verde-oliva escura camuflada, deserto laranja de dia (céu quente) com crateras e ossadas.
  * - Nho: gelo azul-marinho em losangos com juntas escuras, mureta de gelo com pingentes, rocha escura com pilares azuis,
  *   neve branca com pinheiros e cristais.
  * - Inferno: piso cinza de escamas, mureta preta com chifres, paredes demoníacas iluminadas por
@@ -77,12 +77,12 @@ export const THEMES: Record<ThemeId, Theme> = {
   chem6: {
     skyHorizon: 0x5a3010, skyTop: 0x06040a, fog: 0x160e06, groundLevel: -8, ground: 0x8a5a0e, groundStyle: 'sludge',
     liquid: true, liquidEmissive: 0x201000,
-    road: '#1e1818', roadGrid: '#c01c14', roadGlow: 0.35, roadPattern: 'grid', roadEdge: '#e02a20', roadLine: '#e02a20',
+    road: '#1a1c22', roadGrid: '#c01c14', roadGlow: 0.35, roadPattern: 'grid', roadEdge: '#e02a20', roadLine: '#e02a20',
     skirt: 0xa8acb4, walls: 'pipes', wallAccent: 0xe02020,
     rail: ['#b8bcc4', '#e02a20'], railStyle: 'lip',
     props: [0xb0b4bc, 0x8a8e96, 0x6a6e76], glow: 0xff7a20, flames: true,
     sun: 0xfff0d8, sunIntensity: 2.9, ambientSky: 0xd8b888, ambientGround: 0x4a3410, surface: 'metal',
-    dust: '#a8987c', curb: '#d6c7a4',
+    dust: '#7c858c', curb: '#d6c7a4',
     light: { sunDir: [55, 40, -42], fill: 0xff9a50, fillIntensity: 0.5, hemi: 0.35 }, cells: 10,
   },
   drakonis: {
@@ -108,14 +108,14 @@ export const THEMES: Record<ThemeId, Theme> = {
     light: { sunDir: [58, 34, -40], fill: 0x4a8aff, fillIntensity: 0.9, hemi: 0.28 }, cells: 10,
   },
   newmojave: {
-    skyHorizon: 0x7a3a10, skyTop: 0x080408, fog: 0x241206, groundLevel: -8, ground: 0xe0801c, groundStyle: 'sand',
+    skyHorizon: 0xf2b064, skyTop: 0xb86428, fog: 0xc88444, groundLevel: -8, ground: 0xe0801c, groundStyle: 'sand',
     liquid: false, liquidEmissive: 0,
     road: '#34441a', roadGrid: '#101806', roadGlow: 0, roadPattern: 'hex', roadEdge: '#ffd21a', roadLine: '#ffd21a',
-    skirt: 0x9a7650, walls: 'riveted', wallAccent: 0xffd21a,
-    rail: ['#8a4a22', '#ffe020'], railStyle: 'bumper',
+    skirt: 0x2c3816, walls: 'riveted', wallAccent: 0xffd21a,
+    rail: ['#3a4a1c', '#ffe020'], railStyle: 'bumper',
     props: [0x9a5a2a, 0xd8d0c0, 0x6a6a70], glow: 0xffd070, flames: false,
     sun: 0xfff0d8, sunIntensity: 3.3, ambientSky: 0xffd8a8, ambientGround: 0x8a4a14, surface: 'metal',
-    dust: '#aa9a74', curb: '#dcc7a0',
+    dust: '#aa9a74', curb: '#4e5a28',
     light: { sunDir: [60, 30, -34], fill: 0x6a8aff, fillIntensity: 0.7, hemi: 0.28 }, cells: 10,
   },
   nho: {
@@ -132,12 +132,12 @@ export const THEMES: Record<ThemeId, Theme> = {
   inferno: {
     skyHorizon: 0x6a1004, skyTop: 0x060102, fog: 0x220402, groundLevel: -8, ground: 0xb81800, groundStyle: 'lava',
     liquid: true, liquidEmissive: 0xff3a00,
-    road: '#2e2e34', roadGrid: '#08080a', roadGlow: 0, roadPattern: 'scales', roadEdge: '#e02010', roadLine: '#e02010',
+    road: '#1a1414', roadGrid: '#7a1206', roadGlow: 0.25, roadPattern: 'scales', roadEdge: '#e02010', roadLine: '#e02010',
     skirt: 0x1a0606, walls: 'demonic', wallAccent: 0xff5a10,
     rail: ['#141416', '#e02010'], railStyle: 'spiked',
     props: [0x6a1a0a, 0x3a3a40, 0x8a8a90], glow: 0xff5010, flames: true,
     sun: 0xffe8d8, sunIntensity: 2.8, ambientSky: 0xd8a8a0, ambientGround: 0x6a1004, surface: 'metal',
-    dust: '#8a7e76', curb: '#cbbfae',
+    dust: '#3e302c', curb: '#cbbfae',
     light: { sunDir: [52, 32, -46], fill: 0xff3a10, fillIntensity: 1.2, hemi: 0.24 }, cells: 10,
   },
 };

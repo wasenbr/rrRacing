@@ -73,6 +73,30 @@ class Batch {
   }
 }
 
+/** Semente do cenário a partir do id da pista (FNV-1a de 32 bits): cada pista tem o seu. */
+export function scenerySeed(id: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < id.length; i++) {
+    h ^= id.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0) % 1_000_000 + 1;
+}
+
+/**
+ * Variação por pista dentro do tema: densidade (0,85 a 1,15; no celular nunca passa de 1) e um
+ * objeto dominante com peso triplicado. Assim duas pistas do mesmo planeta não têm o mesmo entorno.
+ */
+function sceneryVariant(seed: number, table: [PropKind, number][], dense: boolean): { density: number; table: [PropKind, number][] } {
+  const r = createRng(seed ^ 0x5bd1e995);
+  const density = 0.85 + r() * 0.3;
+  const lead = Math.floor(r() * table.length);
+  return {
+    density: dense ? density : Math.min(1, density),
+    table: table.map(([k, w], i) => [k, i === lead ? w * 3 : w] as [PropKind, number]),
+  };
+}
+
 /** Cenário ao redor da pista, gerado por código de acordo com o planeta. */
 export function buildScenery(track: Track, theme: Theme, themeId: ThemeId, shadows: boolean, seed = 6, dense = shadows): Scenery {
   const group = new THREE.Group();
@@ -131,11 +155,12 @@ export function buildScenery(track: Track, theme: Theme, themeId: ThemeId, shado
     return false;
   };
 
-  const table = PROPS[themeId];
+  const variant = sceneryVariant(seed, PROPS[themeId], dense);
+  const table = variant.table;
   // Drakonis e Nho tinham o entorno vazio (chão chapado): o dobro de objetos. Tudo vai para poucas
   // malhas agrupadas (Batch), e o celular (sem `dense`) ganha bem menos.
   const busy = themeId === 'drakonis' || themeId === 'nho';
-  const maxProps = Math.round((dense ? 380 : 180) * (busy ? (dense ? 2 : 1.35) : 1));
+  const maxProps = Math.round((dense ? 380 : 180) * (busy ? (dense ? 2 : 1.35) : 1) * variant.density);
   let placed = 0;
   for (let tries = 0; tries < 9000 && placed < maxProps; tries++) {
     const x = b.minX - margin + rng() * (b.maxX - b.minX + margin * 2);

@@ -48,6 +48,25 @@ function alongDelta(world: World, from: number, to: number): number {
   return d;
 }
 
+/** Distância (m) entre líder e 2º em que há disputa pela ponta (DUEL_MIN..DUEL_GAP). */
+const DUEL_GAP = 40;
+const DUEL_MIN = 4;
+const DUEL_LEADER_PACE = 0.975;
+const DUEL_CHASER_PACE = 1.03;
+
+/** Líder (da CPU) com alguém colado atrás, ou o 2º colado no líder; entre quem ainda corre. */
+function leaderDuel(world: World, r: Racer): 'leader' | 'chaser' | null {
+  const place = r.place - world.finishedCount;
+  if (place > 2 || r.finishPlace) return null;
+  const other = world.racers.find((o) => o.place === (place === 1 ? r.place + 1 : r.place - 1));
+  // só entre CPUs: a dificuldade contra o jogador continua a cargo do elástico
+  if (!other || !other.ai || other.finishPlace || !other.alive) return null;
+  const gap = Math.abs(raceDistance(world, r) - raceDistance(world, other));
+  // lado a lado (< DUEL_MIN) ninguém ganha nem perde: sem isso a ponta trocava a cada quadro
+  if (gap >= DUEL_GAP || gap < DUEL_MIN) return null;
+  return place === 1 ? 'leader' : 'chaser';
+}
+
 export function computeAiInput(world: World, r: Racer, dt: number): ControlInput {
   const track = world.track;
   const car = r.car;
@@ -110,7 +129,8 @@ export function computeAiInput(world: World, r: Racer, dt: number): ControlInput
     const range = front === 'missile' ? 45 : front === 'sundog' ? 40 : 30;
 
     for (const o of world.racers) {
-      if (o.id === r.id || !o.alive) continue;
+      // quem já terminou está parado e fantasma: não é alvo nem obstáculo
+      if (o.id === r.id || !o.alive || o.finishPlace) continue;
       const oc = trackCoords(world, o.car.x, o.car.z, o.car.pieceIndex);
       const ahead = alongDelta(world, me.dist, oc.dist);
       // desvia de quem está logo à frente, na mesma faixa (ultrapassagem pelo lado mais livre)
@@ -125,7 +145,9 @@ export function computeAiInput(world: World, r: Racer, dt: number): ControlInput
       // pilotos agressivos "fecham a porta" em quem vem colado atrás...
       if (ahead < -2 && ahead > -12) {
         threatBehind = true;
-        if (!blocked && ai.aggression > 0.55 && world.rng() < ai.aggression * 0.5) lane = lane * 0.4 + oc.lateral * 0.6;
+        // (o líder não fecha a porta para outra CPU: senão a ponta quase nunca troca de mãos)
+        const leaderVsCpu = o.ai && r.place - world.finishedCount === 1;
+        if (!blocked && !leaderVsCpu && ai.aggression > 0.55 && world.rng() < ai.aggression * 0.5) lane = lane * 0.4 + oc.lateral * 0.6;
       }
       // ...e jogam o carro em cima de quem está emparelhado
       if (Math.abs(ahead) < 3.5 && Math.abs(oc.lateral - me.lateral) < 3.6 && ai.aggression > 0.6 && world.rng() < ai.aggression * 0.6) {
@@ -178,7 +200,7 @@ export function computeAiInput(world: World, r: Racer, dt: number): ControlInput
     const straightJump = Math.abs(wrapAngle(track.pointAtDist(me.dist + flight).heading - track.pointAtDist(me.dist).heading)) < 0.12;
     const safeLane = Math.abs(me.lateral) < track.halfWidth - 2.2;
     if (r.spec.assist === 'jump') st.wantNitro = hop && straightJump && safeLane && world.rng() < 0.4 + ai.skill * 0.5;
-    else st.wantNitro = straight && speed > r.spec.maxSpeed * 0.6 && (r.place > 1 || threatBehind) && world.rng() < 0.15 + ai.skill * 0.2;
+    else st.wantNitro = straight && speed > r.spec.maxSpeed * 0.6 && (r.place > 1 || threatBehind) && world.rng() < 0.15 + ai.skill * 0.2 + (leaderDuel(world, r) === 'chaser' ? 0.3 : 0);
   }
 
   // Direção: mira num ponto à frente na faixa escolhida
@@ -197,8 +219,14 @@ export function computeAiInput(world: World, r: Racer, dt: number): ControlInput
   // no vácuo de quem vai à frente, arrisca mais para passar (corridas menos "em fila")
   if (st.behindTime > 2) targetSpeed *= 1.06;
 
-  // "Elástico" leve em relação ao humano mais adiantado, para a corrida ficar disputada
-  const humans = world.racers.filter((o) => !o.ai);
+  // Disputa pela ponta (avaliadores, rodada 9: pouca troca de liderança): com o 2º colado (< DUEL_GAP),
+  // o líder da CPU alivia um pouco o ritmo e o 2º arrisca mais (velocidade e turbo)
+  const duel = leaderDuel(world, r);
+  if (duel === 'leader') targetSpeed *= DUEL_LEADER_PACE;
+  else if (duel === 'chaser') targetSpeed *= DUEL_CHASER_PACE;
+
+  // "Elástico" leve em relação ao humano mais adiantado (que ainda corre), para a corrida ficar disputada
+  const humans = world.racers.filter((o) => !o.ai && !o.finishPlace);
   if (humans.length) {
     const lead = Math.max(...humans.map((h) => raceDistance(world, h)));
     const gap = raceDistance(world, r) - lead;

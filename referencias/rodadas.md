@@ -218,3 +218,43 @@ Pendências (altas primeiro):
   toque curto de tiro perdido; canal confiável com head-of-line; sem indicador de ping.
 - QA: sem saída se o WebGL não voltar (e fase 'finished' trava); reiniciar/sair na campanha sem custo;
   renderizador de miniaturas nunca liberado na corrida; faltam testes (largada atrás da linha, ré etc.).
+
+# Rodada 9 (2026-09-24) — loop "/rodada-avaliadores campanha" (volta 1)
+
+Grupos chamados: Jogo (Jogabilidade, Pistas, Campanha) + QA, pelo argumento "campanha".
+Evidências só das partes jogo,telas (novo: evidencias.mjs aceita lista de partes).
+Antes da avaliação: itens 59–61 (viagem entre planetas, garagem compacta, corrida atual/total) e
+item 62 novo (carro para e escurece ao cruzar a chegada, fora da disputa).
+Notas: Jogabilidade 7,4 · Pistas 6,6 · Campanha 7 · QA 7,1 (nenhum aprovado; nenhum bloqueante).
+
+Pendências (altas primeiro):
+- Jogabilidade: DERRAPAR ainda freia (13–21%); Scatter domina; carros terminados amontoados na linha;
+  pouca troca de liderança em ~7 pistas; visão à frente curta na aérea; corridas longas (85–98 s).
+- Pistas: relevo inventado em 30/36 pistas; New Mojave fora do original (muro verde-oliva com tachas
+  amarelas, deserto de dia); piso de Inferno claro; semente do cenário pelo tamanho do id; capturas
+  sem salto/vão/warp/poça; largada de inferno-2 preta com minimapa antigo; largura única.
+- Campanha: final da campanha sem celebração (item 58); pico em Bogmire e Inferno sem evolução;
+  Marauder por $9.000 na 1ª corrida; sobra de dinheiro no Difícil; peças do Dirt Devil não rendem;
+  capturas da viagem não mostram o carro voando; reiniciar/sair sem custo; rota da Nova Campanha
+  sem planetas.
+- QA: reiniciar/sair anula repescagem; WebGL perdido trava 'finished' e host online, sem saída;
+  míssil/Sundog miram o fantasma; óleo gira o fantasma; viagem/resultados com motores e locutor
+  rodando atrás; clone escuro compila shader na chegada; miniaturas não liberadas na corrida; faltam
+  testes de regras (largada atrás da linha, ré, rampa); elástico conta humano terminado; playoff da
+  senha sem teto; viagem perdida ao recarregar.
+
+Feito na rodada 9 (4 agentes em paralelo):
+- Chegada (item 62): carro para, escurece (cópias escuras em cache, mesmos defines), estaciona na
+  borda alternando lados e sem sobrepor; imune a míssil/Sundog/óleo/pickups; elástico ignora.
+- Jogabilidade: DERRAPAR mantém 76–86% no grampo de 180°; scatter 4 minas, 1 acerto por leque;
+  duelo pela liderança só entre CPUs (média 5,1 → 6,7 trocas); câmera aérea 8 m à frente.
+- Pistas: sem relevo inventado; 14/36 transcritas (2+ por planeta); New Mojave muro oliva + dia;
+  Inferno escama negra; semente do cenário por hash; Nho com 7 m de meia largura; 3 voltas em 4
+  pistas longas; minimapa atualizado na montagem; capturas de saltos/warps/poças.
+- Campanha: final com pódio, troféu, fogos, rota acendendo e créditos; viagem com rastro e clarão;
+  degrau de dificuldade suave (Bogmire Normal 0,3 s); Inferno B≠A e bônus do J. B. Slash; revenda
+  30%, Marauder na Chem VI A; Dirt Devil com peças baratas; teto de dinheiro; desistir conta como
+  último; cenas pendentes no save; playoff limitado.
+- Estabilidade: sem WebGL a simulação segue e surge "Recarregar"; resultados congelam a corrida e o
+  som; renderizador de miniaturas liberado na corrida; testes de largada/ré/posições (bug de ré
+  na linha corrigido em race.ts).

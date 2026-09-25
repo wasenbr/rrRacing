@@ -384,7 +384,8 @@ export function roadMaps(theme: Theme): RoadMaps {
         const cy = row * sh;
         const grad = c.createRadialGradient(cx, cy - sh * 0.2, 2, cx, cy, sw * 0.62);
         const k = 0.85 + rng() * 0.3;
-        grad.addColorStop(0, `rgba(255,255,255,${0.16 * k})`);
+        // (brilho baixo: escama negra como no original; antes o piso ficava cinza-claro/rosado)
+        grad.addColorStop(0, `rgba(255,255,255,${0.06 * k})`);
         grad.addColorStop(0.7, 'rgba(255,255,255,0.02)');
         grad.addColorStop(1, 'rgba(0,0,0,0.45)');
         c.fillStyle = grad;
@@ -394,6 +395,12 @@ export function roadMaps(theme: Theme): RoadMaps {
         c.strokeStyle = theme.roadGrid;
         c.lineWidth = 2.5;
         c.stroke();
+        // rejunte vermelho com brilho fraco (emissivo), o calor da lava entre as escamas
+        g.strokeStyle = theme.roadGrid;
+        g.lineWidth = 1.5;
+        g.beginPath();
+        g.ellipse(cx, cy, sw * 0.56, sh * 0.95, 0, 0, Math.PI);
+        g.stroke();
         const hg = h.createRadialGradient(cx, cy, 2, cx, cy, sw * 0.6);
         hg.addColorStop(0, '#f0f0f0');
         hg.addColorStop(1, '#303030');
@@ -464,8 +471,8 @@ export function roadMaps(theme: Theme): RoadMaps {
   normal.minFilter = THREE.LinearMipmapLinearFilter;
   normal.anisotropy = maxAnisotropy;
   const roughness = theme.roadPattern === 'ice' ? 0.22 : theme.roadPattern === 'dirt' ? 0.95 : 0.55;
-  const metalness = theme.roadPattern === 'dirt' ? 0 : theme.roadPattern === 'scales' ? 0.4 : theme.roadPattern === 'ice' ? 0.5 : 0.3;
-  const roughMap = grayCanvasTexture(rough, S * K, (d) => (theme.roadPattern === 'dirt' ? 0.95 : theme.roadPattern === 'ice' ? 0.2 + d * 0.7 : theme.roadPattern === 'scales' ? 0.58 + d * 0.4 : 0.45 + d * 0.55));
+  const metalness = theme.roadPattern === 'dirt' ? 0 : theme.roadPattern === 'scales' ? 0.15 : theme.roadPattern === 'ice' ? 0.5 : 0.3;
+  const roughMap = grayCanvasTexture(rough, S * K, (d) => (theme.roadPattern === 'dirt' ? 0.95 : theme.roadPattern === 'ice' ? 0.2 + d * 0.7 : theme.roadPattern === 'scales' ? 0.78 + d * 0.2 : 0.45 + d * 0.55));
   return { map: tex(color), emissive: theme.roadGlow > 0 ? tex(glow) : null, normal, roughness, metalness, roughnessMap: roughMap };
 }
 
@@ -687,38 +694,45 @@ export function wallMaps(theme: Theme): WallMaps {
       break;
     }
     case 'riveted': {
-      // New Mojave: painéis de chapa cor de areia, gastos pelo sol, com escorridos de ferrugem,
-      // divisões rebaixadas e fileiras de rebites (combina com o deserto; luzes amarelas na mureta)
+      // New Mojave (mapas do original): chapas verde-oliva escuras com manchas de camuflagem
+      // (verde-musgo e marrom), divisões rebaixadas e rebites; as tachas amarelas ficam na mureta
       const noise = fbm(S, 8, 4, 71, 0.55);
+      const blot = fbm(S, 5, 3, 113, 0.6);
       const img = c.getImageData(0, 0, S, S);
-      const sand = new THREE.Color(base);
+      const olive = new THREE.Color(base);
+      const moss = [74, 92, 34];
+      const brown = [58, 42, 20];
       for (let y = 0; y < S; y++)
         for (let x = 0; x < S; x++) {
           const i = (y * S + x) * 4;
           const v = noise[y * S + x];
-          // ferrugem: manchas + escorrido vertical (mais forte embaixo de cada painel)
-          const py = (y % (S / 2)) / (S / 2);
-          const rust = Math.max(0, Math.min(1, (v - 0.5) * 3 + py * 0.5 - 0.15));
+          const w = blot[y * S + x];
           const k = 0.8 + v * 0.35;
-          img.data[i] = Math.min(255, (sand.r * 255 * k) * (1 - rust) + 120 * rust * k);
-          img.data[i + 1] = Math.min(255, (sand.g * 255 * k) * (1 - rust) + 58 * rust * k);
-          img.data[i + 2] = Math.min(255, (sand.b * 255 * k) * (1 - rust) + 26 * rust * k);
+          let r = olive.r * 255 * k;
+          let g2 = olive.g * 255 * k;
+          let b2 = olive.b * 255 * k;
+          // manchas de bordas duras (camuflagem), como os blocos do mapa
+          if (w > 0.6) [r, g2, b2] = moss.map((m) => m * k);
+          else if (w < 0.36) [r, g2, b2] = brown.map((m) => m * k);
+          img.data[i] = Math.min(255, r);
+          img.data[i + 1] = Math.min(255, g2);
+          img.data[i + 2] = Math.min(255, b2);
           img.data[i + 3] = 255;
         }
       c.putImageData(img, 0, 0);
-      // escorridos finos de ferrugem descendo dos rebites
-      for (let i = 0; i < 40; i++) {
+      // sujeira escura escorrendo das juntas
+      for (let i = 0; i < 30; i++) {
         const x = rng() * S;
         const y = rng() * S;
         const gr = c.createLinearGradient(0, y, 0, y + 30 + rng() * 40);
-        gr.addColorStop(0, 'rgba(110,48,14,0.55)');
-        gr.addColorStop(1, 'rgba(110,48,14,0)');
+        gr.addColorStop(0, 'rgba(10,14,4,0.5)');
+        gr.addColorStop(1, 'rgba(10,14,4,0)');
         c.fillStyle = gr;
         c.fillRect(x, y, 2 + rng() * 3, 70);
       }
       // divisões dos painéis: fenda escura com borda clara (chanfro)
       for (const ctx of [c, h]) {
-        ctx.strokeStyle = ctx === c ? 'rgba(20,10,4,0.85)' : '#202020';
+        ctx.strokeStyle = ctx === c ? 'rgba(8,10,2,0.85)' : '#202020';
         ctx.lineWidth = 4;
         ctx.beginPath();
         for (let x = 0; x <= S; x += S / 4) {
@@ -731,7 +745,7 @@ export function wallMaps(theme: Theme): WallMaps {
         }
         ctx.stroke();
       }
-      c.strokeStyle = 'rgba(255,235,200,0.25)';
+      c.strokeStyle = 'rgba(200,220,150,0.18)';
       c.lineWidth = 1.5;
       c.beginPath();
       for (let x = 3; x <= S; x += S / 4) {
@@ -754,11 +768,11 @@ export function wallMaps(theme: Theme): WallMaps {
             c.beginPath();
             c.arc(x + 1, y + 1.2, 3, 0, Math.PI * 2);
             c.fill();
-            c.fillStyle = '#c9ae86';
+            c.fillStyle = '#7a8a4a';
             c.beginPath();
             c.arc(x, y, 2.6, 0, Math.PI * 2);
             c.fill();
-            c.fillStyle = 'rgba(255,245,220,0.7)';
+            c.fillStyle = 'rgba(230,240,190,0.6)';
             c.beginPath();
             c.arc(x - 0.8, y - 0.8, 1, 0, Math.PI * 2);
             c.fill();
@@ -770,17 +784,6 @@ export function wallMaps(theme: Theme): WallMaps {
             h.arc(x, y, 3.2, 0, Math.PI * 2);
             h.fill();
           }
-      // faixa de perigo amarela e preta no topo de cada painel (o amarelo do original)
-      for (let x = 0; x < S; x += 16) {
-        c.fillStyle = (x / 16) % 2 ? 'rgba(20,16,10,0.85)' : accent;
-        c.beginPath();
-        c.moveTo(x, 12);
-        c.lineTo(x + 16, 12);
-        c.lineTo(x + 8, 22);
-        c.lineTo(x - 8, 22);
-        c.closePath();
-        c.fill();
-      }
       speckle(c, S, S, 3000, 0.22, 6);
       roughness = 0.62;
       metalness = 0.45;

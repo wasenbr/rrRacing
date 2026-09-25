@@ -96,7 +96,9 @@ const MOODS: Partial<Record<string, SkyMood>> = { lava: 1, snow: 2, void: 3 };
 
 export function buildSky(theme: Theme): THREE.Mesh {
   SUN_DIR.set(...theme.light.sunDir).normalize();
-  const mat = skyMaterial(theme.skyTop, theme.skyHorizon, theme.sun, 1, MOODS[theme.groundStyle] ?? 0);
+  // New Mojave é de dia no original (deserto laranja): céu quente, sem estrelas
+  const stars = theme.groundStyle === 'sand' ? 0 : 1;
+  const mat = skyMaterial(theme.skyTop, theme.skyHorizon, theme.sun, stars, MOODS[theme.groundStyle] ?? 0);
   const sky = new THREE.Mesh(new THREE.SphereGeometry(300, 32, 16), mat);
   sky.renderOrder = -1;
   sky.frustumCulled = false;

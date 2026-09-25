@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { trackById, TRACKS } from '../data/tracks';
 import { VEHICLES } from '../data/vehicles';
 import {
-  advanceEarly, applyRaceResult, bossBonus, CAMPAIGN_RULES, canAdvanceEarly, carsForSale, CHAMPION_BONUS, currentTrackId, decodeSave, encodeSave, moneyScale, newCampaign,
-  opponentsFor, PLANET_MONEY, planetCount, planetForLevel, PLANETS, planetTracks, playerSpec, POINTS, prizesFor, raceKind, RIVAL_LEVEL, rivalAggression, rivalExtraCharges, rivalLevel, RIVALS,
-  seasonInfo, seasonSchedule, shopLevel, START_MONEY, tier,
+  advanceEarly, applyRaceResult, bossBonus, bossOf, CAMPAIGN_RULES, canAdvanceEarly, carComingSoon, carsForSale, CHAMPION_BONUS, currentPlanet, currentTrackId, decodeSave, encodeSave,
+  forfeitCosts, forfeitRace, moneyScale, newCampaign, opponentsFor, PLANET_MONEY, planetCount, planetForLevel, PLANETS, planetTracks, playerSpec, POINTS, prizesFor, raceKind, RIVAL_LEVEL,
+  rivalAggression, rivalEngine, rivalExtraCharges, rivalLevel, RIVALS, seasonInfo, seasonSchedule, shopLevel, START_MONEY, tier, type CampaignState,
 } from './campaign';
 import {
   attributeTags, buildSpec, CAR_PRICES, carAttributes, carSwapCost, chargePrice, maxedSetup, maxExtraCharges, newCarSetup, tradeInValue, UPGRADE_KINDS, upgradeAvailable, upgradeLabel, upgradeName,
@@ -12,7 +12,7 @@ import {
 } from './garage';
 import { Track } from './track';
 import { MAX_CHARGES, type VehicleSpec } from './vehicle';
-import { createWorld, PRIZES, stepWorld, type Difficulty } from './world';
+import { createWorld, DIFFICULTY, PRIZES, stepWorld, type Difficulty } from './world';
 
 describe('garagem', () => {
   it('melhorias deixam o carro melhor e ficam mais caras', () => {
@@ -62,11 +62,11 @@ describe('garagem', () => {
     expect(buildSpec(VEHICLES.havac, st).grip).toBe(h3.grip);
   });
 
-  it('revenda: metade do carro + 1/4 das peças; a troca pode devolver dinheiro', () => {
+  it('revenda: 30 % do carro + 1/4 das peças; a troca pode devolver dinheiro', () => {
     const s = newCarSetup('battletrak');
-    expect(tradeInValue(s)).toBe(55000);
+    expect(tradeInValue(s)).toBe(33000);
     s.upgrades.engine = 2;
-    expect(tradeInValue(s)).toBe(55000 + (40000 + 70000) / 4);
+    expect(tradeInValue(s)).toBe(33000 + (40000 + 70000) / 4);
     expect(carSwapCost(s, 'havac')).toBe(130000 - tradeInValue(s));
     s.upgrades = { engine: 3, tires: 0, shocks: 3, armor: 3 };
     expect(carSwapCost(s, 'havac')).toBeLessThan(0);
@@ -161,7 +161,7 @@ describe('campanha', () => {
     expect(prizesFor(s).slice(0, 3)).toEqual([7000, 5000, 3000]);
     s.planet = 5;
     s.difficulty = 'hard';
-    expect(prizesFor(s)[0]).toBe(22500); // Inferno no Difícil: ×3 × 0,75
+    expect(prizesFor(s)[0]).toBe(15000); // Inferno no Difícil: ×2,3 × 0,65
     s.planet = 0;
     s.difficulty = 'normal';
     const { races, promote } = seasonInfo(s);
@@ -450,18 +450,53 @@ describe('rivais e economia da campanha', () => {
     expect(inferno.spec.frontCharges).toBeGreaterThan(VEHICLES[inferno.spec.id].frontCharges);
   });
 
+  it('Inferno evolui da Divisão B para a A; J. B. Slash tem bônus próprio', () => {
+    for (const d of ['normal', 'hard'] as const) {
+      const s = newCampaign('jake', 0, d);
+      s.planet = PLANETS.length - 1;
+      const b = opponentsFor(s, VEHICLES, d);
+      s.division = 1;
+      const a = opponentsFor(s, VEHICLES, d);
+      for (let i = 0; i < 3; i++) {
+        expect(a[i].spec.maxSpeed).toBeGreaterThan(b[i].spec.maxSpeed);
+        expect(a[i].ai.skill).toBeGreaterThanOrEqual(b[i].ai.skill);
+        expect(a[i].ai.aggression).toBeGreaterThanOrEqual(b[i].ai.aggression);
+      }
+      expect(a[0].spec.frontCharges).toBeGreaterThan(b[0].spec.frontCharges);
+      // o chefe final corre mais e aguenta mais que o local na corrida normal e que o chefe de Nho
+      s.race = seasonInfo(s).races - 1;
+      const slash = bossOf(s, VEHICLES, d);
+      expect(slash.spec.maxSpeed).toBeGreaterThan(a[2].spec.maxSpeed);
+      expect(slash.spec.armor).toBeGreaterThan(a[2].spec.armor);
+      const nho = { ...s, planet: PLANETS.length - 2 };
+      expect(slash.spec.armor).toBeGreaterThan(bossOf(nho, VEHICLES, d).spec.armor);
+      expect(slash.ai.skill).toBeGreaterThan(bossOf(nho, VEHICLES, d).ai.skill);
+    }
+    // motor do local nunca abaixo do de Rip e Shred; no Difícil o nível a mais não vai para o motor
+    for (let t = 0; t < 12; t++) {
+      for (const d of ['easy', 'normal', 'hard'] as const) expect(rivalEngine(t, 2, d)).toBeGreaterThanOrEqual(rivalEngine(t, 0, d));
+      expect(rivalEngine(t, 2, 'hard')).toBe(rivalEngine(t, 2, 'normal'));
+    }
+  });
+
+  /** Ordem de preferência de peças do jogador mediano: motor primeiro, depois pneus, amortecedores e blindagem. */
+  const PART_ORDER = ['engine', 'tires', 'shocks', 'armor'] as const;
+
   /**
    * Jogador mediano (2º, 1º, 3º, 2º, 2º, 1º… e ~$4.000 por corrida em dinheiro da pista e abates, com
    * o multiplicador do planeta): troca de carro na ordem do original assim que o próximo está à venda e
-   * cabe no bolso (guarda dinheiro para ele), e no resto do tempo compra a peça mais barata que a loja
-   * do planeta vende. Mede o dinheiro e o carro ao fim de cada planeta.
+   * cabe no bolso (guarda dinheiro para ele), e no resto do tempo compra a peça que a loja do planeta
+   * vende e cabe no bolso, motor primeiro. Mede o dinheiro e o carro ao fim de cada planeta.
    */
   function simulate(d: Difficulty) {
     const places = [2, 1, 3, 2, 2, 1];
     const s = newCampaign('jake', 0, d);
-    const bought: { id: string; planet: number }[] = [];
+    const bought: { id: string; planet: number; tier: number; race: number; cost: number }[] = [];
     /** valor investido (carro + peças) ao entrar em cada planeta */
     const worth: number[] = [];
+    /** dinheiro no bolso ao entrar em cada tier (depois das compras) e o carro com que corre */
+    const cash: number[] = [];
+    const cars: CampaignState['car'][] = [];
     let havacMax = -1;
     for (let i = 0; !s.champion && i < 400; i++) {
       for (;;) {
@@ -471,22 +506,28 @@ describe('rivais e economia da campanha', () => {
           if (cost > s.money) break; // guardando para o próximo carro
           s.money -= cost;
           s.car = newCarSetup(next);
-          bought.push({ id: next, planet: s.planet });
+          bought.push({ id: next, planet: s.planet, tier: tier(s), race: s.race, cost });
           continue;
         }
-        const opts = UPGRADE_KINDS.map((k) => ({ k, p: s.car.upgrades[k] < shopLevel(s) ? upgradePrice(s.car, k) : null })).filter((o) => o.p !== null && o.p <= s.money);
-        if (!opts.length) break;
-        const o = opts.reduce((a, b) => (b.p! < a.p! ? b : a));
-        s.money -= o.p!;
-        s.car.upgrades[o.k]++;
+        const k = PART_ORDER.find((k) => {
+          const p = s.car.upgrades[k] < shopLevel(s) ? upgradePrice(s.car, k) : null;
+          return p !== null && p <= s.money;
+        });
+        if (!k) break;
+        s.money -= upgradePrice(s.car, k)!;
+        s.car.upgrades[k]++;
       }
       if (havacMax < 0 && s.car.vehicleId === 'havac' && UPGRADE_KINDS.every((k) => upgradePrice(s.car, k) === null)) havacMax = tier(s);
       worth[s.planet] ??= s.money + CAR_PRICES[s.car.vehicleId].price + upgradesSpent(s.car);
+      if (s.race === 0 && !s.playoff && cash[tier(s)] === undefined) {
+        cash[tier(s)] = s.money;
+        cars[tier(s)] = structuredClone(s.car);
+      }
       const place = places[i % places.length];
       const prize = prizesFor(s)[Math.min(place, prizesFor(s).length) - 1];
       applyRaceResult(s, place, prize + Math.round(4000 * moneyScale(s)), 1);
     }
-    return { s, bought, worth, havacMax };
+    return { s, bought, worth, havacMax, cash, cars };
   }
 
   it('jogador mediano troca de carro na ordem do original, planeta a planeta, em cada dificuldade', () => {
@@ -503,22 +544,178 @@ describe('rivais e economia da campanha', () => {
       expect(planetOf(bought, 'airblade')).toBe('drakonis');
       expect(['bogmire', 'newmojave']).toContain(planetOf(bought, 'battletrak'));
       expect(planetOf(bought, 'havac')).toBe('nho');
-      // Havac no máximo só na reta final: Nho A (tier 9) ou depois
-      expect(havacMax).toBeGreaterThanOrEqual(9);
+      // Havac no máximo só na reta final (Nho A ou depois), se chegar lá
+      if (havacMax >= 0) expect(havacMax).toBeGreaterThanOrEqual(9);
     }
+  });
+
+  it('começo: a Divisão B da Chem VI é do Dirt Devil; o Marauder chega na Divisão A e custa correr por ele', () => {
+    for (const d of ['easy', 'normal', 'hard'] as const) {
+      const s = newCampaign('jake', 0, d);
+      expect(carsForSale(s)).toEqual(['dirtdevil']);
+      expect(carComingSoon(s, 'marauder')).toContain('Divisão A');
+      expect(carComingSoon(s, 'airblade')).toBe('');
+      s.division = 1;
+      expect(carsForSale(s)).toContain('marauder');
+      expect(carComingSoon(s, 'marauder')).toBe('');
+      // revenda de 30 %: trocar o Dirt Devil custa mais que o dinheiro inicial
+      expect(carSwapCost(newCarSetup('dirtdevil'), 'marauder')).toBeGreaterThan(START_MONEY);
+      const { bought } = simulate(d);
+      expect(bought[0]).toMatchObject({ id: 'marauder', tier: 1 });
+    }
+    // peças do Dirt Devil valem a compra: nível 1 pela metade e rendendo mais que antes (+3 %)
+    const dd = newCarSetup('dirtdevil');
+    expect(upgradePrice(dd, 'engine')).toBe(20000);
+    expect(upgradePrice(newCarSetup('marauder'), 'engine')).toBe(40000);
+    const base = buildSpec(VEHICLES.dirtdevil, dd).maxSpeed;
+    dd.upgrades.engine = 1;
+    expect(buildSpec(VEHICLES.dirtdevil, dd).maxSpeed / base).toBeGreaterThan(1.035);
+    expect(upgradePrice(dd, 'engine')).toBe(70000); // do nível 2 em diante, preço cheio
   });
 
   it('orçamento do Normal: cada compra pesa no começo e o dinheiro rende no fim', () => {
     const { worth } = simulate('normal');
     // patrimônio (dinheiro + carro + peças) na 1ª corrida de cada planeta
-    expect(worth[1]).toBeGreaterThan(90000);
+    expect(worth[1]).toBeGreaterThan(80000);
     expect(worth[1]).toBeLessThan(170000);
-    expect(worth[2]).toBeGreaterThan(180000);
+    expect(worth[2]).toBeGreaterThan(160000);
     expect(worth[2]).toBeLessThan(320000);
-    expect(worth[3]).toBeGreaterThan(300000);
+    expect(worth[3]).toBeGreaterThan(260000);
     expect(worth[3]).toBeLessThan(480000);
     // em Nho, já com o Havac
-    expect(worth[4]).toBeGreaterThan(280000);
+    expect(worth[4]).toBeGreaterThan(260000);
     expect(worth[4]).toBeLessThan(500000);
+  });
+
+  it('teto de dinheiro no último planeta: não sobra fortuna sem nada para comprar', () => {
+    for (const d of ['normal', 'hard'] as const) {
+      const { cash } = simulate(d);
+      const last = CAMPAIGN_RULES[d].planets - 1;
+      // no bolso ao entrar no último planeta e na Divisão A dele (antes: $189 mil e $444 mil no Difícil)
+      expect(cash[last * 2]).toBeLessThan(80000);
+      expect(cash[last * 2 + 1]).toBeLessThan(150000);
+    }
+  });
+
+  /**
+   * Degrau de dificuldade: o jogador mediano (CPU com habilidade 0,8, com o carro e as peças que ele
+   * tem no começo de cada divisão) contra o piloto local, sozinhos em duas pistas do planeta; média da
+   * 2ª volta. A diferença cresce aos poucos e nunca passa de ~0,8 s por volta (antes: 1,5 s em Bogmire
+   * no Normal e 2,4 s no Difícil; Inferno B igual ao A).
+   */
+  it('degrau de dificuldade: o piloto local fica mais rápido aos poucos, sem picos', () => {
+    const PLAYER_SKILL = 0.8;
+    const lap = (spec: VehicleSpec, skill: number, d: Difficulty, theme: string) => {
+      const defs = TRACKS.filter((t) => t.theme === theme).slice(0, 2);
+      let sum = 0;
+      for (const def of defs) {
+        const w = createWorld(new Track(def), [{ name: 'P', color: 0, spec, ai: { skill, aggression: 0, lane: 0 } }], 2, 7, PRIZES, d);
+        w.started = true;
+        const r = w.racers[0];
+        for (let t = 0; r.progress.lapTimes.length < 2 && t < 150; t += 1 / 60) stepWorld(w, {}, 1 / 60);
+        sum += r.progress.lapTimes[1] ?? 99;
+      }
+      return sum / defs.length;
+    };
+    const deltas: Record<string, number[]> = {};
+    for (const d of ['normal', 'hard'] as const) {
+      const { cars } = simulate(d);
+      deltas[d] = [];
+      for (let t = 0; t < CAMPAIGN_RULES[d].planets * 2; t++) {
+        const s = newCampaign('jake', 0, d);
+        s.planet = t >> 1;
+        s.division = t & 1;
+        s.car = cars[t];
+        const local = opponentsFor(s, VEHICLES, d)[2];
+        const theme = currentPlanet(s).theme;
+        // a dificuldade soma habilidade à CPU: o "jogador" fica com 0,8 em qualquer dificuldade
+        const me = lap(playerSpec(s, VEHICLES), PLAYER_SKILL - DIFFICULTY[d].skill, d, theme);
+        deltas[d].push(me - lap(local.spec, local.ai.skill, d, theme));
+      }
+    }
+    const fmt = (d: string) => deltas[d].map((x) => x.toFixed(2)).join(' ');
+    for (const d of ['normal', 'hard']) {
+      const v = deltas[d];
+      // teto: o local nunca abre mais que ~0,8 s por volta
+      for (const x of v) expect(x, fmt(d)).toBeLessThan(0.85);
+      // crescente: cada divisão no máximo um pouco abaixo da anterior, e o fim bem acima do começo
+      for (let t = 1; t < v.length; t++) expect(v[t], fmt(d)).toBeGreaterThan(v[t - 1] - 0.2);
+      expect(v[v.length - 1] - v[0], fmt(d)).toBeGreaterThan(0.4);
+    }
+    // o Difícil aperta mais que o Normal
+    expect(deltas.hard[0], fmt('hard')).toBeGreaterThan(deltas.normal[0]);
+    expect(deltas.hard.at(-1)!, fmt('hard')).toBeGreaterThan(0.6);
+  }, 120000);
+});
+
+describe('desistir na campanha', () => {
+  it('sair ou reiniciar no meio da corrida conta como último, sem dinheiro da corrida', () => {
+    const s = newCampaign('jake', 0, 'normal');
+    applyRaceResult(s, 1, 0, 0);
+    const money = s.money;
+    const r = forfeitRace(s)!;
+    expect(r.pointsEarned).toBe(0);
+    expect(r.moneyEarned).toBe(0);
+    expect(s.money).toBe(money);
+    expect(s.race).toBe(2);
+    expect(s.stats.races).toBe(2);
+  });
+
+  it('no duelo do chefe e na repescagem desistir gasta a tentativa', () => {
+    const s = newCampaign('jake', 0, 'normal');
+    s.division = 1;
+    for (let i = 0; i < seasonInfo(s).races - 1; i++) applyRaceResult(s, 1, 0, 0);
+    expect(raceKind(s)).toBe('boss');
+    expect(forfeitRace(s)!.outcome).toBe('playoff');
+    const tries = s.playoff!;
+    expect(tries).toBe(CAMPAIGN_RULES.normal.playoffTries);
+    forfeitRace(s);
+    expect(s.playoff).toBe(tries - 1);
+    expect(forfeitRace(s)!.outcome).toBe('retry');
+    expect([s.planet, s.division, s.race]).toEqual([0, 1, 0]);
+  });
+
+  it('no Fácil (e depois do título) sair é de graça', () => {
+    const s = newCampaign('jake', 0, 'easy');
+    expect(forfeitCosts(s)).toBe(false);
+    expect(forfeitRace(s)).toBeNull();
+    expect([s.race, s.stats.races]).toEqual([0, 0]);
+    const h = newCampaign('jake', 0, 'hard');
+    expect(forfeitCosts(h)).toBe(true);
+    h.champion = true;
+    expect(forfeitCosts(h)).toBe(false);
+  });
+});
+
+describe('save: pendências e coerência', () => {
+  it('viagem e final pendentes vão no save (recarregar na tela de resultados não perde a cena)', () => {
+    const s = newCampaign('jake', 0, 'easy');
+    s.division = 1;
+    for (let i = 0; i < seasonInfo(s).races; i++) applyRaceResult(s, 1, 0, 0);
+    expect(s.planet).toBe(1);
+    expect(s.warpFrom).toBe(0);
+    expect(decodeSave(encodeSave(s))!.warpFrom).toBe(0);
+    let guard = 0;
+    while (!s.champion && guard++ < 200) applyRaceResult(s, 1, 0, 0);
+    expect(s.finalePending).toBe(true);
+    expect(decodeSave(encodeSave(s))!.finalePending).toBe(true);
+  });
+
+  it('repescagem além das tentativas da dificuldade é cortada; campeão fora do último planeta é rejeitado', () => {
+    const s = newCampaign('jake', 0, 'hard');
+    s.playoff = 5;
+    s.race = 3;
+    const fit = decodeSave(encodeSave(s))!;
+    expect(fit.playoff).toBe(CAMPAIGN_RULES.hard.playoffTries);
+    const c = newCampaign('jake', 0, 'normal');
+    c.champion = true;
+    c.planet = 2;
+    c.division = 1;
+    expect(decodeSave(encodeSave(c))).toBeNull();
+    c.planet = CAMPAIGN_RULES.normal.planets - 1;
+    expect(decodeSave(encodeSave(c))).not.toBeNull();
+    const w = newCampaign('jake', 0, 'normal');
+    w.warpFrom = 0; // viagem de um planeta que ainda não foi deixado
+    expect(decodeSave(encodeSave(w))).toBeNull();
   });
 });

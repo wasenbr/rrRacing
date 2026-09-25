@@ -124,7 +124,8 @@ export interface CarPotential {
 }
 
 export const CAR_POTENTIAL: Record<string, CarPotential> = {
-  dirtdevil: { speed: 0.55, accel: 0.55, armor: 0.7 },
+  // o carro de entrada: as peças rendem o bastante para valer a compra na Chem VI, mas abaixo do Marauder
+  dirtdevil: { speed: 0.75, accel: 0.6, armor: 0.75 },
   marauder: { speed: 0.85, accel: 0.85, armor: 0.85 },
   // o Air Blade já sai de fábrica com o melhor arranque: o motor rende mais em final que em arranque
   airblade: { speed: 0.8, accel: 0.3, armor: 0.8 },
@@ -136,10 +137,17 @@ function carClass(vehicleId: string): CarPotential {
   return CAR_POTENTIAL[vehicleId] ?? { speed: 1, accel: 1, armor: 1 };
 }
 
+/**
+ * Peças de nível 1 pela metade do preço no Dirt Devil (o carro de entrada): com o dinheiro curto da
+ * Divisão B da Chem VI, o motor de $40.000 que rendia +3 % não valia a compra.
+ */
+export const ENTRY_PART_DISCOUNT: Record<string, number> = { dirtdevil: 0.5 };
+
 export function upgradePrice(setup: CarSetup, kind: UpgradeKind): number | null {
   const level = setup.upgrades[kind];
   if (level >= MAX_UPGRADE || !upgradeAvailable(setup.vehicleId, kind)) return null;
-  return isStabilizer(setup.vehicleId, kind) ? STABILIZER_PRICES[level] : UPGRADE_PRICES[kind][level];
+  const price = isStabilizer(setup.vehicleId, kind) ? STABILIZER_PRICES[level] : UPGRADE_PRICES[kind][level];
+  return level === 0 ? price * (ENTRY_PART_DISCOUNT[setup.vehicleId] ?? 1) : price;
 }
 
 /** Custo total para levar um carro de fábrica ao máximo (todas as peças que ele aceita). */
@@ -197,16 +205,19 @@ export function upgradesSpent(setup: CarSetup): number {
   return sum;
 }
 
+/** Parte do preço do carro que a concessionária devolve na troca. */
+export const CAR_RESALE = 0.3;
 /** Parte do preço das peças que a concessionária devolve na troca. */
 export const UPGRADE_RESALE = 0.25;
 
 /**
  * Valor de troca (revenda) do carro atual. No original não dava para vender nada; aqui a
- * concessionária fica com o carro por metade do preço mais 1/4 do que foi gasto em peças
- * (as peças e as cargas extras ficam com o carro velho).
+ * concessionária fica com o carro por 30 % do preço mais 1/4 do que foi gasto em peças
+ * (as peças e as cargas extras ficam com o carro velho). Com metade do preço, o Marauder saía
+ * por $9.000 na primeira ida à loja e o Dirt Devil do começo não servia para nada.
  */
 export function tradeInValue(setup: CarSetup, _base?: VehicleSpec): number {
-  const value = CAR_PRICES[setup.vehicleId].price / 2 + UPGRADE_RESALE * upgradesSpent(setup);
+  const value = CAR_PRICES[setup.vehicleId].price * CAR_RESALE + UPGRADE_RESALE * upgradesSpent(setup);
   return Math.round(value / 500) * 500;
 }
 

@@ -5,6 +5,7 @@ import { emptyInput } from './input';
 import { createProgress, updateProgress } from './race';
 import { Track } from './track';
 import { createVehicleState, forwardSpeed, stepVehicle } from './vehicle';
+import { createWorld, raceDistance } from './world';
 
 const DT = 1 / 60;
 
@@ -73,6 +74,34 @@ describe('veículo', () => {
       }
       expect(Math.atan2(v.vx, v.vz), id).toBeLessThanOrEqual(-Math.PI / 2 + 0.05);
       expect(1 - min / s0, id).toBeLessThanOrEqual(0.08);
+    }
+  });
+
+  it('grampo de 180° com o botão derrapar: perde no máximo 25% e fecha mais que sem o botão', () => {
+    for (const id of Object.keys(VEHICLES)) {
+      const s = VEHICLES[id];
+      const hairpin = (sharp: boolean) => {
+        const v = createVehicleState(s, 0, 0, 0);
+        for (let i = 0; i < 600; i++) stepVehicle(v, s, { ...emptyInput(), throttle: 1 }, flat, DT);
+        const s0 = Math.hypot(v.vx, v.vz);
+        const x0 = v.x;
+        let prev = Math.atan2(v.vx, v.vz);
+        let turned = 0;
+        let width = 0;
+        for (let i = 0; i < 600 && turned < Math.PI; i++) {
+          stepVehicle(v, s, { ...emptyInput(), throttle: 1, steer: 1, sharp }, flat, DT);
+          const a = Math.atan2(v.vx, v.vz);
+          turned -= Math.atan2(Math.sin(a - prev), Math.cos(a - prev));
+          prev = a;
+          width = Math.max(width, Math.abs(v.x - x0));
+        }
+        expect(turned, id).toBeGreaterThanOrEqual(Math.PI);
+        return { exit: Math.hypot(v.vx, v.vz) / s0, width };
+      };
+      const norm = hairpin(false);
+      const drift = hairpin(true);
+      expect(drift.exit, id).toBeGreaterThanOrEqual(0.75);
+      expect(drift.width, id).toBeLessThan(norm.width * 0.75);
     }
   });
 
@@ -171,5 +200,96 @@ describe('veículo', () => {
     }
     expect(laps).toBe(2);
     expect(p.lapTimes[0]).toBeGreaterThan(5);
+  });
+});
+
+describe('regras de volta', () => {
+  const track = new Track(TRACKS[0]);
+  const spec = VEHICLES.marauder;
+  const T = track.totalLength;
+
+  /** Põe o carro na linha central a `dist` metros da chegada, andando no sentido `dir`. */
+  function place(v: ReturnType<typeof createVehicleState>, dist: number, dir = 1): void {
+    const pt = track.pointAtDist(dist);
+    v.x = pt.x;
+    v.z = pt.z;
+    v.heading = pt.heading;
+    v.pieceIndex = pt.pieceIndex;
+    v.vx = Math.sin(pt.heading) * 10 * dir;
+    v.vz = Math.cos(pt.heading) * 10 * dir;
+  }
+
+  /** Leva o carro de `from` a `to` (metros, podem passar de T ou ficar negativos) em passos de 2 m. */
+  function drive(v: ReturnType<typeof createVehicleState>, p: ReturnType<typeof createProgress>, from: number, to: number, laps = 3) {
+    const events: string[] = [];
+    const dir = Math.sign(to - from) || 1;
+    const n = Math.ceil(Math.abs(to - from) / 2);
+    for (let i = 1; i <= n; i++) {
+      place(v, from + ((to - from) * i) / n, dir);
+      const e = updateProgress(p, track, v, i * 0.1, laps, 0.1);
+      if (e) events.push(e.type === 'lap' ? `lap${e.lap}` : 'finish');
+    }
+    return events;
+  }
+
+  it('largada atrás da linha: a primeira passagem não conta volta (item 45)', () => {
+    const v = createVehicleState(spec, 0, 0, 0);
+    place(v, -11);
+    const p = createProgress(track, v);
+    expect(p.beforeLine).toBe(true);
+    expect(drive(v, p, -11, 20)).toEqual([]);
+    expect(p.lap).toBe(1);
+    expect(p.beforeLine).toBe(false);
+    // uma volta inteira depois, conta a volta 2
+    expect(drive(v, p, 20, T + 10)).toEqual(['lap2']);
+    expect(p.lapTimes.length).toBe(1);
+  });
+
+  it('cruzar a linha de ré e voltar não conta volta', () => {
+    const v = createVehicleState(spec, 0, 0, 0);
+    place(v, 10);
+    const p = createProgress(track, v);
+    expect(p.beforeLine).toBe(false);
+    expect(drive(v, p, 10, -20)).toEqual([]);
+    expect(drive(v, p, -20, 20)).toEqual([]);
+    expect(p.lap).toBe(1);
+    // depois de uma volta válida, dar ré na linha e cruzar de novo também não soma
+    expect(drive(v, p, 20, T + 10)).toEqual(['lap2']);
+    expect(drive(v, p, T + 10, T - 20)).toEqual([]);
+    expect(drive(v, p, T - 20, T + 20)).toEqual([]);
+    expect(p.lap).toBe(2);
+    expect(p.lapTimes.length).toBe(1);
+  });
+
+  it('ordem de posições com o grid atrás da linha e ao cruzá-la', () => {
+    const entries = [0, 1, 2, 3].map((i) => ({ name: `P${i}`, color: 0, spec, ai: null }));
+    const world = createWorld(track, entries, 3, 1);
+    // grid atrás da linha: fileira da frente (slots 0/1) à frente da de trás (2/3)
+    for (const r of world.racers) expect(r.progress.beforeLine).toBe(true);
+    const front = world.racers.slice(0, 2).map((r) => r.place).sort();
+    const back = world.racers.slice(2).map((r) => r.place).sort();
+    expect(front).toEqual([1, 2]);
+    expect(back).toEqual([3, 4]);
+    // quem ainda está atrás da linha (beforeLine) fica atrás de quem já a cruzou
+    const [a, b] = world.racers;
+    drive(a.car, a.progress, -4, 6);
+    expect(a.progress.beforeLine).toBe(false);
+    expect(raceDistance(world, a)).toBeGreaterThan(raceDistance(world, b));
+    expect(raceDistance(world, b)).toBeLessThan(0);
+    // continuidade: cruzar a linha não salta uma volta na distância
+    expect(raceDistance(world, a)).toBeLessThan(10);
+  });
+
+  it('dar ré sobre a linha depois da 1ª volta não infla a distância da classificação', () => {
+    const entries = [0, 1].map((i) => ({ name: `P${i}`, color: 0, spec, ai: null }));
+    const world = createWorld(track, entries, 3, 1);
+    const [a] = world.racers;
+    drive(a.car, a.progress, -4, T + 10);
+    expect(a.progress.lap).toBe(2);
+    const before = raceDistance(world, a);
+    drive(a.car, a.progress, T + 10, T - 10);
+    // voltou ~20 m: a distância cai ~20 m, não sobe quase uma volta
+    expect(raceDistance(world, a)).toBeLessThan(before);
+    expect(raceDistance(world, a)).toBeGreaterThan(before - 40);
   });
 });

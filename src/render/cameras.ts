@@ -33,8 +33,8 @@ const ISO_DISTANCE = 120;
  * Antecipação da vista aérea (item 40): até ISO_LEAD m na direção da pista à frente (ponto a
  * ISO_LEAD_LOOK m), seguida devagar (ISO_LEAD_RATE por s) — não vai e volta com a velocidade.
  */
-const ISO_LEAD = 4.5;
-const ISO_LEAD_LOOK = 12;
+const ISO_LEAD = 8;
+const ISO_LEAD_LOOK = 16;
 const ISO_LEAD_RATE = 0.6;
 /**
  * No toque o HUD ocupa o alto da tela e os botões o pé: o carro fica um pouco acima do centro

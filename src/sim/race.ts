@@ -9,7 +9,7 @@ export interface RacerProgress {
   lapTimes: number[];
   lastDist: number;
   halfwayReached: boolean;
-  /** largou atrás da linha e ainda não a cruzou (a primeira passagem não conta volta) */
+  /** está atrás da linha sem tê-la cruzado para a frente (largada no grid ou ré sobre a linha) */
   beforeLine: boolean;
   wrongWayTime: number;
   finished: boolean;
@@ -64,7 +64,9 @@ export function updateProgress(p: RacerProgress, track: Track, v: VehicleState, 
     }
   } else if (p.lastDist < window && d > T - window) {
     p.halfwayReached = false; // cruzou a linha de ré
-    if (p.lap === 1 && p.lapTimes.length === 0) p.beforeLine = true;
+    // atrás da linha em qualquer volta: a classificação desconta a volta (antes só na 1ª, e quem
+    // dava ré na linha depois dela saltava quase uma volta à frente na ordem de posições)
+    p.beforeLine = true;
   }
   p.lastDist = d;
 

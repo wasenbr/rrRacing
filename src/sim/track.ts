@@ -37,6 +37,8 @@ export interface TrackDef {
   order?: number;
   /** piso; se omitido, vem do planeta (ver SURFACE_OF_THEME) */
   surface?: Surface;
+  /** meia-largura da pista (m); se omitida, HALF_WIDTH (as de Nho são mais largas no original) */
+  halfWidth?: number;
 }
 
 export const SURFACE_OF_THEME: Record<ThemeId, Surface> = {
@@ -175,13 +177,14 @@ export class Track {
   readonly def: TrackDef;
   readonly pieces: Piece[];
   readonly totalLength: number;
-  readonly halfWidth = HALF_WIDTH;
+  readonly halfWidth: number;
   readonly surface: Surface;
   /** erro de fechamento do circuito (posição, direção, altura) — deve ser ~0 */
   readonly closure: { dx: number; dz: number; dHeading: number; dh: number };
 
   constructor(def: TrackDef) {
     this.def = def;
+    this.halfWidth = def.halfWidth ?? HALF_WIDTH;
     const parsed = parsePieces(def.layout);
     this.surface = def.surface ?? SURFACE_OF_THEME[def.theme] ?? 'asphalt';
     const pieces: Piece[] = [];

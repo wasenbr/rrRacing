@@ -14,7 +14,13 @@ const DRIFT_START = 0.55;
 const DRIFT_GRIP_LOSS = 0.5;
 /** Curva fechada: multiplica o giro e freia (perde mais que a curva normal, menos que a mureta). */
 const SHARP_TURN = 1.9;
-const SHARP_DRAG = 1.1;
+const SHARP_DRAG = 0.7;
+/**
+ * No botão derrapar a trajetória é sempre girada para o bico (mesmo de lado), com perda própria por
+ * radiano: um grampo de 180° custa ~15% da velocidade (antes ~85%) e fecha a curva na metade do
+ * diâmetro da curva comum (avaliadores, rodada 9).
+ */
+const SHARP_ALIGN_LOSS = 0.08;
 /**
  * Derrapagem sem o botão só depois de segurar o esterço forte por este tempo (s): uma curva comum,
  * mesmo com esterço total, não solta a traseira nem freia o carro (itens 38/41).
@@ -344,10 +350,11 @@ export function stepVehicle(v: VehicleState, spec: VehicleSpec, input: ControlIn
     if (vf > 1) {
       // gira o vetor de velocidade para o bico, conservando quase toda a velocidade
       const beta = Math.atan2(vl, vf);
-      const w = clamp(1 - (Math.abs(beta) - ALIGN_ROTATE_MAX) / ALIGN_ROTATE_FADE, 0, 1);
+      const w = sharp ? 1 : clamp(1 - (Math.abs(beta) - ALIGN_ROTATE_MAX) / ALIGN_ROTATE_FADE, 0, 1);
       if (w > 0) {
         const nb = beta * k;
-        const sp = Math.hypot(vf, vl) * (1 - ALIGN_LOSS * (1 + drift) * Math.abs(beta - nb));
+        const loss = sharp ? SHARP_ALIGN_LOSS : ALIGN_LOSS * (1 + drift);
+        const sp = Math.hypot(vf, vl) * (1 - loss * Math.abs(beta - nb));
         vf = vf * (1 - w) + sp * Math.cos(nb) * w;
         vl = damped * (1 - w) + sp * Math.sin(nb) * w;
       } else vl = damped;

@@ -154,6 +154,11 @@ export class Hud {
     const ctx = this.mapBase.getContext('2d')!;
     ctx.clearRect(0, 0, size, size);
     drawTrack(ctx, track, this.mapTransform, 8);
+    // já mostra a pista nova: durante o preparo da largada o HUD não é atualizado e o quadro
+    // visível ficava com o minimapa da pista anterior
+    this.mapCtx.clearRect(0, 0, size, size);
+    this.mapCtx.drawImage(this.mapBase, 0, 0);
+    this.mapTimer = 0;
   }
 
   setLap(lap: number, laps: number): void {

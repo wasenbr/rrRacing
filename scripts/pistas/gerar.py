@@ -3,16 +3,12 @@ Gera src/data/tracks/index.ts a partir do traçado extraído dos minimapas (cons
 
 O traçado (retas, curvas, cruzamentos e vãos) é o do original. O relevo (rampas, lombadas, setas
 de warp e poças fixas) vem de scripts/pistas/relevo.json, transcrito à mão dos mapas completos.
-Pistas ainda sem transcrição caem no sorteio por regras de cada planeta, de forma determinística
-(mesma saída sempre), respeitando:
-  - cruzamentos (X) ficam no nível base (as duas passagens precisam da mesma altura);
-  - vãos (G) só depois de rampa de salto (J), com casa de pouso;
-  - largada e as 3 casas antes dela (grid) ficam planas.
+Pistas ainda sem transcrição ficam só com o traçado (retas, curvas, saltos J/G e cruzamentos X),
+sem relevo, setas ou poças inventados.
 
 Uso: python scripts/pistas/gerar.py [scripts/pistas/tracado.json]
 """
 import json
-import random
 import sys
 
 NAMES = {
@@ -24,93 +20,19 @@ NAMES = {
     'inferno': ['Caldeirão', 'Rio de Lava', 'Enxofre', 'Forja', 'Brasa', 'Portão do Inferno', 'Apocalipse'],
 }
 PLANET_NAME = {'chem6': 'Chem VI', 'drakonis': 'Drakonis', 'bogmire': 'Bogmire', 'newmojave': 'New Mojave', 'nho': 'Nho', 'inferno': 'Inferno'}
-# relevo por planeta: pares de rampas (e quantos são duplos), saltos, lombadas, warps, warps reversos, poças
-CFG = {
-    'chem6': dict(ramps=0, double=0, jumps=1, bumps=1, warps=0, reverse=0, slime=0),
-    'drakonis': dict(ramps=1, double=0, jumps=1, bumps=1, warps=1, reverse=0, slime=2),
-    'bogmire': dict(ramps=1, double=0, jumps=2, bumps=1, warps=1, reverse=0, slime=3),
-    'newmojave': dict(ramps=2, double=1, jumps=1, bumps=1, warps=1, reverse=0, slime=0),
-    'nho': dict(ramps=1, double=0, jumps=1, bumps=2, warps=1, reverse=0, slime=2),
-    'inferno': dict(ramps=2, double=1, jumps=1, bumps=1, warps=1, reverse=1, slime=2),
-}
 
 
-def decorate(codes, planet, race):
-    n = len(codes)
-    rng = random.Random(f'{planet}-{race}')
-    cfg = CFG[planet]
-    used = set()
-    mods = [''] * n
-    protected = {0, n - 1, n - 2, n - 3}  # largada e grid
-
-    def free(i):
-        i %= n
-        return codes[i] == 'S' and i not in used and i not in protected and codes[(i - 1) % n] not in 'GJ' and codes[(i + 1) % n] not in 'GJ'
-
-    # rampas: U (U) ... D (D) no mesmo sentido, sem cruzamento entre elas
-    for k in range(cfg['ramps']):
-        double = k < cfg['double']
-        w = 2 if double else 1
-        cands = []
-        for u in range(1, n - 3):
-            if not all(free(u + t) for t in range(w)):
-                continue
-            for d in range(u + w + 2, min(n - 3, u + w + 2 + max(4, n // 3))):
-                if not all(free(d + t) for t in range(w)) or d + w - 1 >= n - 3:
-                    continue
-                if any(codes[x] == 'X' or x in used for x in range(u, d + w)):
-                    continue
-                cands.append((u, d))
-        if not cands:
-            continue
-        u, d = rng.choice(cands)
-        for t in range(w):
-            codes[u + t] = 'U'
-            codes[d + t] = 'D'
-            used.update({u + t, d + t})
-        # o platô inteiro fica reservado (sem outras rampas se sobrepondo)
-        used.update(range(u, d + w))
-        used.difference_update(range(u + w, d))  # mas aceita saltos/lombadas em cima
-
-    straight = lambda i: codes[i % n] in 'SUDB'  # noqa: E731
-    # saltos contínuos: J com reta antes (embalo) e duas retas de pouso (o voo passa de uma casa)
-    for _ in range(cfg['jumps']):
-        cands = [i for i in range(1, n - 5) if free(i) and free(i + 1) and straight(i + 2) and straight(i - 1)]
-        if not cands:
-            break
-        i = rng.choice(cands)
-        codes[i] = 'J'
-        used.update({i - 1, i, i + 1, i + 2})
-
-    # lombadas longe de curva (o carro pula nelas e sairia por cima da mureta)
-    for _ in range(cfg['bumps']):
-        cands = [i for i in range(1, n - 3) if free(i) and straight(i + 1)]
-        if not cands:
-            break
-        i = rng.choice(cands)
-        codes[i] = 'B'
-        used.add(i)
-
-    def warp_ok(i, sign):
-        if not free(i):
-            return False
-        # warp reverso longe de rampa de salto/vão (senão vira armadilha impossível)
-        if sign < 0 and any(codes[(i + t) % n] in 'JG' for t in range(1, 4)):
-            return False
-        return True
-
-    for sign, count in ((1, cfg['warps']), (-1, cfg['reverse'])):
-        for _ in range(count):
-            cands = [i for i in range(1, n - 3) if warp_ok(i, sign)]
-            if not cands:
-                break
-            i = rng.choice(cands)
-            mods[i] = '>' if sign > 0 else '<'
-            used.add(i)
-    return ' '.join(c + m for c, m in zip(codes, mods))
+def plain(codes):
+    """Pista ainda sem transcrição: só o que o traçado exige (J/G/X já vêm de construir.py).
+    Nada de relevo, setas ou poças inventadas (pedido do usuário, item 19)."""
+    return ' '.join(codes)
 
 
 RELEVO = 'scripts/pistas/relevo.json'
+# voltas por pista (padrão 4): pistas longas ficam com 3 para o vencedor chegar em ~60-75 s
+LAPS = {'bogmire-1': 3, 'newmojave-1': 3, 'nho-2': 3, 'inferno-1': 3}
+# meia-largura por planeta (m; padrão HALF_WIDTH = 5,5): as pistas de Nho são mais largas no original
+HALF = {'nho': 7}
 
 
 def transcribed(codes, key, rel):
@@ -128,6 +50,9 @@ def transcribed(codes, key, rel):
             raise SystemExit(f'{key}: casa {i} é largada/grid, precisa ficar plana')
         if c == 'J' and codes[(i + 1) % n] != 'G':
             raise SystemExit(f'{key}: salto J na casa {i} sem vão depois')
+        if c == 'B' and (codes[(i - 1) % n] not in 'SUDBFX' or codes[(i + 1) % n] not in 'SUDBFX'):
+            # o carro pula na lombada; colada numa curva ele sai por cima da mureta
+            raise SystemExit(f'{key}: lombada B na casa {i} colada numa curva')
         codes[i] = c
     if codes.count('U') != codes.count('D'):
         raise SystemExit(f"{key}: {codes.count('U')} subidas e {codes.count('D')} descidas, o circuito não fecha")
@@ -156,8 +81,8 @@ def main():
         if key in relevo:
             layout, puddles = transcribed(codes, key, relevo[key])
         else:
-            layout, puddles = decorate(codes, p, t['race']), None
-        rows.append((p, t['race'], NAMES[p][t['race'] - 1], layout, len(puddles) if puddles is not None else CFG[p]['slime'], puddles))
+            layout, puddles = plain(codes), None
+        rows.append((p, t['race'], NAMES[p][t['race'] - 1], layout, len(puddles) if puddles is not None else 0, puddles))
     out = []
     out.append("""import type { ThemeId, TrackDef } from '../../sim/track';
 
@@ -169,21 +94,25 @@ def main():
  *    (referencias/snes/mapas/Tracks(In-GameMaps).png) por scripts/pistas/construir.py, com o
  *    sentido da corrida lido da seta de cada mapa completo (VGMaps);
  *  - relevo (rampas U/D, lombadas B, setas de warp `>` e warp reverso `<`, poças fixas) transcrito
- *    dos mapas completos em scripts/pistas/relevo.json; pistas ainda sem transcrição usam regras
- *    de cada planeta (sorteio determinístico).
+ *    dos mapas completos em scripts/pistas/relevo.json; pistas ainda sem transcrição ficam só com
+ *    o traçado (nenhum relevo inventado).
  * Todas são verificadas por teste: o circuito precisa fechar.
  */
-const t = (planet: ThemeId, order: number, name: string, layout: string, slime = 0, puddles?: number[]): TrackDef => ({
+const t = (planet: ThemeId, order: number, name: string, layout: string, slime = 0, puddles?: number[], laps = 4): TrackDef => ({
   id: `${planet}-${order}`,
   name,
   planet: PLANET_NAMES[planet],
   theme: planet,
-  laps: 4,
+  laps,
   layout,
   slime,
   order,
   ...(puddles ? { puddles } : {}),
+  ...(HALF_OF[planet] ? { halfWidth: HALF_OF[planet] } : {}),
 });
+
+/** Meia-largura por planeta (m), quando difere do padrão. */
+const HALF_OF: Partial<Record<ThemeId, number>> = {@HALF@};
 
 export const PLANET_NAMES: Record<ThemeId, string> = {
   chem6: 'Chem VI',
@@ -200,9 +129,14 @@ export const TRACKS: TrackDef[] = [""")
         if p != last:
             out.append(f'  // {PLANET_NAME[p]}')
             last = p
-        extra = f', {slime}' if slime or puddles else ''
+        laps = LAPS.get(f'{p}-{race}', 4)
+        extra = f', {slime}' if slime or puddles or laps != 4 else ''
         if puddles:
             extra += f", [{', '.join(map(str, puddles))}]"
+        elif laps != 4:
+            extra += ', undefined'
+        if laps != 4:
+            extra += f', {laps}'
         out.append(f"  t('{p}', {race}, '{name}', '{layout}'{extra}),")
     out.append("""];
 
@@ -217,7 +151,8 @@ export function trackById(id: string): TrackDef {
   return def;
 }
 """)
-    open('src/data/tracks/index.ts', 'w', encoding='utf8', newline='\n').write('\n'.join(out))
+    text = '\n'.join(out).replace('@HALF@', ', '.join(f'{k}: {v}' for k, v in HALF.items()))
+    open('src/data/tracks/index.ts', 'w', encoding='utf8', newline='\n').write(text)
     print(len(rows), 'pistas')
 
 

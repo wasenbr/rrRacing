@@ -63,11 +63,11 @@ export const CAMPAIGN_RULES: Record<Difficulty, CampaignRules> = {
   // Veteran: até Nho
   normal: { planets: 5, races: [6, 6, 7, 7, 8], goal: 0.5, playoffTries: 2, money: 1 },
   // Warrior: a galáxia inteira, divisões longas, meta alta e dinheiro curto
-  hard: { planets: 6, races: [8, 8, 9, 9, 10, 10], goal: 0.6, playoffTries: 1, money: 0.75 },
+  hard: { planets: 6, races: [8, 8, 9, 9, 10, 10], goal: 0.6, playoffTries: 1, money: 0.65 },
 };
 
 /** O dinheiro rende mais a cada planeta: no começo cada compra pesa, no fim o prêmio é grande. */
-export const PLANET_MONEY = [0.7, 1, 1.5, 2, 2.5, 3];
+export const PLANET_MONEY = [0.7, 1, 1.4, 1.8, 2.1, 2.3];
 
 /** Nível máximo das peças à venda em cada planeta (acompanha o nível dos rivais). */
 export const SHOP_LEVEL = [1, 2, 3, 3, 3, 3];
@@ -109,8 +109,23 @@ const FOR_SALE: Record<string, string[]> = {
   inferno: ['airblade', 'battletrak', 'havac'],
 };
 
+/**
+ * Tier (planeta × divisão) em que cada carro chega à loja dentro do planeta que o vende. O Marauder
+ * (o carro do Viper Mackay) só aparece na Divisão A da Chem VI: a Divisão B é do Dirt Devil, e o
+ * dinheiro das primeiras corridas vai para as peças dele (que agora rendem, ver CAR_POTENTIAL).
+ */
+const CAR_FROM_TIER: Record<string, number> = { marauder: 1 };
+
 export function carsForSale(s: CampaignState): string[] {
-  return FOR_SALE[currentPlanet(s).id] ?? Object.keys(FOR_SALE.chem6);
+  const ids = FOR_SALE[currentPlanet(s).id] ?? FOR_SALE.chem6;
+  return ids.filter((id) => tier(s) >= (CAR_FROM_TIER[id] ?? 0));
+}
+
+/** Carro vendido neste planeta mas só numa divisão seguinte ("Chega na Divisão A"); senão vazio. */
+export function carComingSoon(s: CampaignState, vehicleId: string): string {
+  const ids = FOR_SALE[currentPlanet(s).id] ?? [];
+  if (!ids.includes(vehicleId) || carsForSale(s).includes(vehicleId)) return '';
+  return `Chega na Divisão ${DIVISIONS[(CAR_FROM_TIER[vehicleId] ?? 0) % 2]}`;
 }
 
 /** Nível máximo de peça que a loja vende neste planeta. */
@@ -141,6 +156,10 @@ export interface CampaignState {
   difficulty?: Difficulty;
   /** em repescagem: duelos que ainda restam contra o piloto local */
   playoff?: number;
+  /** viagem para o planeta novo ainda não mostrada (índice do planeta de onde saiu) */
+  warpFrom?: number;
+  /** final da campanha ainda não mostrado (fechou o jogo na tela de resultados) */
+  finalePending?: boolean;
 }
 
 export function newCampaign(characterId: string, color: number, difficulty: Difficulty = 'normal'): CampaignState {
@@ -257,22 +276,69 @@ export interface OpponentSetup {
 export const RIVAL_LEVEL = [0, 0, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3];
 /** Peça nível 3 só a partir de Bogmire (piloto local) — Rip e Shred chegam lá em Nho. */
 const LEVEL3_FROM_TIER = 4;
+/**
+ * Motor do piloto local por tier (o resto das peças dele vai um nível acima de Rip e Shred). O motor é
+ * o que mais pesa na volta (~0,6 s por nível): na chegada a um planeta com carro novo e caro (Bogmire,
+ * Nho) o local ainda não vem com o motor no talo, para o jogador ter tempo de juntar dinheiro.
+ */
+export const LOCAL_ENGINE = [0, 0, 1, 1, 0, 2, 2, 3, 2, 2, 3, 3];
+/**
+ * Ritmo do piloto local (multiplica velocidade final e arranque) por tier e dificuldade: o ajuste fino
+ * que o nível inteiro das peças não dá. Calibrado para que um jogador mediano (ver o teste "degrau de
+ * dificuldade") perca do local por uma diferença que cresce aos poucos ao longo da campanha, até
+ * ~0,8 s por volta no fim do Difícil, sem picos (antes: 1,5 s em Bogmire no Normal, 2,4 s no Difícil).
+ */
+export const LOCAL_PACE: Record<Difficulty, number[]> = {
+  easy: [1.018, 1.031, 1.03, 1.031, 1.062, 1.035],
+  normal: [1.023, 1.037, 0.989, 0.996, 1.019, 0.981, 1.032, 0.984, 1.015, 1.032],
+  hard: [1.023, 1.036, 0.992, 0.994, 1.026, 0.974, 0.976, 0.978, 0.95, 0.957, 0.959, 1.012],
+};
+/** Na Divisão A do Inferno todos vêm com a preparação máxima (peças no 3 não bastam para evoluir). */
+const INFERNO_PACE = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1.01, 1.025];
+/** J. B. Slash, o chefe final: motor e blindagem de campeão além do nível 3. */
+const FINAL_BOSS = { pace: 1.03, armor: 1.25, skill: 0.99 };
+
+const tierIndex = (t: number) => clamp(t, 0, RIVAL_LEVEL.length - 1);
 
 /** Nível de melhoria de cada rival (0 = Rip, 1 = Shred, 2 = piloto local) neste tier. */
 export function rivalLevel(t: number, index: number, difficulty: Difficulty = 'normal'): number {
   const cap = t < LEVEL3_FROM_TIER ? 2 : 3;
   // o piloto local tem um nível a mais (é o mais difícil de bater, como no original)
-  return clamp(RIVAL_LEVEL[clamp(t, 0, RIVAL_LEVEL.length - 1)] + DIFFICULTY[difficulty].rivalUpgrade + (index === 2 ? 1 : 0), 0, cap);
+  return clamp(RIVAL_LEVEL[tierIndex(t)] + DIFFICULTY[difficulty].rivalUpgrade + (index === 2 ? 1 : 0), 0, cap);
 }
 
-/** Cargas extras de cada arma dos rivais: crescem a cada planeta (o local ganha uma a mais a partir de Bogmire). */
+/**
+ * Nível do motor de cada rival neste tier. No Difícil o nível a mais vale para pneus, amortecedores e
+ * blindagem (rivais mais duros de derrubar); a velocidade a mais vem do ritmo (LOCAL_PACE).
+ */
+export function rivalEngine(t: number, index: number, difficulty: Difficulty = 'normal'): number {
+  const tt = tierIndex(t);
+  // Rip e Shred nunca com motor acima do piloto local
+  const base = index === 2 ? LOCAL_ENGINE[tt] : Math.min(RIVAL_LEVEL[tt], LOCAL_ENGINE[tt]);
+  return clamp(base + Math.min(0, DIFFICULTY[difficulty].rivalUpgrade), 0, rivalLevel(t, index, difficulty));
+}
+
+/** Ritmo (velocidade final e arranque) de cada rival: o local segue LOCAL_PACE; no Inferno A todos aceleram. */
+export function rivalPace(t: number, index: number, difficulty: Difficulty = 'normal'): number {
+  const tt = tierIndex(t);
+  const local = LOCAL_PACE[difficulty][Math.min(tt, LOCAL_PACE[difficulty].length - 1)];
+  // Rip e Shred: nunca acima do local nem abaixo do carro de fábrica
+  return (index === 2 ? local : Math.min(1, local)) * INFERNO_PACE[tt];
+}
+
+/** Cargas extras de cada arma dos rivais: crescem a cada divisão e meia (o local ganha uma a mais a partir de Bogmire). */
 export function rivalExtraCharges(t: number, index: number): number {
-  return Math.floor(t / 3) + (index === 2 && t >= LEVEL3_FROM_TIER ? 1 : 0);
+  return Math.floor((t + 1) / 3) + (index === 2 && t >= LEVEL3_FROM_TIER ? 1 : 0);
 }
 
 /** Agressividade (vontade de atirar) cresce por planeta: Chem VI ~70 % da personalidade, Inferno no máximo. */
 export function rivalAggression(base: number, t: number): number {
   return clamp(base * (0.7 + 0.06 * t), 0, 1);
+}
+
+/** Aplica o ritmo à ficha (velocidade final, arranque e turbo). */
+function withPace(spec: VehicleSpec, pace: number): VehicleSpec {
+  return pace === 1 ? spec : { ...spec, maxSpeed: spec.maxSpeed * pace, accel: spec.accel * pace, nitroAccel: spec.nitroAccel * pace };
 }
 
 /**
@@ -290,14 +356,14 @@ export function opponentsFor(s: CampaignState, vehicles: Record<string, VehicleS
     // na Divisão A, Rip troca o "modelo do ano passado" pelo carro atual do planeta
     const setup = newCarSetup(i === 0 && s.division === 1 ? p.cars[2] : p.cars[i]);
     const lv = rivalLevel(t, i, difficulty);
-    setup.upgrades = { engine: lv, tires: lv, shocks: lv, armor: lv };
+    setup.upgrades = { engine: rivalEngine(t, i, difficulty), tires: lv, shocks: lv, armor: lv };
     const base = vehicles[setup.vehicleId];
     const extra = rivalExtraCharges(t, i);
     for (const k of CHARGE_KINDS) setup.charges[k] = Math.min(extra, maxExtraCharges(base, k));
     return {
       name,
       color: r.color,
-      spec: buildSpec(base, setup),
+      spec: withPace(buildSpec(base, setup), rivalPace(t, i, difficulty)),
       ai: { skill: clamp(SKILL_BASE + t * SKILL_STEP + (i === 2 ? 0.05 : i * 0.02), 0, 0.97), aggression: rivalAggression(r.aggression, t), lane: r.lane },
     };
   });
@@ -305,22 +371,26 @@ export function opponentsFor(s: CampaignState, vehicles: Record<string, VehicleS
 
 /**
  * O chefe do planeta (o piloto local) no duelo: peças um nível acima do normal dele (até o 3 em
- * qualquer planeta), duas cargas a mais em cada arma, mais hábil e sem medo de atirar.
+ * qualquer planeta), duas cargas a mais em cada arma, mais hábil e sem medo de atirar. J. B. Slash, o
+ * chefe do último planeta, ainda tem motor e blindagem de campeão (FINAL_BOSS).
  */
 export function bossOf(s: CampaignState, vehicles: Record<string, VehicleSpec>, difficulty: Difficulty = difficultyOf(s)): OpponentSetup {
   const t = tier(s);
   const p = currentPlanet(s);
   const setup = newCarSetup(p.cars[2]);
   const lv = clamp(rivalLevel(t, 2, difficulty) + 1, 0, MAX_UPGRADE);
-  setup.upgrades = { engine: lv, tires: lv, shocks: lv, armor: lv };
+  setup.upgrades = { engine: clamp(rivalEngine(t, 2, difficulty) + 1, 0, MAX_UPGRADE), tires: lv, shocks: lv, armor: lv };
   const base = vehicles[setup.vehicleId];
   for (const k of CHARGE_KINDS) setup.charges[k] = Math.min(rivalExtraCharges(t, 2) + 2, maxExtraCharges(base, k));
   const r = RIVALS[p.local];
+  const final = p === PLANETS[PLANETS.length - 1];
+  let spec = withPace(buildSpec(base, setup), rivalPace(t, 2, difficulty) * (final ? FINAL_BOSS.pace : 1));
+  if (final) spec = { ...spec, armor: Math.round(spec.armor * FINAL_BOSS.armor) };
   return {
     name: p.local,
     color: r.color,
-    spec: buildSpec(base, setup),
-    ai: { skill: clamp(SKILL_BASE + t * SKILL_STEP + 0.1, 0, 0.98), aggression: 1, lane: r.lane },
+    spec,
+    ai: { skill: final ? FINAL_BOSS.skill : clamp(SKILL_BASE + t * SKILL_STEP + 0.1, 0, 0.98), aggression: 1, lane: r.lane },
   };
 }
 
@@ -402,15 +472,33 @@ export const CHAMPION_BONUS = 100000;
 function promote(s: CampaignState): RaceOutcome {
   if (s.division < DIVISIONS.length - 1) s.division++;
   else if (s.planet < planetCount(s) - 1) {
+    // a viagem fica pendente no save até ser mostrada (recarregar a página não a perde)
+    s.warpFrom = s.planet;
     s.planet++;
     s.division = 0;
   } else {
     s.champion = true;
+    s.finalePending = true;
     s.money += CHAMPION_BONUS;
     s.stats.earnings += CHAMPION_BONUS;
     return 'champion';
   }
   return 'promoted';
+}
+
+/** Na Campanha, desistir de uma corrida custa (conta como último); no Fácil e depois do título é de graça. */
+export function forfeitCosts(s: CampaignState): boolean {
+  return difficultyOf(s) !== 'easy' && !s.champion;
+}
+
+/**
+ * Desistir (sair ou reiniciar no meio da corrida): conta como último lugar, sem o dinheiro da corrida.
+ * Num duelo (chefe ou repescagem) é derrota: gasta a tentativa. Devolve null quando sai de graça.
+ */
+export function forfeitRace(s: CampaignState): RaceReport | null {
+  if (!forfeitCosts(s)) return null;
+  const last = raceKind(s) === 'normal' ? POINTS.length : 2;
+  return applyRaceResult(s, last, 0, 0);
 }
 
 /**
@@ -471,6 +559,10 @@ export function validSave(s: CampaignState): boolean {
   if (!UPGRADE_KINDS.every((k) => isInt(car.upgrades[k], 0, MAX_UPGRADE))) return false;
   if (!CHARGE_KINDS.every((k) => isInt(car.charges[k], 0, MAX_CHARGES))) return false;
   if (typeof s.champion !== 'boolean') return false;
+  // campeão só na Divisão A do último planeta da dificuldade (saves antigos além do fim: fitRules ajusta)
+  if (s.champion && (s.division !== 1 || s.planet < CAMPAIGN_RULES[s.difficulty ?? 'normal'].planets - 1)) return false;
+  if (s.warpFrom !== undefined && !isInt(s.warpFrom, 0, s.planet - 1)) return false;
+  if (s.finalePending !== undefined && (typeof s.finalePending !== 'boolean' || (s.finalePending && !s.champion))) return false;
   // estatísticas faltando (save antigo) não invalidam: decodeSave completa com zeros
   const st = s.stats;
   return st === undefined || (!!st && typeof st === 'object' && ['races', 'wins', 'kills', 'earnings'].every((k) => Number.isFinite((st as Record<string, unknown>)[k])));
@@ -485,6 +577,9 @@ function fitRules(s: CampaignState): CampaignState {
     s.planet = planetCount(s) - 1;
     s.division = 1;
   }
+  if (s.warpFrom !== undefined && s.warpFrom >= s.planet) delete s.warpFrom;
+  // repescagem: no máximo as tentativas da dificuldade
+  if (s.playoff) s.playoff = Math.min(s.playoff, rulesOf(s).playoffTries);
   if (s.playoff) s.race = racesIn(s);
   else s.race = Math.min(s.race, racesIn(s) - 1);
   return s;

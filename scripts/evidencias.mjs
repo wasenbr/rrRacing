@@ -1,5 +1,5 @@
 // Gera evidências para os avaliadores: capturas de tela, teste de jogo automático e gravações de som.
-// Uso: node scripts/evidencias.mjs <pastaSaida> [tudo|telas|ui|celular|jogo|som|picote|desempenho]  (som inclui picote)  (telas inclui ui e celular) [url]
+// Uso: node scripts/evidencias.mjs <pastaSaida> [partes] [url]  — partes separadas por vírgula (ex.: jogo,telas): tudo|telas|ui|celular|jogo|som|picote|desempenho  (som inclui picote; telas inclui ui e celular)
 // Precisa do servidor de desenvolvimento rodando (npm run dev).
 import { chromium } from 'playwright-core';
 import fs from 'node:fs';
@@ -65,6 +65,9 @@ async function telas() {
       a.quickRace({ trackId, vehicleId, color: 0x2f7bff, difficulty: 'normal' });
     }, [trackId, vehicleId, cam]);
     await wait(1500);
+    // a largada só vale depois do preparo da GPU (shaders do planeta/câmera novos); antes disso a
+    // tela ainda não foi desenhada pela contagem (no render por software isso passa de 1,5 s)
+    await page.waitForFunction(() => !window.game.preparing, null, { timeout: 60000 }).catch(() => {});
     const n = String(i).padStart(2, '0');
     await page.screenshot({ path: `${dir}/${n}a_${trackId}_${cam}_largada.png` });
     await advance(12);
@@ -73,6 +76,38 @@ async function telas() {
     await page.screenshot({ path: `${dir}/${n}c_${trackId}_${cam}_corrida.png` });
     i++;
   }
+  // elementos de pista do mapa original (saltos, vãos, setas de warp, poças): o piloto automático
+  // corre até a casa pedida e a tela é tirada ali
+  const features = [
+    ['nho-3', 7, 'chase', 'saltos'],
+    ['newmojave-3', 18, 'iso', 'seta_salto'],
+    ['inferno-5', 12, 'iso', 'warps_lava'],
+    ['bogmire-1', 6, 'iso', 'poca'],
+    ['inferno-1', 7, 'chase', 'salto'],
+  ];
+  for (const [trackId, piece, cam, tag] of features) {
+    await page.evaluate(([trackId, cam]) => {
+      const a = window.game.menuActions();
+      a.setCamera(cam);
+      a.quickRace({ trackId, vehicleId: 'havac', color: 0x2f7bff, difficulty: 'normal' });
+    }, [trackId, cam]);
+    await wait(1500);
+    await page.waitForFunction(() => !window.game.preparing, null, { timeout: 60000 }).catch(() => {});
+    const ok = await page.evaluate((piece) => {
+      const g = window.game;
+      const me = g.world.racers[g.playerId];
+      for (let k = 0; k < 60 * 90; k++) {
+        g.step(1 / 60);
+        if (k > 60 * 5 && me.car.pieceIndex === piece) return true;
+      }
+      return false;
+    }, piece);
+    await wait(900);
+    await page.screenshot({ path: `${dir}/40_${trackId}_${tag}_${cam}.png` });
+    if (!ok) console.log('elemento de pista não alcançado:', trackId, piece);
+  }
+  await page.evaluate(() => window.game.menuActions().setCamera('iso'));
+
   // efeitos: explosão de carro perto do jogador e faíscas na mureta (API de depuração do jogo)
   /** Espera N quadros desenhados (cada um avança os efeitos em até 0,1 s de jogo). */
   const frames = (n) =>
@@ -158,7 +193,7 @@ async function ui() {
   };
   // espera as miniaturas dos carros (geradas aos poucos; no render por software levam ~2 s cada)
   const shot = async (name) => {
-    await page.waitForFunction(() => !document.querySelector('img.car-img.loading'), null, { timeout: 90000 }).catch(() => {});
+    await page.waitForFunction(() => !document.querySelector('img.car-img.loading, img.planet-img.loading'), null, { timeout: 90000 }).catch(() => {});
     await wait(300);
     await page.screenshot({ path: `${dir}/${name}.png`, fullPage: false });
   };
@@ -184,17 +219,33 @@ async function ui() {
   await page.setViewportSize({ width: 1280, height: 720 });
   await wait(800);
   await shot('33b_garagem_720');
-  // viagem para o planeta seguinte (item 59): início, meio e fim da animação
+  // animações CSS congeladas em tempos fixos (ms): as capturas saem iguais em qualquer máquina
+  const freezeAt = async (ms) => {
+    await page.evaluate((t) => document.getAnimations().forEach((a) => { a.pause(); a.currentTime = t; }), ms);
+    await wait(300);
+  };
+  const waitImgs = () => page.waitForFunction(() => !document.querySelector('img.loading[data-thumb]'), null, { timeout: 90000 }).catch(() => {});
+  // viagem para o planeta seguinte (item 59): início, carro voando e chegada
   await page.evaluate(async () => {
     const { PLANETS } = await window.devModules();
     window.game.menus.showPlanetWarp({ from: PLANETS[0], to: PLANETS[1], planets: 6, vehicleId: 'marauder', color: 0xe02828 });
   });
-  await wait(400);
-  await page.screenshot({ path: `${dir}/33c_viagem_planeta_inicio.png` });
-  await wait(900);
-  await page.screenshot({ path: `${dir}/33d_viagem_planeta_meio.png` });
-  await wait(3000);
-  await page.screenshot({ path: `${dir}/33e_viagem_planeta_fim.png` });
+  await waitImgs();
+  for (const [name, ms] of [['33c_viagem_planeta_inicio', 450], ['33d_viagem_planeta_meio', 1350], ['33e_viagem_planeta_fim', 3800]]) {
+    await freezeAt(ms);
+    await page.screenshot({ path: `${dir}/${name}.png` });
+  }
+  // final da campanha (item 58): holofotes e troféu, pódio com fogos e rota acendendo, créditos
+  await page.evaluate(() => window.game.menus.showChampion(window.game.hubData()));
+  await waitImgs();
+  for (const [name, ms] of [['33f_campeao_inicio', 1100], ['33f_campeao_meio', 3600], ['33f_campeao_fim', 9000]]) {
+    await freezeAt(ms);
+    await page.screenshot({ path: `${dir}/${name}.png` });
+  }
+  // toque pula para o resumo (estatísticas e nova campanha na próxima dificuldade)
+  await page.evaluate(() => document.querySelector('.finale').click());
+  await wait(600);
+  await shot('33f_campeao_resumo');
   await page.setViewportSize({ width: 1280, height: 1400 });
   await page.evaluate(() => window.game.menuActions().warpDone());
   await wait(1500);
@@ -289,7 +340,7 @@ async function jogo() {
       const entries = profiles.map((ai, i) => ({ name: `CPU${i}`, color: 0xffffff, spec: VEHICLES[car], ai }));
       const w = createWorld(track, entries, 4, 1234, PRIZES);
       w.started = true;
-      const stats = { fires: 0, hits: 0, explosions: 0, bumps: 0, pickups: 0, spins: 0, leadChanges: 0, placeChanges: 0, respawns: 0 };
+      const stats = { fires: 0, hits: 0, explosions: 0, bumps: 0, pickups: 0, spins: 0, leadChanges: 0, placeChanges: 0, respawns: 0, hitsByKind: {}, dropsByKind: {} };
       let leader = -1;
       const lastPlace = w.racers.map((r) => r.place);
       let t = 0;
@@ -301,7 +352,11 @@ async function jogo() {
         t += dt;
         for (const e of w.events) {
           if (e.type === 'fire') stats.fires++;
-          if (e.type === 'hit') stats.hits++;
+          if (e.type === 'hit') {
+            stats.hits++;
+            stats.hitsByKind[e.kind] = (stats.hitsByKind[e.kind] ?? 0) + 1;
+          }
+          if (e.type === 'drop') stats.dropsByKind[e.kind] = (stats.dropsByKind[e.kind] ?? 0) + 1;
           if (e.type === 'explode') stats.explosions++;
           if (e.type === 'bump') stats.bumps++;
           if (e.type === 'pickup') stats.pickups++;

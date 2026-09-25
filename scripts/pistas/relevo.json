@@ -7,38 +7,197 @@
     "pocas: casas com poça fixa do planeta (gosma verde em Drakonis, água em Bogmire, óleo em New Mojave, neve em Nho, lava em Inferno).",
     "Leitura das rampas: no mapa isométrico a faixa de piso mais clara é rampa que sobe para o fundo da tela;",
     "o sentido da corrida diz se é U ou D. Dinheiro/blindagem não aparecem nos mapas (continuam espalhados pela pista).",
-    "Pistas sem entrada aqui usam o sorteio por planeta de gerar.py."
+    "Pistas sem entrada aqui ficam só com o traçado (sem relevo inventado). Leitura com scripts de apoio: rótulo de casa projetado no mapa isométrico (casa (i,j) -> x=1550+175*(i-j), y=70+44*(i+j+1)).",
+    "Onde o nosso modelo não comporta o original (salto que pousa mais baixo, degrau de meia altura), a rampa fica na casa certa e o sentido é o que fecha o circuito e deixa os cruzamentos (X) no mesmo nível."
   ],
   "chem6-1": {
-    "pecas": { "4": "U", "5": "U", "12": "D", "13": "D", "20": "D", "25": "U" },
+    "pecas": {
+      "4": "U",
+      "5": "U",
+      "12": "D",
+      "13": "D",
+      "20": "D",
+      "25": "U"
+    },
     "nota": "Duas rampas subindo no lado de cima-esquerda, duas descendo no de cima-direita, degrau descendo no de baixo-direita e subindo antes da largada."
   },
+  "chem6-2": {
+    "pecas": {
+      "14": "D",
+      "16": "D",
+      "22": "U",
+      "23": "U"
+    },
+    "nota": "Duas descidas no lado de baixo-direita; subida dupla no lado de baixo-esquerda, antes da largada."
+  },
+  "chem6-3": {
+    "pecas": {},
+    "nota": "Oito plano: o mapa não mostra rampas, setas nem poças."
+  },
+  "chem6-4": {
+    "pecas": {
+      "2": "D",
+      "7": "U",
+      "8": "U",
+      "9": "U",
+      "21": "D",
+      "25": "D"
+    },
+    "nota": "Degrau descendo logo após a largada, três degraus subindo no lado de cima-esquerda, descida no S da direita. O degrau do mapa na casa 27 (grid) foi recuado para 25."
+  },
   "drakonis-1": {
-    "pecas": { "12": "D", "22": "D", "24": "U", "25": "U" },
-    "pocas": [8, 20],
+    "pecas": {
+      "12": "D",
+      "22": "D",
+      "24": "U",
+      "25": "U"
+    },
+    "pocas": [
+      8,
+      20
+    ],
     "nota": "Rampas de subida do mapa ficam nas casas 25 e 27; recuadas para 24-25 porque 26-27 são o grid de largada."
   },
+  "drakonis-2": {
+    "pecas": {
+      "7": "U",
+      "9": "U",
+      "13": "D",
+      "22": "D"
+    },
+    "pocas": [
+      20,
+      27
+    ],
+    "nota": "Dois degraus subindo no lado de cima-direita, descidas no S da esquerda; gosma verde na curva 20 e na 27 (a do mapa na casa 28 fica no grid e foi recuada)."
+  },
   "bogmire-1": {
-    "pecas": { "5": "U", "8": "U", "14": "D", "15": "D", "34": "D", "37": "U" },
-    "setas": { "4": ">", "30": ">", "37": ">" },
-    "pocas": [6, 7, 8, 32, 33],
+    "pecas": {
+      "5": "U",
+      "8": "U",
+      "14": "D",
+      "15": "D",
+      "34": "D",
+      "37": "U"
+    },
+    "setas": {
+      "4": ">",
+      "30": ">",
+      "37": ">"
+    },
+    "pocas": [
+      6,
+      7,
+      8,
+      32,
+      33
+    ],
     "nota": "Platô alto no laço de cima (9-13); descida para o miolo em 14-15 lida pela altura dos paredões. Rampa e seta do mapa na casa 38 recuadas para 37 (38-39 são o grid)."
   },
+  "bogmire-2": {
+    "pecas": {
+      "9": "D",
+      "12": "D",
+      "21": "U",
+      "23": "U"
+    },
+    "pocas": [
+      25
+    ],
+    "nota": "Faixas de rampa no trecho da frente (9 e 12) e no de cima-esquerda (21 e 23); poça d'água na casa 25. O laço extra de cima-direita do mapa não está no nosso traçado."
+  },
+  "newmojave-1": {
+    "pecas": {
+      "8": "U",
+      "18": "D"
+    },
+    "pocas": [
+      14
+    ],
+    "nota": "Platô alto no laço de cima (8-17); mancha de óleo junto ao laço de cima."
+  },
   "newmojave-3": {
-    "pecas": { "5": "U", "8": "U", "11": "D", "17": "D", "28": "U", "34": "D" },
-    "setas": { "3": ">", "18": ">" },
-    "pocas": [13, 26, 27, 28, 29, 33],
+    "pecas": {
+      "5": "U",
+      "8": "U",
+      "11": "D",
+      "17": "D",
+      "28": "U",
+      "34": "D"
+    },
+    "setas": {
+      "3": ">",
+      "18": ">"
+    },
+    "pocas": [
+      13,
+      26,
+      27,
+      28,
+      29,
+      33
+    ],
     "nota": "Seta antes do salto 19J sobre o vão 20G; manchas de óleo no trecho do meio (26-29)."
   },
+  "nho-1": {
+    "setas": {
+      "24": ">"
+    },
+    "pocas": [
+      8,
+      23
+    ],
+    "nota": "Pista plana; seta vermelha do mapa na casa 26 (grid) recuada para 24; montes de neve em 8 e 23 (o da casa 27 é grid)."
+  },
   "nho-3": {
-    "pecas": { "2": "U", "6": "D", "28": "U", "33": "D" },
-    "pocas": [24, 26, 29],
+    "pecas": {
+      "2": "U",
+      "6": "D",
+      "28": "U",
+      "33": "D"
+    },
+    "pocas": [
+      24,
+      26,
+      29
+    ],
     "nota": "Saltos em sequência 7J-8G-9J-10G (ilha no meio) vêm do traçado; montes de neve na reta de baixo."
   },
+  "inferno-1": {
+    "pecas": {
+      "5": "D",
+      "9": "U",
+      "18": "D",
+      "21": "U"
+    },
+    "setas": {
+      "28": ">"
+    },
+    "pocas": [
+      35
+    ],
+    "nota": "Descida antes do salto 7J-8G; o pouso do original é mais baixo, aqui a rampa de 9 devolve o nível (cruzamentos 17/29 e 31/41 na mesma altura). Faixas de rampa em 18 e 21, seta em 28, lava na casa 35."
+  },
   "inferno-5": {
-    "pecas": { "5": "U", "9": "D", "16": "D", "20": "U", "23": "B" },
-    "setas": { "12": ">", "13": "<", "14": ">", "24": "<" },
-    "pocas": [2, 3, 19, 22],
+    "pecas": {
+      "5": "U",
+      "9": "D",
+      "16": "D",
+      "20": "U",
+      "23": "B"
+    },
+    "setas": {
+      "12": ">",
+      "13": "<",
+      "14": ">",
+      "24": "<"
+    },
+    "pocas": [
+      2,
+      3,
+      19,
+      22
+    ],
     "nota": "A segunda rampa do lado de baixo-esquerda (23) virou lombada: o mapa mostra 3 subidas e 2 descidas e a pista precisa fechar na mesma altura."
   }
 }

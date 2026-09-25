@@ -133,3 +133,4 @@ Cada item precisa ser atendido e verificado pelos avaliadores.
 59. Animação na mudança de planeta (ao ser promovido para o planeta seguinte).
 60. A tela entre as corridas (garagem) está longa demais, com muita rolagem: deixar compacta.
 61. Destacar o número da corrida atual / total (ex.: 2/5) na garagem.
+62. Como no original: ao cruzar a chegada, o carro para e escurece (fica fora da disputa).
