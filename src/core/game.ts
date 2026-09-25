@@ -4,7 +4,7 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Announcer, Commentary } from '../audio/announcer';
 import { resumeAudio, setAudioLite, setSfxEnabled, suspendAudio, toggleMute, unlockAudio } from '../audio/context';
 import { Music } from '../audio/music';
-import { EngineSound, RivalEngines, type RivalEngineInput } from '../audio/engine';
+import { EngineSound, RivalEngines, warmEngineStep, type RivalEngineInput } from '../audio/engine';
 import { sfxAssist, sfxBump, sfxBurn, sfxCountdown, sfxDrop, sfxExplosion, sfxFall, sfxFire, sfxHit, sfxLand, sfxLap, sfxPickup, sfxSkid, sfxWall, prepareSfx, finaleShow } from '../audio/sfx';
 import { trackById, TRACKS } from '../data/tracks';
 import { VEHICLES } from '../data/vehicles';
@@ -18,7 +18,7 @@ import { deleteSlot, listSlots, loadCampaign, loadFromSlot, loadPrefs, saveCampa
 import { canInstall, fullscreenSupported, initPwa, initViewport, isFullscreen, isInstalled, isIos, onFullscreenChange, onInstallChange, promptInstall, quitGame, toggleFullscreen } from '../ui/pwa';
 import { Controls, createTouchControls, isTouchDevice, setTouchAutoThrottle, setTouchWeapons } from '../input/controls';
 import { CAMERA_LABELS, CameraRig, type CameraMode } from '../render/cameras';
-import { createCarMesh, type CarVisual } from '../render/cars';
+import { createCarMesh, prewarmCarMesh, type CarVisual } from '../render/cars';
 import { Effects } from '../render/effects';
 import { buildEnvironment, buildGround, buildSky, SUN_DIR } from '../render/environment';
 import { contactShadow, setMaxAnisotropy } from '../render/textures';
@@ -38,7 +38,7 @@ import { carContact, createWorld, PRIZES, stepDriver, stepWorld, type DriverStat
 import type { AiProfile } from '../sim/ai';
 import { Hud, ICONS, formatTime, type HudCar, type HudData } from '../ui/hud';
 import { icon } from '../ui/icons';
-import { setIdlePaused } from '../ui/idleQueue';
+import { idleJob, idleJobsUrgent, setIdlePaused } from '../ui/idleQueue';
 import { releaseThumbRenderer } from '../render/thumbnails';
 import { COLORS, Menus, WEAPON_LABEL, type CampaignReport, type HubData, type LobbyView, type NewCampaignOptions, type OnlineOptions, type OnlineResults, type QuickOptions, type ResultRow } from '../ui/menus';
 import { DROP_MS, NetClient, NetHost, netErrorText, normalizeCode } from '../net/peer';
@@ -680,6 +680,17 @@ export class Game {
       if (a === 'fullscreen') void toggleFullscreen();
     });
     initViewport(root, () => this.resize());
+    // primeiro toque ou tecla em qualquer lugar: cria o áudio já e manda para a fila ociosa o que
+    // antes era gerado dentro do clique de "correr" (ciclos de queima do motor e dos rivais, ~450 ms,
+    // e as camadas sintéticas dos efeitos)
+    const warmAudio = (): void => {
+      unlockAudio();
+      // urgentes: a fila do menu tem centenas de miniaturas na frente e a largada chegaria antes
+      idleJob('audio:sfx', () => prepareSfx(), true);
+      for (let i = 3; i >= 0; i--) idleJob(`audio:motor${i}`, () => warmEngineStep(i), true);
+    };
+    window.addEventListener('pointerdown', warmAudio, { once: true, capture: true });
+    window.addEventListener('keydown', warmAudio, { once: true, capture: true });
     // Ctrl é o tiro no PC: um Ctrl+W acidental pede confirmação em vez de fechar a corrida
     window.addEventListener('beforeunload', (e) => {
       // (também entre a chegada e os resultados: o resultado já está salvo, mas a tela ainda não apareceu)
@@ -1152,7 +1163,9 @@ export class Game {
 
   /** `midRace`: convidado online voltando a uma corrida já largada (sem contagem nem bipe). */
   private startRace(midRace = false): void {
-    this.createRace();
+    // grid já montado no menu (fundo do menu principal, garagem da campanha ou pré-monte da fila
+    // ociosa): não remonta — eram ~600 ms de modelos dos carros dentro do clique de "correr"
+    if (this.raceKey !== raceKeyOf(this.setup) || this.world.started || this.showcase) this.createRace();
     // corrida nova sem vídeo: frame() a pausa (sair enquanto o vídeo está fora não cobra)
     this.settled = null;
     this.countdown = COUNTDOWN;
@@ -1175,6 +1188,10 @@ export class Game {
       const saved = loadDynScale(this.quality.level);
       if (saved !== null) this.dynRes.restore(saved);
     }
+    // os primeiros segundos de corrida ainda pagam upload de malhas e link de shaders: a resolução
+    // dinâmica espera antes de julgar (senão descia dois degraus, com um engasgo por degrau, logo
+    // depois da largada — e voltava a subir minutos depois)
+    this.dynRes.hold(3);
     this.perfEvent('preparo', `escala ${this.dynRes.scale.toFixed(2)} degrau ${this.autoDeg.level} bloom ${this.postfx ? 1 : 0}`);
     this.menuRes = false;
     this.resize();
@@ -2238,6 +2255,43 @@ export class Game {
         beginAudio();
         this.setup = this.quickSetup(o);
         this.startRace();
+      },
+      /**
+       * Seleção da corrida rápida mudou: manda os carros daquele grid para a fila ociosa, ainda no
+       * menu (um modelo por intervalo livre). No clique de "correr", createRace só pega os prontos —
+       * eram ~600 ms de modelos dentro do clique.
+       */
+      prewarmQuick: (o: QuickOptions) => {
+        if (this.phase !== 'menu' || this.net) return;
+        const setup = this.quickSetup(o);
+        const grid = [...setup.opponents.map((r) => ({ id: r.spec.id, color: r.color })), { id: setup.playerSpec.id, color: setup.playerColor }];
+        const key = raceKeyOf(setup);
+        if (key === this.raceKey && !this.world.started) return;
+        // na frente das miniaturas dos menus (são centenas e podem levar minutos): primeiro um
+        // modelo por vez e, com eles prontos, o grid inteiro no fundo do menu — pista, cenário e
+        // shaders da pista nova compilados aqui, não no clique. É o que a garagem da campanha faz.
+        idleJobsUrgent([
+          ...grid.map((c) => ({ key: `carro:${c.id}|${c.color}`, run: () => prewarmCarMesh(c.id, c.color, this.shadows) })),
+          {
+            key: 'grid',
+            run: () => {
+              // o jogador pode ter saído do menu ou mudado a escolha enquanto a fila esperava
+              if (this.phase !== 'menu' || this.net || this.showcase || key === this.raceKey) return;
+              this.setup = setup;
+              this.createRace();
+              // com o grid na cena, compila os shaders da pista nova ainda no menu (compileAsync, em
+              // paralelo): era ~1 s de link de programas parado na tela de preparo, antes do "3"
+              idleJob(
+                'warmup',
+                () => {
+                  if (this.phase !== 'menu' || this.net || this.showcase || this.glLost) return;
+                  void this.effects.warmup(this.renderer, this.scene, this.rig.active, this.track.def.theme, { extra: this.darkWarmupGroup(), offscreen: !!this.postfx });
+                },
+                true,
+              );
+            },
+          },
+        ]);
       },
       newCampaign: (o: NewCampaignOptions) => {
         beginAudio();

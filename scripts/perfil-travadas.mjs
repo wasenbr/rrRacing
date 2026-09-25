@@ -4,7 +4,7 @@ import { chromium } from 'playwright-core';
 const secs = +(process.argv[2] ?? 60);
 const trackId = process.argv[3] ?? 'chem6-1';
 const base = process.argv[4] ?? 'http://localhost:5173/';
-const browser = await chromium.launch({ channel: 'chrome', headless: false, args: ['--autoplay-policy=no-user-gesture-required', '--disable-renderer-backgrounding', '--disable-background-timer-throttling'] });
+const browser = await chromium.launch({ channel: 'chrome', headless: false, args: ['--no-proxy-server', '--window-position=-2400,-2400', '--disable-backgrounding-occluded-windows', '--disable-features=CalculateNativeWinOcclusion', '--autoplay-policy=no-user-gesture-required', '--disable-renderer-backgrounding', '--disable-background-timer-throttling'] });
 const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
 await page.routeWebSocket(/.*/, () => {});
 page.on('pageerror', (e) => console.log('ERRO', String(e)));

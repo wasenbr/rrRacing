@@ -125,6 +125,24 @@ const cycleCache = new WeakMap<BaseAudioContext, Map<string, AudioBuffer>>();
  * O loop fecha sem clique: a posição das explosões é reescalada para caber exatamente em 2 s e a
  * cauda que passa do fim é somada no começo.
  */
+const noiseCache = new WeakMap<BaseAudioContext, Map<number, AudioBuffer>>();
+
+/**
+ * Ruído branco de `secs` segundos, um por contexto e duração (gerar 2 s de Math.random custa dezenas
+ * de ms; antes o jogador e os rivais geravam o seu na largada, dentro do clique de "correr").
+ */
+function noiseBuffer(ctx: BaseAudioContext, secs: number): AudioBuffer {
+  let cache = noiseCache.get(ctx);
+  if (!cache) noiseCache.set(ctx, (cache = new Map()));
+  const have = cache.get(secs);
+  if (have) return have;
+  const buf = ctx.createBuffer(1, Math.round(ctx.sampleRate * secs), ctx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  cache.set(secs, buf);
+  return buf;
+}
+
 function cycleBuffer(ctx: BaseAudioContext, heavy: boolean, seed: number): AudioBuffer {
   const key = `${heavy ? 'h' : 'l'}${seed}`;
   let cache = cycleCache.get(ctx);
@@ -312,9 +330,7 @@ export class EngineSound {
       this.synthUnderRec = 0.12;
     };
 
-    this.noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
-    const d = this.noiseBuf.getChannelData(0);
-    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    this.noiseBuf = noiseBuffer(ctx, 2);
     // UM loop de ruído compartilhado por todas as camadas (antes eram 7 fontes iguais tocando em
     // paralelo): cada camada tem o próprio filtro, então o ruído correlacionado não se percebe
     const sharedNoise = ctx.createBufferSource();
@@ -777,9 +793,7 @@ export class RivalEngines {
     const gen = ++this.gen;
     const { ctx } = a;
     const t = ctx.currentTime;
-    const noise = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
-    const nd = noise.getChannelData(0);
-    for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
+    const noise = noiseBuffer(ctx, 1);
     const pulses = pulseCurve();
     // um loop de ruído só para todas as vozes (cada uma filtra o seu)
     const noiseSrc = ctx.createBufferSource();
@@ -991,4 +1005,22 @@ export class RivalEngines {
       v.on = false;
     }
   }
+}
+
+/**
+ * Pré-gera, fora da largada, os buffers caros do motor: os ciclos de queima (2 s sintetizados
+ * amostra a amostra, um por voz) e os loops de ruído. São ~450 ms que antes caíam dentro do clique
+ * de "correr"; a fila ociosa do menu chama um passo por intervalo livre.
+ * `step` 0 = jogador (e os dois ruídos), 1..n = o ciclo de cada rival (mesma semente do jogo).
+ */
+export function warmEngineStep(step: number): void {
+  const a = audio();
+  if (!a) return;
+  const { ctx } = a;
+  if (step === 0) {
+    noiseBuffer(ctx, 2);
+    noiseBuffer(ctx, 1);
+    cycleBuffer(ctx, false, 1);
+    cycleBuffer(ctx, true, 1);
+  } else cycleBuffer(ctx, true, 10 + step);
 }

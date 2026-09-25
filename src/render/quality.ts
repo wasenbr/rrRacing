@@ -108,6 +108,17 @@ export class DynamicResolution {
 
   constructor(public min = 0.6) {}
 
+  /**
+   * Segura as trocas por `secs` segundos e joga fora a medição acumulada. Usado na largada: os
+   * primeiros quadros ainda pagam upload de malhas e link de shaders, e a escala descia dois degraus
+   * (dois engasgos de ~50 ms) por um custo que não era o da corrida.
+   */
+  hold(secs: number): void {
+    this.cooldown = Math.max(this.cooldown, secs);
+    this.avg = 1 / 60;
+    this.slow = 0;
+  }
+
   /** Começa numa escala conhecida (a da corrida anterior), limitada ao piso e ao teto atuais. */
   restore(scale: number): void {
     if (!Number.isFinite(scale)) return;
@@ -138,15 +149,19 @@ export class DynamicResolution {
     if (this.cooldown > 0) return false;
     let next = this.scale;
     if (this.avg > 1 / 50 || this.slow > 0.05) {
-      next = Math.max(this.min, this.scale - 0.1);
+      // cada troca recria o buffer da tela (30–70 ms de engasgo): bem atrás do orçamento, desce dois
+      // degraus de uma vez em vez de engasgar de novo 1,2 s depois
+      next = Math.max(this.min, this.scale - (this.avg > 1 / 40 ? 0.2 : 0.1));
       // a última subida não se sustentou: não tenta mais aquele degrau
       if (this.clock - this.lastUp < 8) this.ceiling = Math.max(this.min, this.scale - 0.05);
-    } else if (this.avg < 1 / 57 && this.slow < 0.01 && this.scale < this.ceiling) {
+    } else if (this.avg < 1 / 58 && this.slow < 0.005 && this.scale < this.ceiling) {
+      // subir é o degrau que costuma voltar atrás (dois engasgos por nada): só com folga clara e
+      // depois de bastante tempo estável
       next = Math.min(this.ceiling, this.scale + 0.05);
       this.lastUp = this.clock;
     }
     if (Math.abs(next - this.scale) < 1e-6) return false;
-    this.cooldown = next < this.scale ? 1.2 : 5;
+    this.cooldown = next < this.scale ? 1.2 : 9;
     this.scale = next;
     if (this.history.length >= 32) this.history.shift();
     this.history.push([+this.clock.toFixed(2), +next.toFixed(3)]);

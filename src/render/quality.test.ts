@@ -8,11 +8,17 @@ const run = (d: DynamicResolution, secs: number, cost: number) => {
 };
 
 describe('DynamicResolution.update', () => {
-  it('desce 0,1 por degrau até o piso quando o custo passa do orçamento', () => {
+  it('desce até o piso quando o custo passa do orçamento (dois degraus de uma vez quando está bem atrás)', () => {
     const d = new DynamicResolution(0.6);
     run(d, 20, 1 / 30);
     expect(d.scale).toBeCloseTo(0.6, 5);
-    // degraus registrados no histórico, em ordem decrescente
+    // 1/30 s por quadro é bem pior que o orçamento: desce 0,2 por vez (cada troca custa um engasgo)
+    expect(d.history.map((h) => h[1])).toEqual([0.8, 0.6]);
+  });
+
+  it('desce 0,1 por degrau quando está só um pouco atrás do orçamento', () => {
+    const d = new DynamicResolution(0.6);
+    run(d, 20, 1 / 45);
     expect(d.history.map((h) => h[1])).toEqual([0.9, 0.8, 0.7, 0.6]);
   });
 

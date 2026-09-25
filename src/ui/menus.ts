@@ -113,6 +113,8 @@ export interface LobbyView {
 
 export interface MenuActions {
   quickRace(o: QuickOptions): void;
+  /** Escolha da corrida rápida mudou: monta o grid na fila ociosa, antes do clique em CORRER. */
+  prewarmQuick?(o: QuickOptions): void;
   newCampaign(o: NewCampaignOptions): void;
   continueCampaign(): void;
   /** carrega a senha no slot escolhido (a tela já confirmou se ele estava ocupado) */
@@ -1587,6 +1589,8 @@ export class Menus {
     sel('.pwsel', (b) => Number(b.dataset.pwslot) === this.pwSlot);
     sel('.color', (b) => Number(b.dataset.color) === (b.dataset.group === 'new' ? this.newChar.color : this.quick.color));
     sel('.diff', (b) => b.dataset.diff === (b.dataset.group === 'new' ? this.newChar.difficulty : this.quick.difficulty));
+    // tela de corrida rápida na frente: o grid da escolha atual já vai sendo montado na fila ociosa
+    if (this.el.querySelector('.quick')) this.actions.prewarmQuick?.(this.quick);
   }
 
   /** Segundo toque confirma: o primeiro troca o texto do botão pela pergunta. */

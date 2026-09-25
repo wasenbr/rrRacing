@@ -136,3 +136,10 @@ Cada item precisa ser atendido e verificado pelos avaliadores.
 62. Como no original: ao cruzar a chegada, o carro para e escurece (fica fora da disputa).
 63. Link com sala inexistente (ou código inválido): mostrar o erro, pedir o código correto da sala e oferecer voltar ao menu inicial.
 64. Narrador gritado de arena (rodada 12) aprovado de ouvido pelo usuário: manter essa voz; takes de lightsUp e hammered incluídos a pedido.
+
+# Retorno do usuário (2026-09-25, desempenho)
+
+65. Jogando depois das últimas rodadas, sentiu travamentos na largada e ao longo da corrida:
+    o jogo precisa entrar e correr sem engasgos.
+66. Navegador de teste (playwright/capturas) sempre fora da vista do usuário — nunca na frente da
+    tela enquanto ele trabalha.

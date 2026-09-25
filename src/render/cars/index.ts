@@ -44,8 +44,39 @@ const VISUAL_SCALE: Record<string, number> = {
   havac: 1, // 2,59 x 4,08; vol 9,6
 };
 
-/** Modelo 3D de cada carro, gerado por código. */
+/**
+ * Carros já montados pela fila ociosa do menu, esperando a próxima corrida (ver prewarmCarMesh).
+ * Cada modelo custa ~100 ms para nascer: montados na largada, viravam um travamento de ~600 ms
+ * dentro do clique de "correr".
+ */
+const reserve = new Map<string, CarVisual>();
+const RESERVE_MAX = 8;
+const reserveKey = (vehicleId: string, color: number, shadows: boolean): string => `${vehicleId}|${color}|${shadows ? 1 : 0}`;
+
+/**
+ * Monta o carro fora da hora crítica e guarda para o próximo createCarMesh igual. Nada vai para a
+ * GPU aqui (só malhas na memória): o envio acontece no primeiro desenho, já na cena.
+ */
+export function prewarmCarMesh(vehicleId: string, color: number, shadows: boolean): void {
+  const k = reserveKey(vehicleId, color, shadows);
+  if (reserve.has(k)) return;
+  // reserva cheia (o jogador ficou trocando de carro/pista): a mais antiga sai sem ter sido usada
+  if (reserve.size >= RESERVE_MAX) reserve.delete(reserve.keys().next().value as string);
+  reserve.set(k, buildCarMesh(vehicleId, color, shadows));
+}
+
+/** Modelo 3D de cada carro, gerado por código (ou o já montado pela fila ociosa). */
 export function createCarMesh(vehicleId: string, color: number, shadows: boolean): CarVisual {
+  const k = reserveKey(vehicleId, color, shadows);
+  const ready = reserve.get(k);
+  if (ready) {
+    reserve.delete(k);
+    return ready;
+  }
+  return buildCarMesh(vehicleId, color, shadows);
+}
+
+function buildCarMesh(vehicleId: string, color: number, shadows: boolean): CarVisual {
   const v = (BUILDERS[vehicleId] ?? createMarauder)(color, shadows);
   // ~90 malhas por carro caem para ~50 (uma por material em cada parte móvel); o que o jogo ou a
   // animação mexem fica separado, e o resto tem a matriz congelada
