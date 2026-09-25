@@ -93,6 +93,47 @@ def f0_autocorr(path):
     return float(np.median(a)), float(12 * np.log2(np.percentile(a, 90) / np.percentile(a, 10)))
 
 
+def gritado(x, db=8.0):
+    """Só os trechos gritados: janelas de 400 ms com energia a até `db` do máximo (emendadas)."""
+    w, hop = int(0.4 * SR), int(0.1 * SR)
+    lv = [10 * np.log10(np.mean(x[s:s + w] ** 2) + 1e-12) for s in range(0, max(1, len(x) - w), hop)]
+    top, keep = max(lv), np.zeros(len(x), bool)
+    for k, v in enumerate(lv):
+        if v > top - db:
+            keep[k * hop:k * hop + w] = True
+    return x[keep]
+
+
+def emocao(path, so_gritado=False):
+    """
+    Métricas de grito (itens 32/53), as mesmas de som() em scripts/evidencias.mjs: esforço vocal =
+    energia 2–4 kHz menos 300–800 Hz nos quadros com voz (dB; grito sobe os agudos), sílabas/s =
+    picos do envelope 300–3000 Hz (≥ 4 dB de proeminência, ≥ 100 ms entre si) por segundo de fala.
+    """
+    x = pcm(path)
+    if so_gritado:
+        x = gritado(x)
+    bp = lambda lo, hi: sosfilt(butter(4, [lo, hi], 'band', fs=SR, output='sos'), x)
+    fr = int(0.02 * SR)
+    nf = len(x) // fr
+    e = lambda a, i: float(np.mean(a[i * fr:(i + 1) * fr] ** 2))
+    E = np.array([e(x, i) for i in range(nf)])
+    hi, lo, sp = bp(2000, 4000), bp(300, 800), bp(300, 3000)
+    voz = [i for i in range(nf) if E[i] > E.max() * 1e-3]
+    esforco = 10 * np.log10(sum(e(hi, i) for i in voz) / max(1e-12, sum(e(lo, i) for i in voz)))
+    h = int(0.01 * SR)
+    nb = len(sp) // h
+    env = np.array([10 * np.log10(np.mean(sp[i * h:i * h + 4 * h] ** 2) + 1e-12) for i in range(nb)])
+    top = env.max()
+    picos, ult = 0, -99
+    for i in range(1, nb - 1):
+        if env[i] >= env[i - 1] and env[i] > env[i + 1] and env[i] > top - 20 and i - ult >= 10:
+            if env[i] - max(env[max(0, i - 30):i + 1].min(), env[i:i + 30].min()) >= 4:
+                picos, ult = picos + 1, i
+    ativo = max(0.1, np.sum(env > top - 25) * 0.01)
+    return round(float(esforco), 1), round(float(picos / ativo), 2)
+
+
 def ffmpeg_filter(src, dst, af):
     r = run([FFMPEG, '-v', 'error', '-y', '-i', src, '-af', af, '-ac', '1', '-ar', '44100', '-c:a', 'libmp3lame', '-b:a', '96k', dst])
     if r.returncode:

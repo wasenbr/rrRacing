@@ -24,7 +24,7 @@ interface Particle {
   drag: number;
 }
 
-export type ParticleKind = 'fire' | 'smoke' | 'ball';
+export type ParticleKind = 'fire' | 'smoke' | 'ball' | 'spark';
 
 /**
  * Textura de partícula: mancha suave (fogo), nuvem com bordas irregulares (fumaça) ou labareda
@@ -34,26 +34,35 @@ function particleTexture(kind: ParticleKind): THREE.CanvasTexture {
   const tex = canvasTexture(128, 128, (ctx) => {
     ctx.clearRect(0, 0, 128, 128);
     if (kind === 'ball') {
+      // alfa: falloff radial suave (quase gaussiano) com rolos leves de chama; R: miolo mais claro
+      // que a borda (brilho do centro). Pixel a pixel, sem bordas duras de gradientes empilhados.
       let seed = 13;
       const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-      // vários rolos de chama sobrepostos: clareiam no meio, bordas em tom mais escuro
-      for (let i = 0; i < 34; i++) {
+      const lumps = Array.from({ length: 9 }, () => {
         const a = rnd() * Math.PI * 2;
-        const d = Math.sqrt(rnd()) * 30;
-        const x = 64 + Math.cos(a) * d;
-        const y = 64 + Math.sin(a) * d;
-        const r = 14 + rnd() * 20;
-        const v = Math.round(150 + (1 - d / 30) * 105 * rnd());
-        const g = ctx.createRadialGradient(x, y, 0, x, y, r);
-        g.addColorStop(0, `rgba(${v},${v},${v},0.5)`);
-        g.addColorStop(0.6, `rgba(${Math.round(v * 0.6)},${Math.round(v * 0.6)},${Math.round(v * 0.6)},0.3)`);
-        g.addColorStop(1, 'rgba(40,40,40,0)');
-        ctx.fillStyle = g;
-        ctx.fillRect(0, 0, 128, 128);
-      }
+        const d = 0.15 + rnd() * 0.3;
+        return { x: Math.cos(a) * d, y: Math.sin(a) * d, r: 0.22 + rnd() * 0.18 };
+      });
+      const img = ctx.createImageData(128, 128);
+      for (let py = 0; py < 128; py++)
+        for (let px = 0; px < 128; px++) {
+          const x = (px - 63.5) / 64;
+          const y = (py - 63.5) / 64;
+          let f = Math.exp(-((x * x + y * y) / 0.16));
+          for (const l of lumps) f += 0.35 * Math.exp(-(((x - l.x) ** 2 + (y - l.y) ** 2) / (l.r * l.r)));
+          const edge = Math.max(0, 1 - Math.hypot(x, y)); // garante zero na borda do quadrado
+          const a = Math.min(1, f * 0.85) * Math.min(1, edge * 3);
+          const core = Math.exp(-((x * x + y * y) / 0.08));
+          const o = (py * 128 + px) * 4;
+          img.data[o] = Math.round(255 * Math.min(1, 0.35 + core * 0.65));
+          img.data[o + 1] = img.data[o];
+          img.data[o + 2] = img.data[o];
+          img.data[o + 3] = Math.round(255 * a);
+        }
+      ctx.putImageData(img, 0, 0);
       return;
     }
-    if (kind === 'fire') {
+    if (kind === 'fire' || kind === 'spark') {
       const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 62);
       g.addColorStop(0, 'rgba(255,255,255,1)');
       g.addColorStop(0.35, 'rgba(255,255,255,0.75)');
@@ -89,6 +98,7 @@ const PARTICLE_VS = /* glsl */ `
   varying vec2 vUv;
   varying vec3 vColor;
   varying float vAlpha;
+  varying float vNear;
   void main() {
     vec4 c = modelViewMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
     float s = length(instanceMatrix[0].xyz);
@@ -104,7 +114,36 @@ const PARTICLE_VS = /* glsl */ `
       vColor = vec3(1.0);
     #endif
     // some quando encosta na câmera (explosão colada no cockpit não cobre a tela)
-    vAlpha = aAlpha * smoothstep(1.5, 6.0, -c.z);
+    vNear = smoothstep(1.5, 6.0, -c.z);
+    vAlpha = aAlpha * vNear;
+  }`;
+
+/**
+ * Faísca alongada (streak): a coluna 1 da matriz da instância leva o vetor do rastro (velocidade ×
+ * tempo), projetado na tela; o quadrado estica da cabeça (posição) para trás, com largura = tamanho.
+ */
+const STREAK_VS = /* glsl */ `
+  attribute float aAlpha;
+  attribute float aRot;
+  varying vec2 vUv;
+  varying vec3 vColor;
+  varying float vAlpha;
+  void main() {
+    vec4 c = modelViewMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+    float s = length(instanceMatrix[0].xyz);
+    vec3 v = (modelViewMatrix * vec4(instanceMatrix[1].xyz, 0.0)).xyz;
+    float L = length(v.xy);
+    vec2 dir = L > 1e-4 ? v.xy / L : vec2(cos(aRot), sin(aRot));
+    vec2 nrm = vec2(-dir.y, dir.x);
+    c.xy += dir * (position.x * (L + s) - L * 0.5) + nrm * (position.y * s);
+    gl_Position = projectionMatrix * c;
+    vUv = uv;
+    #ifdef USE_INSTANCING_COLOR
+      vColor = instanceColor;
+    #else
+      vColor = vec3(1.0);
+    #endif
+    vAlpha = aAlpha * smoothstep(1.0, 4.0, -c.z);
   }`;
 
 const FIRE_FS = /* glsl */ `
@@ -129,17 +168,23 @@ const SMOKE_FS = /* glsl */ `
     gl_FragColor = vec4(vColor * (0.75 + 0.25 * t.r), a);
   }`;
 
-/** Bola de fogo: mistura normal (pode escurecer até a fuligem), tom da textura modula o brilho. */
+/**
+ * Bola de fogo com mistura pré-multiplicada (One, OneMinusSrcAlpha): a cor é EMISSÃO somada e o alfa
+ * é quanto tapa o fundo. Quente: cor forte e alfa baixo (brilha como fogo, não vira tinta); fria:
+ * marrom-fumaça escuro com alfa maior (fuligem que cobre). O miolo (t.r) brilha mais que a borda.
+ */
 const BALL_FS = /* glsl */ `
   uniform sampler2D map;
   varying vec2 vUv;
   varying vec3 vColor;
   varying float vAlpha;
+  varying float vNear;
   void main() {
     vec4 t = texture2D(map, vUv);
-    float a = min(1.0, t.a * 1.6) * vAlpha;
-    if (a < 0.01) discard;
-    gl_FragColor = vec4(vColor * (0.45 + 0.75 * t.r), a);
+    float a = t.a * vAlpha;
+    vec3 col = vColor * t.a * (0.4 + 0.9 * t.r) * vNear;
+    if (a < 0.004 && max(col.r, max(col.g, col.b)) < 0.004) discard;
+    gl_FragColor = vec4(col, a);
   }`;
 
 /**
@@ -147,14 +192,20 @@ const BALL_FS = /* glsl */ `
  * com cor e opacidade por instância. A fumaça não é iluminada (não vira "bola facetada").
  */
 export function particleMaterial(kind: ParticleKind): THREE.ShaderMaterial {
-  return new THREE.ShaderMaterial({
+  const mat = new THREE.ShaderMaterial({
     uniforms: { map: { value: particleTexture(kind) } },
-    vertexShader: PARTICLE_VS,
-    fragmentShader: kind === 'fire' ? FIRE_FS : kind === 'ball' ? BALL_FS : SMOKE_FS,
+    vertexShader: kind === 'spark' ? STREAK_VS : PARTICLE_VS,
+    fragmentShader: kind === 'fire' || kind === 'spark' ? FIRE_FS : kind === 'ball' ? BALL_FS : SMOKE_FS,
     transparent: true,
     depthWrite: false,
-    blending: kind === 'fire' ? THREE.AdditiveBlending : THREE.NormalBlending,
+    blending: kind === 'fire' || kind === 'spark' ? THREE.AdditiveBlending : kind === 'ball' ? THREE.CustomBlending : THREE.NormalBlending,
   });
+  if (kind === 'ball') {
+    mat.blendEquation = THREE.AddEquation;
+    mat.blendSrc = THREE.OneFactor;
+    mat.blendDst = THREE.OneMinusSrcAlphaFactor;
+  }
+  return mat;
 }
 
 /** Quadrado para billboards instanciados, com opacidade (aAlpha) e giro (aRot) por instância. */
@@ -169,8 +220,12 @@ export function billboardGeometry(capacity: number): { geo: THREE.PlaneGeometry;
   return { geo, alpha, rot };
 }
 
-/** fim da bola de fogo: fuligem quase preta */
-const SOOT = new THREE.Color(0x0e0a08);
+/** bola de fogo: vermelho-brasa só de passagem, marrom-fumaça e, no fim, fuligem */
+const EMBER_RED = new THREE.Color(0x9a3412).multiplyScalar(0.7);
+const SMOKE_BROWN = new THREE.Color(0x3c2c20);
+const SOOT = new THREE.Color(0x16110d);
+/** faísca: rastro = velocidade × este tempo (s) */
+const STREAK_TIME = 0.045;
 
 class ParticlePool {
   readonly mesh: THREE.InstancedMesh;
@@ -195,7 +250,7 @@ class ParticlePool {
     this.mesh.setColorAt(0, new THREE.Color());
     this.mesh.frustumCulled = false;
     this.mesh.count = 0;
-    this.mesh.renderOrder = kind === 'fire' ? 3 : kind === 'ball' ? 2.5 : 2;
+    this.mesh.renderOrder = kind === 'fire' || kind === 'spark' ? 3 : kind === 'ball' ? 2.5 : 2;
   }
 
   /** fração das partículas emitidas (qualidade gráfica) */
@@ -211,14 +266,41 @@ class ParticlePool {
     this.mesh.count = 0;
   }
 
+  /** próxima vaga sobrescrita quando o pool está cheio (buffer circular: sem shift, que move o vetor todo) */
+  private over = 0;
+
+  /**
+   * Emite uma partícula. Cópia campo a campo para um objeto do pool (as cores também são copiadas
+   * para Colors próprias): o literal e as cores passados pelo chamador morrem logo (coleta barata
+   * da geração nova); antes o pool guardava as referências por ~1 s, elas iam para a geração velha e
+   * a coleta grande travava o passo da simulação.
+   */
   emit(p: Omit<Particle, 'max'>): void {
     if (this.density < 1 && Math.random() > this.density) return;
-    const it = this.items.length >= this.capacity ? this.items.shift()! : this.free.pop();
-    const item = Object.assign(it ?? ({} as Particle & { rot: number; spin: number }), p);
+    let item: Particle & { rot: number; spin: number };
+    if (this.items.length >= this.capacity) {
+      // cheio: reaproveita uma vaga em rodízio, no lugar
+      item = this.items[this.over++ % this.items.length];
+    } else {
+      item = this.free.pop() ?? ({ c0: new THREE.Color(), c1: new THREE.Color() } as Particle & { rot: number; spin: number });
+      this.items.push(item);
+    }
+    item.x = p.x;
+    item.y = p.y;
+    item.z = p.z;
+    item.vx = p.vx;
+    item.vy = p.vy;
+    item.vz = p.vz;
+    item.life = p.life;
     item.max = p.life;
+    item.size0 = p.size0;
+    item.size1 = p.size1;
+    item.c0.copy(p.c0);
+    item.c1.copy(p.c1);
+    item.gravity = p.gravity;
+    item.drag = p.drag;
     item.rot = Math.random() * Math.PI * 2;
     item.spin = (Math.random() - 0.5) * 1.6;
-    this.items.push(item);
   }
 
   update(dt: number): void {
@@ -248,17 +330,33 @@ class ParticlePool {
       const t = 1 - p.life / p.max;
       // tamanho = diâmetro do billboard (a esfera antiga tinha raio 0,5 × size)
       const size = (p.size0 + (p.size1 - p.size0) * (this.kind === 'ball' ? 1 - (1 - t) * (1 - t) : t)) * (this.kind === 'smoke' ? 1.25 : 1.1);
-      this.m.compose(this.p.set(p.x, p.y, p.z), this.q, this.s.setScalar(size));
+      if (this.kind === 'spark') {
+        // coluna 0 = largura, coluna 1 = vetor do rastro (esticado no shader), coluna 3 = posição
+        const e = this.m.elements;
+        e[0] = size; e[1] = 0; e[2] = 0; e[3] = 0;
+        e[4] = p.vx * STREAK_TIME; e[5] = p.vy * STREAK_TIME; e[6] = p.vz * STREAK_TIME; e[7] = 0;
+        e[8] = 0; e[9] = 0; e[10] = size; e[11] = 0;
+        e[12] = p.x; e[13] = p.y; e[14] = p.z; e[15] = 1;
+      } else this.m.compose(this.p.set(p.x, p.y, p.z), this.q, this.s.setScalar(size));
       this.mesh.setMatrixAt(i, this.m);
-      // bola de fogo: três tons (laranja → vermelho → fuligem preta); demais: dois
+      // bola de fogo: laranja quente → laranja-queimado → vermelho de passagem → marrom-fumaça → fuligem
       if (this.kind === 'ball') {
-        if (t < 0.3) this.c.copy(p.c0).lerp(p.c1, t / 0.3);
-        else this.c.copy(p.c1).lerp(SOOT, Math.min(1, (t - 0.3) / 0.5));
+        if (t < 0.18) this.c.copy(p.c0).lerp(p.c1, t / 0.18);
+        else if (t < 0.36) this.c.copy(p.c1).lerp(EMBER_RED, (t - 0.18) / 0.18);
+        else if (t < 0.7) this.c.copy(EMBER_RED).lerp(SMOKE_BROWN, (t - 0.36) / 0.34);
+        else this.c.copy(SMOKE_BROWN).lerp(SOOT, (t - 0.7) / 0.3);
       } else this.c.copy(p.c0).lerp(p.c1, t);
       this.mesh.setColorAt(i, this.c);
       // entra rápido e some aos poucos
       const fadeIn = Math.min(1, t / (this.kind === 'ball' ? 0.04 : 0.08));
-      this.alpha.setX(i, fadeIn * (this.kind === 'smoke' ? 0.62 * (1 - t) : this.kind === 'ball' ? 0.95 * (1 - t * t * t) : 1 - t * t));
+      let a: number;
+      if (this.kind === 'smoke') a = 0.62 * (1 - t);
+      else if (this.kind === 'ball') {
+        // alfa = quanto tapa o fundo: pouco enquanto é fogo (brilha), mais quando vira fumaça
+        const out = t < 0.55 ? 1 : 1 - ((t - 0.55) / 0.45) ** 2;
+        a = (0.18 + 0.47 * Math.min(1, t / 0.45)) * out;
+      } else a = 1 - t * t;
+      this.alpha.setX(i, fadeIn * a);
       this.rot.setX(i, p.rot);
     }
     this.mesh.count = n;
@@ -491,7 +589,7 @@ const TMP = new THREE.Vector3();
 const OIL_R = (WEAPONS as unknown as { oil: { radius: number } }).oil.radius;
 
 /** Destroço sólido da explosão (reaproveitado de uma lista livre). */
-interface Debris { x: number; y: number; z: number; vx: number; vy: number; vz: number; floor: number; rx: number; ry: number; rz: number; spin: number; s: number; life: number }
+interface Debris { x: number; y: number; z: number; vx: number; vy: number; vz: number; floor: number; rx: number; ry: number; rz: number; spin: number; s: number; life: number; color: THREE.Color }
 /** Emissor da coluna de fumaça escura de uma explosão. */
 interface Column { x: number; y: number; z: number; s: number; t: number; acc: number; rate: number }
 
@@ -505,6 +603,8 @@ export class Effects {
   private smoke: ParticlePool;
   /** bola de fogo das explosões (mistura normal: esfria de laranja a fuligem) */
   private ball: ParticlePool;
+  /** faíscas alongadas (streak), aditivas */
+  private spark: ParticlePool;
   /** nível baixo/celular: explosão reduzida (menos bolas, destroços e fumaça) */
   private lite = false;
   private projectiles = new Map<number, THREE.Object3D>();
@@ -645,6 +745,7 @@ export class Effects {
   /** Qualidade baixa: menos fumaça (a mais cara, por sobreposição) e um pouco menos de fogo. */
   setDensity(d: number): void {
     this.smoke.density = d;
+    this.spark.density = Math.min(1, d + 0.3);
     this.fire.density = Math.min(1, d + 0.3);
     this.debrisDensity = d;
     let touch = false;
@@ -660,7 +761,8 @@ export class Effects {
     this.fire = new ParticlePool(500, 'fire');
     this.smoke = new ParticlePool(700, 'smoke');
     this.ball = new ParticlePool(96, 'ball');
-    this.group.add(this.fire.mesh, this.smoke.mesh, this.ball.mesh);
+    this.spark = new ParticlePool(320, 'spark');
+    this.group.add(this.fire.mesh, this.smoke.mesh, this.ball.mesh, this.spark.mesh);
     this.skids = new THREE.InstancedMesh(
       new THREE.PlaneGeometry(0.34, 0.75).rotateX(-Math.PI / 2),
       new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.42, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3 }),
@@ -689,21 +791,22 @@ export class Effects {
       ctx.fillStyle = g;
       ctx.fillRect(0, 0, 128, 128);
     });
-    // onda de choque: anel esfumado (borda externa nítida, rastro suave para dentro)
-    const shockTex = canvasTexture(128, 128, (ctx) => {
-      ctx.clearRect(0, 0, 128, 128);
-      const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 63);
+    // onda de choque: anel FINO com o miolo transparente (borda externa nítida, rastro curto)
+    const shockTex = canvasTexture(256, 256, (ctx) => {
+      ctx.clearRect(0, 0, 256, 256);
+      const g = ctx.createRadialGradient(128, 128, 0, 128, 128, 127);
       g.addColorStop(0, 'rgba(255,255,255,0)');
-      g.addColorStop(0.55, 'rgba(255,255,255,0.05)');
-      g.addColorStop(0.82, 'rgba(255,255,255,0.45)');
-      g.addColorStop(0.93, 'rgba(255,255,255,1)');
+      g.addColorStop(0.8, 'rgba(255,255,255,0)');
+      g.addColorStop(0.89, 'rgba(255,255,255,0.35)');
+      g.addColorStop(0.94, 'rgba(255,255,255,1)');
+      g.addColorStop(0.975, 'rgba(255,255,255,0.3)');
       g.addColorStop(1, 'rgba(255,255,255,0)');
       ctx.fillStyle = g;
-      ctx.fillRect(0, 0, 128, 128);
+      ctx.fillRect(0, 0, 256, 256);
     });
     // anéis de choque e marcas queimadas: pools criados uma vez (antes, um material por explosão)
     for (let i = 0; i < 4; i++) {
-      const mesh = new THREE.Mesh(this.ringGeo, new THREE.MeshBasicMaterial({ map: shockTex, color: HOT(0xffc890, 1.1), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4 }));
+      const mesh = new THREE.Mesh(this.ringGeo, new THREE.MeshBasicMaterial({ map: shockTex, color: 0xffc08a, transparent: true, opacity: 0.6, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, fog: false }));
       mesh.visible = false;
       mesh.renderOrder = 2;
       this.group.add(mesh);
@@ -725,10 +828,19 @@ export class Effects {
       this.group.add(sprite);
       this.blasts.push({ sprite, life: 0, max: 0.1, size: 1 });
     }
-    // lascas irregulares de metal escuro
-    const chunk = new THREE.DodecahedronGeometry(0.3, 0);
-    chunk.scale(1.5, 0.5, 1.1);
-    this.debris = new THREE.InstancedMesh(chunk, new THREE.MeshStandardMaterial({ color: 0x3a3634, metalness: 0.6, roughness: 0.45, emissive: 0x240800 }), Effects.DEBRIS);
+    // chapas finas de lataria dobradas (vinco em V e ponta torcida), na cor do carro (instanceColor)
+    const chunk = new THREE.BoxGeometry(0.8, 0.035, 0.55, 6, 1, 4);
+    const pos = chunk.attributes.position as THREE.BufferAttribute;
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i);
+      const z = pos.getZ(i);
+      pos.setY(i, pos.getY(i) + Math.abs(x) * 0.42 + x * z * 0.35 - z * z * 0.25);
+      // borda rasgada: encolhe um canto
+      if (x > 0.2 && z > 0.1) pos.setX(i, x - 0.12);
+    }
+    chunk.computeVertexNormals();
+    this.debris = new THREE.InstancedMesh(chunk, new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 0.75, roughness: 0.38, emissive: 0x120500 }), Effects.DEBRIS);
+    this.debris.setColorAt(0, new THREE.Color(0x4a4644));
     this.debris.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.debris.count = 0;
     this.debris.frustumCulled = false;
@@ -813,6 +925,7 @@ export class Effects {
     }
     this.fire.clear();
     this.ball.clear();
+    this.spark.clear();
     this.smoke.clear();
     this.world = null;
   }
@@ -876,7 +989,8 @@ export class Effects {
 
   /* ---------- emissores ---------- */
 
-  explosion(x: number, y: number, z: number, big = true): void {
+  /** `color` = cor do carro destruído (tinge as chapas dos destroços). */
+  explosion(x: number, y: number, z: number, big = true, color = 0x4a4644): void {
     const s = big ? 1.5 : 0.75;
     const lite = this.lite;
     // clarão curto e contido (~0,1 s), alaranjado: o "estalo" sem estourar a tela de branco
@@ -885,8 +999,9 @@ export class Effects {
     b.max = b.life = big ? 0.1 : 0.07;
     b.size = (big ? 2.4 : 2.0) * s;
     b.sprite.visible = true;
-    // bola de fogo com volume: rolos de chama texturizados (laranja -> vermelho -> fuligem preta),
-    // que crescem, sobem e escurecem; mistura normal, então a fuligem tapa o fundo de verdade
+    // bola de fogo com volume: rolos de chama (laranja quente -> laranja-queimado -> vermelho de
+    // passagem -> marrom-fumaça), que crescem, sobem e esfriam; mistura pré-multiplicada: brilha
+    // enquanto é fogo e só tapa o fundo quando vira fumaça
     const balls = (big ? 11 : 5) >> (lite ? 1 : 0);
     for (let i = 0; i < balls; i++) {
       const a = Math.random() * Math.PI * 2;
@@ -896,7 +1011,7 @@ export class Effects {
         x: x + Math.cos(a) * r, y: y + 0.7 + Math.random() * 0.9 * s, z: z + Math.sin(a) * r,
         vx: Math.cos(a) * (1 + Math.random() * 2) * s, vy: 1.5 + Math.random() * 2.5, vz: Math.sin(a) * (1 + Math.random() * 2) * s,
         life: 0.75 + Math.random() * 0.45, size0: (hot ? 1.2 : 1.6) * s, size1: (hot ? 3.0 : 3.8) * s,
-        c0: hot ? HOT(0xffd26a, 1.5) : HOT(0xff9a30, 1.3), c1: HOT(0xc0280a, 0.75), gravity: -1.5, drag: 2.8,
+        c0: hot ? HOT(0xffb050, 1.7) : HOT(0xff8a30, 1.3), c1: HOT(0xd0601c, 0.9), gravity: -1.5, drag: 2.8,
       });
     }
     // núcleo aditivo curto (o brilho do miolo) e algumas línguas de fogo para os lados
@@ -904,8 +1019,8 @@ export class Effects {
       this.fire.emit({
         x: x + (Math.random() - 0.5) * 0.8 * s, y: y + 0.9 + Math.random() * 0.6 * s, z: z + (Math.random() - 0.5) * 0.8 * s,
         vx: 0, vy: 1.5, vz: 0,
-        life: 0.22 + Math.random() * 0.12, size0: 1.8 * s, size1: 2.6 * s,
-        c0: HOT(0xffe090, 1.2), c1: HOT(0xff5010, 0.4), gravity: 0, drag: 3,
+        life: 0.3 + Math.random() * 0.1, size0: 1.8 * s, size1: 2.6 * s,
+        c0: HOT(0xffd890, 1.6), c1: HOT(0xff7020, 0.35), gravity: 0, drag: 3,
       });
     }
     const n = (big ? 14 : 6) >> (lite ? 1 : 0);
@@ -939,8 +1054,12 @@ export class Effects {
       d.ry = Math.random() * 6;
       d.rz = Math.random() * 6;
       d.spin = 5 + Math.random() * 8;
-      d.s = (0.9 + Math.random() * 1.1) * (big ? 1.35 : 0.8);
+      d.s = (0.5 + Math.random() * 0.4) * (big ? 1.25 : 0.8);
       d.life = 2.2 + Math.random() * 1.2;
+      // maioria na cor do carro (variando o tom); algumas chapas chamuscadas
+      d.color ??= new THREE.Color();
+      if (i % 4 === 3) d.color.setHex(0x2a2522);
+      else d.color.setHex(color).multiplyScalar(0.75 + Math.random() * 0.35);
       this.debrisItems.push(d);
     }
     // coluna de fumaça escura: o carro destruído solta fumaça por ~1,2 s, que sobe e dura 2-3 s
@@ -980,7 +1099,7 @@ export class Effects {
     ring.mesh.position.set(x, (onGround ? ground : y) + 0.12, z);
     ring.s0 = big ? 0.9 : 0.5;
     ring.mesh.scale.setScalar(ring.s0);
-    ring.mesh.material.opacity = 1;
+    ring.mesh.material.opacity = 0.6;
     // marca queimada no chão (~8 s)
     if (onGround) {
       const sc = this.scorches.reduce((a, c) => (a.life < c.life ? a : c));
@@ -993,15 +1112,22 @@ export class Effects {
     }
   }
 
+  /** Faíscas alongadas (rastro na direção do voo) e um clarão aditivo curto no ponto de contato. */
   sparks(x: number, y: number, z: number, n: number): void {
     for (let i = 0; i < n; i++) {
-      this.fire.emit({
+      this.spark.emit({
         x, y, z,
-        vx: (Math.random() - 0.5) * 22, vy: Math.random() * 12, vz: (Math.random() - 0.5) * 22,
-        life: 0.25 + Math.random() * 0.35, size0: 0.3, size1: 0.08,
-        c0: HOT(0xffc050, 2.4), c1: HOT(0xff5010, 1.2), gravity: 25, drag: 1,
+        vx: (Math.random() - 0.5) * 24, vy: 2 + Math.random() * 11, vz: (Math.random() - 0.5) * 24,
+        life: 0.22 + Math.random() * 0.3, size0: 0.3, size1: 0.12,
+        c0: HOT(0xfff0b0, 3.2), c1: HOT(0xff7020, 1.4), gravity: 22, drag: 1.2,
       });
     }
+    // clarão no contato (maior quanto mais forte a pancada)
+    this.fire.emit({
+      x, y, z, vx: 0, vy: 0, vz: 0,
+      life: 0.07, size0: 0.9 + Math.min(1.6, n * 0.07), size1: 0.4,
+      c0: HOT(0xffe0a0, 2.2), c1: HOT(0xff8030, 0.8), gravity: 0, drag: 0,
+    });
   }
 
   puff(x: number, y: number, z: number, color = 0x2a2828, size = 1): void {
@@ -1221,35 +1347,117 @@ export class Effects {
    * A compilação corre em paralelo (sem travar a página); antes, o primeiro quadro da largada
    * parava 400–600 ms e o primeiro tiro de cada tipo, 100–400 ms.
    */
-  async warmup(renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.Camera, theme: string): Promise<void> {
+  async warmup(
+    renderer: THREE.WebGLRenderer,
+    scene: THREE.Scene,
+    camera: THREE.Camera,
+    theme: string,
+    opts: { extra?: THREE.Object3D; offscreen?: boolean } = {},
+  ): Promise<void> {
     const g = new THREE.Group();
     for (const k of ['laser', 'missile', 'sundog']) g.add(this.makeProjectile(k));
     for (const k of ['oil', 'slime', 'puddle', 'snow', 'lava', 'scatter', 'mine']) g.add(this.makeHazard(k, 0, theme));
     g.add(this.makePickup('money'), this.makePickup('armor'));
-    for (const r of this.rings) r.mesh.visible = true;
-    for (const sc of this.scorches) sc.mesh.visible = true;
-    this.debris.count = 1;
-    for (const b of this.blasts) b.sprite.visible = true;
+    // objetos extras do jogo (ex.: materiais escuros da chegada)
+    if (opts.extra) g.add(opts.extra);
     scene.add(g);
-    const seen = new Set<THREE.Texture>();
+    // TUDO fica visível e sem recorte de câmera durante o preparo (pools de explosão, destroços,
+    // fumaça, faíscas, anéis, marcas, o que está fora do quadro): antes só o visível subia, e o resto
+    // (texturas, malhas, variantes de shader) subia no meio da corrida, no primeiro uso — engasgos
+    // de 1–2 s logo depois da largada. Luzes ficam como estão: mudariam a chave dos shaders
+    const lit = new Set<THREE.Object3D>();
     scene.traverseVisible((o) => {
-      const m = (o as THREE.Mesh).material;
-      for (const mat of Array.isArray(m) ? m : m ? [m] : [])
-        for (const v of Object.values(mat)) {
-          if (v instanceof THREE.Texture && !seen.has(v)) {
-            seen.add(v);
-            renderer.initTexture(v);
-          }
-        }
+      if ((o as THREE.Light).isLight) lit.add(o);
     });
-    try {
-      await renderer.compileAsync(scene, camera);
-    } finally {
+    const shown: THREE.Object3D[] = [];
+    const unculled: THREE.Object3D[] = [];
+    const lightsOff: THREE.Object3D[] = [];
+    const counts: [THREE.InstancedMesh, number][] = [];
+    scene.traverse((o) => {
+      if ((o as THREE.Light).isLight) {
+        // luz apagada por um pai invisível: segue apagada quando o pai aparecer
+        if (o.visible && !lit.has(o)) {
+          o.visible = false;
+          lightsOff.push(o);
+        }
+        return;
+      }
+      if (!o.visible) {
+        o.visible = true;
+        shown.push(o);
+      }
+      if (o.frustumCulled) {
+        o.frustumCulled = false;
+        unculled.push(o);
+      }
+      const im = o as THREE.InstancedMesh;
+      if (im.isInstancedMesh && im.count === 0) {
+        counts.push([im, 0]);
+        im.count = 1;
+      }
+    });
+    // texturas de todos os materiais, inclusive as dos uniforms (partículas em ShaderMaterial)
+    const seen = new Set<THREE.Texture>();
+    const initTex = (v: unknown) => {
+      if (v instanceof THREE.Texture && !seen.has(v)) {
+        seen.add(v);
+        renderer.initTexture(v);
+      }
+    };
+    scene.traverse((o) => {
+      const m = (o as THREE.Mesh).material;
+      for (const mat of Array.isArray(m) ? m : m ? [m] : []) {
+        for (const v of Object.values(mat)) initTex(v);
+        const u = (mat as THREE.ShaderMaterial).uniforms;
+        if (u) for (const k in u) initTex(u[k]?.value);
+      }
+    });
+    const restore = () => {
+      for (const o of shown) o.visible = false;
+      for (const o of unculled) o.frustumCulled = true;
+      for (const o of lightsOff) o.visible = true;
+      for (const [im, n] of counts) im.count = n;
       scene.remove(g);
-      for (const r of this.rings) r.mesh.visible = r.life > 0;
-      for (const sc of this.scorches) sc.mesh.visible = sc.life > 0;
+      // os pools que ganharam vida durante a espera ficam com a contagem certa
       this.debris.count = this.debrisItems.length;
-      for (const b of this.blasts) b.sprite.visible = b.life > 0;
+    };
+    let rt: THREE.WebGLRenderTarget | null = null;
+    try {
+      // com pós-processamento a cena é desenhada num alvo (outra variante de shader: sem tom nem
+      // sRGB): compila as duas em paralelo (a da tela serve à queda automática que desliga o bloom)
+      const pending: Promise<unknown>[] = [];
+      if (opts.offscreen) {
+        rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType });
+        const prev = renderer.getRenderTarget();
+        renderer.setRenderTarget(rt);
+        pending.push(renderer.compileAsync(scene, camera));
+        renderer.setRenderTarget(prev);
+      }
+      pending.push(renderer.compileAsync(scene, camera));
+      await Promise.all(pending);
+      // um desenho de tudo num canto de 1 pixel: sobe as malhas (e os buffers das instâncias) e
+      // compila a sombra de cada objeto, sem custo de pixels
+      const prevRt = renderer.getRenderTarget();
+      renderer.shadowMap.needsUpdate = true;
+      if (rt) {
+        renderer.setRenderTarget(rt);
+        renderer.render(scene, camera);
+        renderer.setRenderTarget(prevRt);
+      } else {
+        const vp = renderer.getViewport(new THREE.Vector4());
+        const scissor = renderer.getScissorTest();
+        renderer.setViewport(0, 0, 1, 1);
+        renderer.setScissor(0, 0, 1, 1);
+        renderer.setScissorTest(true);
+        renderer.render(scene, camera);
+        renderer.setScissorTest(scissor);
+        renderer.setViewport(vp);
+      }
+    } finally {
+      restore();
+      rt?.dispose();
+      // o mapa de sombras foi feito com tudo visível: refaz no próximo desenho
+      renderer.shadowMap.needsUpdate = true;
     }
     // alguns quadros ainda com a contagem parada: sobem as malhas (pista, cenário, carros) e o
     // driver termina de preparar os shaders — as primeiras travadas ficam antes do "3"
@@ -1405,7 +1613,7 @@ export class Effects {
       // sai rápido e desacelera (ease-out); vai apagando enquanto abre
       const e = 1 - (1 - t) * (1 - t) * (1 - t);
       r.mesh.scale.setScalar(r.s0 * (1 + e * 7));
-      r.mesh.material.opacity = Math.max(0, (1 - t) * (1 - t));
+      r.mesh.material.opacity = 0.6 * Math.max(0, (1 - t) * (1 - t));
       if (r.life <= 0) r.mesh.visible = false;
     }
     // marcas queimadas: somem aos poucos nos últimos 2 s
@@ -1448,6 +1656,7 @@ export class Effects {
     this.columns.length = nc;
     this.fire.update(dt);
     this.ball.update(dt);
+    this.spark.update(dt);
     this.smoke.update(dt);
   }
 
@@ -1485,8 +1694,10 @@ export class Effects {
       this.dq.setFromEuler(this.de.set(d.rx, d.ry, d.rz));
       this.dm.compose(this.dv.set(d.x, d.y, d.z), this.dq, TMP.set(k, k, k));
       this.debris.setMatrixAt(i, this.dm);
+      this.debris.setColorAt(i, d.color);
     }
     this.debris.count = n;
     this.debris.instanceMatrix.needsUpdate = true;
+    if (this.debris.instanceColor) this.debris.instanceColor.needsUpdate = true;
   }
 }

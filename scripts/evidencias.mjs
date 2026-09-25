@@ -104,6 +104,19 @@ async function telas() {
     }, trackId);
     await wait(1500);
     await page.waitForFunction(() => !window.game.preparing, null, { timeout: 60000 }).catch(() => {});
+    // largada instantânea e o carro do jogador posto 2 casas antes da rampa J a ~40 m/s, no chão
+    // (como place() em sim.test.ts); o piloto automático (?autopilot) segue acelerando
+    await page.evaluate((j) => {
+      const g = window.game;
+      const w = g.world;
+      const tr = w.track;
+      const c = w.racers[g.playerId].car;
+      g.countdown = 0;
+      g.phase = 'racing';
+      w.started = true;
+      const pt = tr.pointAtDist(tr.pieces[j].startDist - 2 * 20);
+      Object.assign(c, { x: pt.x, z: pt.z, y: pt.h, vy: 0, heading: pt.heading, pieceIndex: pt.pieceIndex, grounded: true, airTime: 0, vx: Math.sin(pt.heading) * 40, vz: Math.cos(pt.heading) * 40 });
+    }, j);
     const res = { pista: trackId, casaJ: j, ok: false };
     for (const fase of ['decolagem', 'meio', 'pouso']) {
       // avança até o momento pedido e congela a prova (fase 'paused' sem o menu de pausa)
@@ -112,23 +125,24 @@ async function telas() {
         const w = g.world;
         const tr = w.track;
         const n = tr.pieces.length;
-        const me = w.racers[g.playerId];
-        const c = me.car;
+        const c = w.racers[g.playerId].car;
         g.phase = 'racing';
+        w.started = true;
         let gEnd = (j + 1) % n;
         while (tr.pieces[(gEnd + 1) % n].code === 'G') gEnd = (gEnd + 1) % n;
         const gapStart = tr.pieces[(j + 1) % n].startDist;
         const gapEnd = tr.pieces[gEnd].startDist + tr.pieces[gEnd].length;
         const info = prev ?? {};
         let ok = false;
-        for (let k = 0; k < 60 * 120; k++) {
+        for (let k = 0; k < 60 * 10; k++) {
           const wasAir = !c.grounded;
+          const J = tr.pieces[j];
+          const onJ = c.pieceIndex === j;
           g.step(1 / 60);
-          if (c.fell) return { ...info, erro: 'caiu no vão' };
+          if (c.fell) return { ...info, erro: `caiu no vão (${fase})` };
           if (fase === 'decolagem') {
-            if (k > 60 * 3 && c.pieceIndex === j && !c.grounded) {
-              const J = tr.pieces[j];
-              Object.assign(info, { x0: c.x, z0: c.z, hRampa: tr.heightOn(J, J.length), yMax: c.y, velocidade: Math.hypot(c.vx, c.vz) });
+            if (onJ && !c.grounded) {
+              Object.assign(info, { x0: c.x, z0: c.z, hRampa: tr.heightOn(J, J.length * 0.97), yMax: c.y, velocidade: Math.hypot(c.vx, c.vz) });
               ok = true;
             }
           } else {
@@ -138,7 +152,7 @@ async function telas() {
               if (!c.grounded && d >= (gapStart + gapEnd) / 2 && d < gapEnd) ok = true;
             } else if (wasAir && c.grounded) {
               const land = tr.query(c.x, c.z, c.pieceIndex);
-              Object.assign(info, { x1: c.x, z1: c.z, hPouso: land.height, casaPouso: land.pieceIndex });
+              Object.assign(info, { x1: c.x, z1: c.z, hPouso: land.height, casaPouso: land.pieceIndex, depoisDoVaoM: land.dist - gapEnd });
               ok = true;
             }
           }
@@ -150,13 +164,15 @@ async function telas() {
         g.redraw = true;
         return info;
       }, [j, fase, res.dados ?? null]);
-      await wait(900);
-      await page.screenshot({ path: `${dir}/40_${trackId}_salto_${fase}_iso.png` });
       res.dados = r;
       if (r.erro) {
+        // sem PNG de um momento que não aconteceu (a captura mostraria outra coisa)
         res.erro = r.erro;
+        errors.push(`salto ${trackId} casa ${j}: ${r.erro}`);
         break;
       }
+      await wait(900);
+      await page.screenshot({ path: `${dir}/40_${trackId}_salto_${fase}_iso.png` });
     }
     const d = res.dados ?? {};
     if (!res.erro && d.x1 !== undefined) {
@@ -164,6 +180,7 @@ async function telas() {
       res.distanciaM = +Math.hypot(d.x1 - d.x0, d.z1 - d.z0).toFixed(1);
       res.alturaMaxSobreRampaM = +(d.yMax - d.hRampa).toFixed(2);
       res.quedaNoPousoM = +(d.hRampa - d.hPouso).toFixed(2);
+      res.pousoDepoisDoVaoM = +d.depoisDoVaoM.toFixed(1);
       res.velocidadeDecolagemMs = +d.velocidade.toFixed(1);
       res.casaPouso = d.casaPouso;
     }
@@ -252,7 +269,9 @@ async function telas() {
   await page.screenshot({ path: `${dir}/51_faiscas_mureta.png` });
 
   // chegada (item 62): o 1º colocado (CPU) cruza, freia e estaciona escurecido na beira; a tela é
-  // tirada quando o jogador (piloto automático, um pouco mais lento de propósito) passa por ele
+  // tirada quando ele está parado até 25 m à frente da câmera (que segue o jogador, piloto automático
+  // um pouco mais lento de propósito). O laço não para quando o jogador cruza: a vaga do 1º fica a 42 m
+  // da linha, e o jogador passa por ela depois de terminar (rodada 10: a captura falhava por isso).
   await page.evaluate(() => {
     const a = window.game.menuActions();
     a.setCamera('iso');
@@ -270,25 +289,44 @@ async function telas() {
     const first = w.racers.find((r) => r.finishPlace === 1);
     if (!first || first.id === g.playerId) return { ok: false, motivo: 'jogador venceu ou ninguém cruzou' };
     const T = w.track.totalLength;
-    // espera o 1º parar e o jogador chegar a 6–22 m antes dele
-    for (let j = 0; j < 60 * 40; j++) {
+    const vagas = () =>
+      w.racers
+        .filter((r) => r.finishPlace)
+        .sort((a, b) => a.finishPlace - b.finishPlace)
+        .map((r) => {
+          const q = w.track.query(r.car.x, r.car.z, r.car.pieceIndex);
+          return { lugar: r.finishPlace, jogador: r.id === g.playerId, parado: Math.hypot(r.car.vx, r.car.vz) < 0.3, lateral: +q.lateral.toFixed(2), meiaLargura: w.track.halfWidth, beira: +(w.track.halfWidth - Math.abs(q.lateral)).toFixed(2) };
+        });
+    // espera o 1º parar e ficar à frente do jogador (câmera), mesmo depois de o jogador cruzar
+    let menor = Infinity;
+    for (let j = 0; j < 60 * 60; j++) {
       g.step(1 / 60);
-      if (me.finishPlace) break;
       const parado = Math.hypot(first.car.vx, first.car.vz) < 0.3;
       const df = w.track.query(first.car.x, first.car.z, first.car.pieceIndex).dist;
       const dm = w.track.query(me.car.x, me.car.z, me.car.pieceIndex).dist;
-      const gap = (((df - dm) % T) + T) % T;
-      if (parado && gap > 6 && gap < 22) {
-        const q = w.track.query(first.car.x, first.car.z, first.car.pieceIndex);
-        return { ok: true, lateral: +q.lateral.toFixed(2), meiaLargura: w.track.halfWidth, distanciaJogador: +gap.toFixed(1) };
+      let gap = (((df - dm) % T) + T) % T;
+      if (gap > T / 2) gap -= T;
+      if (parado) menor = Math.min(menor, Math.abs(gap));
+      // (entre 3 e 15 m: longe da borda da tela, bem dentro dos 25 m pedidos)
+      if (parado && gap > 3 && gap < 15) {
+        // congela o jogador ali (o render por software é lento: a tela sai alguns quadros depois)
+        me.car.vx = me.car.vz = 0;
+        me.spec = { ...me.spec, accel: 0, maxSpeed: 0.01, nitroAccel: 0 };
+        return { ok: true, distanciaJogador: +gap.toFixed(1), jogadorTerminou: !!me.finishPlace, terminados: vagas() };
       }
     }
-    return { ok: false, motivo: 'jogador não passou pelo carro estacionado' };
+    return { ok: false, motivo: `o 1º não ficou parado até 25 m à frente da câmera (mais perto: ${menor.toFixed(1)} m)`, terminados: vagas() };
   });
-  await wait(900);
-  await page.screenshot({ path: `${dir}/52_chegada_iso.png` });
-  if (!chegada.ok) console.log('captura da chegada:', chegada.motivo);
   fs.writeFileSync(`${dir}/52_chegada.json`, JSON.stringify(chegada, null, 2));
+  if (chegada.ok) {
+    await wait(900);
+    await page.screenshot({ path: `${dir}/52_chegada_iso.png` });
+  } else {
+    // sem a cena certa não salva a imagem (uma tela errada passaria por evidência)
+    fs.rmSync(`${dir}/52_chegada_iso.png`, { force: true });
+    errors.push(`captura da chegada (52): ${chegada.motivo}`);
+    console.log('captura da chegada:', chegada.motivo);
+  }
 
   // close dos carros: vitrine com os 5 modelos lado a lado (se o jogo expuser a função)
   const hasShowroom = await page.evaluate(() => typeof window.game.showroom === 'function');
@@ -297,6 +335,13 @@ async function telas() {
       await page.evaluate((a) => window.game.showroom(a), angle);
       await wait(1500);
       await page.screenshot({ path: `${dir}/20_vitrine_${k}.png` });
+    }
+    // cada carro sozinho, em 3/4 de frente como nas referências: o Air Blade pelo lado direito
+    // (referencias/modernizados/air-blade.png), os outros pelo esquerdo (tank.webp)
+    for (const id of ['dirtdevil', 'marauder', 'airblade', 'battletrak', 'havac']) {
+      await page.evaluate(([a, c]) => window.game.showroom(a, c), [id === 'airblade' ? -0.8 : 0.8, id]);
+      await wait(1500);
+      await page.screenshot({ path: `${dir}/21_carro_${id}.png` });
     }
   }
   await page.evaluate(() => window.game.menuActions().setCamera('iso'));
@@ -544,19 +589,42 @@ async function celular() {
     await m.waitForTimeout(300);
     medidas[name] = await m.evaluate(() => {
       const o = document.querySelector('.overlay');
-      return o ? { scrollHeight: o.scrollHeight, clientHeight: o.clientHeight, rola: o.scrollHeight > o.clientHeight + 2 } : null;
+      if (!o) return null;
+      const res = { scrollHeight: o.scrollHeight, clientHeight: o.clientHeight, rola: o.scrollHeight > o.clientHeight };
+      // loja: o 1º item (melhoria ou arma) aparece inteiro na 1ª tela
+      const item = document.querySelector('.shop-body > .shop-row, .weapon-card');
+      if (item) res.item1Fundo = Math.round(item.getBoundingClientRect().bottom);
+      // vão entre o painel e o botão flutuante de tela cheia
+      const fs = document.querySelector('.fs-float');
+      const card = document.querySelector('.overlay .card');
+      if (fs && card && fs.offsetParent) res.vaoTelaCheia = Math.round(fs.getBoundingClientRect().left - card.getBoundingClientRect().right);
+      // corrida rápida: nomes dos pilotos inteiros (sem reticências) e o escolhido por extenso
+      const plates = [...document.querySelectorAll('.quick .char .nameplate span')];
+      if (plates.length) {
+        res.pilotosVisiveis = plates.length;
+        res.nomesCortados = plates.filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => e.textContent);
+        const nm = document.querySelector('.quick .cf-name');
+        res.nomeEscolhido = nm && nm.getBoundingClientRect().height > 0 ? nm.textContent : null;
+      }
+      return res;
     });
     await m.screenshot({ path: `${dir}/${name}.png`, timeout: 120000 });
   };
   await mclick('button[data-act="quick"]');
   await mshot('46_celular_corrida_rapida');
+  const qr = medidas['46_celular_corrida_rapida'];
+  if (qr?.nomesCortados?.length) errors.push(`[celular] corrida rápida com nomes cortados: ${qr.nomesCortados.join(', ')}`);
   await m.evaluate(() => window.game.menuActions().toMain());
   await m.waitForTimeout(800);
   await mclick('button[data-act="new"]');
   await mclick('button[data-act="new-start"]');
   await mshot('47_celular_garagem');
+  // a garagem cabe inteira no celular deitado: nem 1 px de rolagem
+  const gar = medidas['47_celular_garagem'];
+  if (gar && gar.scrollHeight > gar.clientHeight) errors.push(`[celular] garagem rola: ${gar.scrollHeight} > ${gar.clientHeight}`);
   await mclick('button[data-act="shop"]');
   await mshot('48_celular_loja_melhorias');
+  if ((medidas['48_celular_loja_melhorias']?.item1Fundo ?? 0) > 390) errors.push('[celular] loja: 1º item fora da 1ª tela');
   await mclick('button[data-tab="weapons"]');
   await mshot('49_celular_loja_armas');
   await m.evaluate(() => window.game.menuActions().toMain());
@@ -588,10 +656,12 @@ async function celular() {
   await m.waitForTimeout(900);
   await m.screenshot({ path: `${dir}/42_celular_corrida_controles.png`, timeout: 120000 });
   medidas.toque844 = await medeToque();
+  if ((medidas.toque844?.vaoTiroAcel ?? 99) < 16) errors.push(`[celular] TIRO–ACEL a ${medidas.toque844.vaoTiroAcel} px (mínimo 16)`);
   // iPhone SE / 8 deitado
   await m.setViewportSize({ width: 667, height: 375 });
   await m.waitForTimeout(900);
   medidas.toque667 = await medeToque();
+  if ((medidas.toque667?.vaoTiroAcel ?? 99) < 16) errors.push(`[celular] 667: TIRO–ACEL a ${medidas.toque667.vaoTiroAcel} px (mínimo 16)`);
   await m.screenshot({ path: `${dir}/42b_celular_667_controles.png`, timeout: 120000 });
   await m.setViewportSize({ width: 844, height: 390 });
   await m.waitForTimeout(600);
@@ -631,7 +701,8 @@ async function jogo() {
         { skill: 0.75, aggression: 0.9, lane: 1.5 },
         { skill: 0.65, aggression: 0.4, lane: -2 },
       ];
-      const car = ids[Math.min(ids.length - 1, Math.floor(TRACKS.indexOf(def) / 2.4))];
+      // o carro gira por pista (índice % 5): todos os modelos em todos os planetas (rodada 10)
+      const car = ids[TRACKS.indexOf(def) % ids.length];
       const entries = profiles.map((ai, i) => ({ name: `CPU${i}`, color: 0xffffff, spec: VEHICLES[car], ai }));
       const w = createWorld(track, entries, 4, 1234, PRIZES);
       w.started = true;
@@ -813,7 +884,50 @@ async function jogo() {
       mixed.wins[id] = mixed.wins[id] ?? 0;
       mixed.avgPlace[id] = +(placeSum[id] / mixed.races).toFixed(2);
     }
-    return { races, hitRate, mixed, handling };
+    // 3b) armas de trás: acertos por carga (mina) e fração dos leques do scatter que acertam alguém
+    //     (o scatter acerta no máximo uma vez cada carro por leque)
+    const rearRate = {};
+    for (const k of ['mine', 'scatter', 'oil']) {
+      const drops = races.reduce((s, r) => s + (r.dropsByKind[k] ?? 0), 0);
+      const hits = races.reduce((s, r) => s + (k === 'oil' ? r.spins : r.hitsByKind[k] ?? 0), 0);
+      rearRate[k] = { drops, hits, perCharge: drops ? +(hits / drops).toFixed(2) : null };
+    }
+
+    // 5) DERRAPAR numa pista real: o piloto simples dá 1 volta freando nas curvas fechadas ou usando o
+    //    botão derrapar nelas (curva à frente > 1,2 rad e acima de 60% da final); mede a velocidade de
+    //    saída de cada curva fechada (fração da final) e o tempo de volta
+    const driftTrack = TRACKS.find((d) => d.id === 'drakonis-2') ?? TRACKS[1];
+    function corners(spec, useSharp) {
+      const track = new Track(driftTrack);
+      const w = createWorld(track, [{ name: 'P', color: 0, spec, ai: null }], 99, 1, PRIZES);
+      w.started = true;
+      const r = w.racers[0];
+      const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+      let inCorner = false;
+      let sharpT = 0;
+      const exits = [];
+      for (let t = 0; r.progress.lapTimes.length < 1 && t < 60; t += dt) {
+        const q = track.query(r.car.x, r.car.z, r.car.pieceIndex);
+        const v = forwardSpeed(r.car);
+        const p = track.pointAtDist(q.dist + 6 + Math.max(0, v) * 0.3);
+        const d = wrap(Math.atan2(p.x - r.car.x, p.z - r.car.z) - r.car.heading);
+        const bend = Math.abs(wrap(track.pointAtDist(q.dist + 8 + v * 0.45).heading - track.pointAtDist(q.dist).heading));
+        const tight = bend > 1.2;
+        const sharp = useSharp && tight && v > spec.maxSpeed * 0.6;
+        const brake = !sharp && bend > 0.9 && v > spec.maxSpeed * 0.7;
+        if (sharp) sharpT += dt;
+        stepWorld(w, { 0: { throttle: brake ? 0 : 1, brake: brake ? 0.6 : 0, steer: Math.max(-1, Math.min(1, -d * 2.5)), fire: false, drop: false, nitro: false, sharp } }, dt);
+        if (!inCorner && tight) inCorner = true;
+        else if (inCorner && bend < 0.3) {
+          inCorner = false;
+          exits.push(forwardSpeed(r.car) / spec.maxSpeed);
+        }
+      }
+      const lap = r.progress.lapTimes[0];
+      return { lapS: lap === undefined ? null : +lap.toFixed(2), tightCorners: exits.length, exitSpeedRatio: exits.length ? +(exits.reduce((a, b) => a + b, 0) / exits.length).toFixed(3) : null, sharpSeconds: +sharpT.toFixed(1) };
+    }
+    const drift = { track: driftTrack.id, cars: ids.map((id) => ({ car: id, semDerrapar: corners(VEHICLES[id], false), comDerrapar: corners(VEHICLES[id], true) })) };
+    return { races, hitRate, rearRate, mixed, handling, drift };
   });
   fs.writeFileSync(path.join(out, 'jogo.json'), JSON.stringify(result, null, 2));
 }
@@ -865,16 +979,30 @@ async function picote() {
       // tempo de step() e render() separados (performance.mark/measure + intervalos para cruzar
       // com as longtasks)
       window.__trechos = [];
+      // chamadas lentas (render > 100 ms, step > 50 ms): programas/geometrias/texturas na GPU antes
+      // e depois (o que subiu/compilou no engasgo) e o tempo de cada subetapa (game.prof)
+      window.__lentos = [];
+      g.prof = {};
+      const gpuInfo = () => ({ programas: g.renderer.info.programs?.length ?? 0, geometrias: g.renderer.info.memory.geometries, texturas: g.renderer.info.memory.textures });
+      const somaProf = () => Object.fromEntries(Object.entries(g.prof ?? {}).map(([k, e]) => [k, e.soma]));
       for (const nome of ['step', 'render']) {
         const orig = g[nome];
         g[nome] = function (...a) {
           const t0 = performance.now();
+          const antes = gpuInfo();
+          const p0 = somaProf();
           performance.mark(`rr-${nome}`);
           try {
             return orig.apply(this, a);
           } finally {
             performance.measure(`rr-${nome}`, `rr-${nome}`);
-            window.__trechos.push([nome, t0, performance.now() - t0]);
+            const d = performance.now() - t0;
+            window.__trechos.push([nome, t0, d]);
+            if (d > (nome === 'render' ? 100 : 50)) {
+              const sub = {};
+              for (const [k, v] of Object.entries(somaProf())) if (v - (p0[k] ?? 0) > 0.5) sub[k] = +(v - (p0[k] ?? 0)).toFixed(1);
+              window.__lentos.push({ nome, inicio: Math.round(t0), ms: +d.toFixed(1), fase: `${g.phase}${g.preparing ? ':preparando' : ''}`, antes, depois: gpuInfo(), subetapas: sub });
+            }
           }
         };
       }
@@ -921,6 +1049,8 @@ async function picote() {
       window.__playout0 = a.ctx.playoutStats ? { ...a.ctx.playoutStats.toJSON?.() } : null;
       window.__longtasks.length = 0;
       window.__trechos.length = 0;
+      window.__lentos.length = 0;
+      window.game.prof = {};
       performance.clearMarks();
       performance.clearMeasures();
     });
@@ -1036,6 +1166,10 @@ async function picote() {
           maiores: tarefas.slice(0, 15),
         },
         tempos,
+        // render > 100 ms / step > 50 ms: GPU antes/depois e subetapas (atribuição dos engasgos)
+        lentos: window.__lentos.slice().sort((x, y) => y.ms - x.ms).slice(0, 20),
+        // subetapas de step()/render() na medição toda (ms somados, maior chamada, chamadas)
+        subetapas: Object.fromEntries(Object.entries(window.game.prof ?? {}).map(([k, e]) => [k, { somaMs: Math.round(e.soma), maiorMs: +e.maior.toFixed(1), n: e.n }])),
         fases: fases.map(([t, f]) => [Math.round(t), f]),
         playoutStats: ps,
         playoutInicio: window.__playout0,
@@ -1058,7 +1192,9 @@ async function picote() {
           'atrasosRender = saltos (> 2 ms) do atraso do relógio de áudio em relação ao relógio de parede (a thread de áudio não entregou a tempo: buraco na saída); ' +
           'playoutStats = contadores do Chrome (fallbackFrames = amostras que o dispositivo tocou em silêncio), quando disponíveis. ' +
           'longtasks.maiores = tarefas longas (inicio = performance.now), com a fase do jogo e os ms de step()/render() dentro delas; ' +
-          'tempos = soma e maior duração de step() e render() na medição (performance.mark/measure rr-step e rr-render).',
+          'tempos = soma e maior duração de step() e render() na medição (performance.mark/measure rr-step e rr-render). ' +
+          'lentos = render() > 100 ms e step() > 50 ms, com renderer.info (programas, geometrias, texturas) antes/depois e os ms de cada subetapa; ' +
+          'subetapas = soma/maior de cada trecho de step() (entrada, stepWorld, onEvent, faiscas, commentary, sfx) e render() (carros, efeitos, hudSom, gpu).',
         casos: resultados,
       },
       null,
@@ -1072,7 +1208,9 @@ async function som() {
   const dir = path.join(out, 'som');
   fs.mkdirSync(dir, { recursive: true });
   const refWav = fs.readFileSync(new URL('./locutor/voz-referencia-arena.wav', import.meta.url)).toString('base64');
-  const clips = await page.evaluate(async (refWavB64) => {
+  // referência masculina de ringue (a voz que o locutor clona): os trechos GRITADOS dela são a meta
+  const lutaWav = fs.readFileSync(new URL('./locutor/voz-referencia-luta.wav', import.meta.url)).toString('base64');
+  const clips = await page.evaluate(async ({ refWavB64, lutaWavB64 }) => {
     const m = await window.devModules();
     const ctxMod = m, sfx = m;
     const { EngineSound, SONGS, SynthRock } = m;
@@ -1117,7 +1255,7 @@ async function som() {
       g.fillStyle = '#000'; g.fillRect(0, 0, W, H + 20);
       const img = g.createImageData(W, H);
       const re = new Float32Array(N), im = new Float32Array(N);
-      let centroidSum = 0, centroidN = 0;
+      let centroidSum = 0, centroidN = 0, eLow = 0, eAll = 0;
       for (let x = 0; x < W; x++) {
         const start = Math.floor((x / W) * cols) * hop;
         for (let i = 0; i < N; i++) {
@@ -1148,6 +1286,8 @@ async function som() {
         for (let b = 1; b < N / 2; b++) {
           const m = Math.hypot(re[b], im[b]);
           num += m * (b * SR) / N; den += m;
+          eAll += m * m;
+          if ((b * SR) / N < 120) eLow += m * m;
         }
         if (den > 1e-3) { centroidSum += num / den; centroidN++; }
         for (let y = 0; y < H; y++) {
@@ -1188,6 +1328,7 @@ async function som() {
         crestDb: (20 * Math.log10(peak / (rms || 1e-9))).toFixed(1),
         clippedSamples: clipped,
         spectralCentroidHz: centroidN ? Math.round(centroidSum / centroidN) : 0,
+        energiaAbaixo120Hz_pct: eAll ? Math.round((100 * eLow) / eAll) : 0,
         png: cv.toDataURL('image/png'),
         wav: btoa(bin),
       };
@@ -1253,27 +1394,66 @@ async function som() {
       }, 0.05)));
     }
     // mixagem de corrida: música + motor + tiros/explosões/pickups, como numa corrida real
-    res.push(analyse('mix_corrida', await render(12, async (c, a) => {
+    const mixEvents = [[0.3, 'contagem', () => sfx.sfxCountdown(false)], [1.3, 'vai', () => sfx.sfxCountdown(true)], [2, 'plasma', () => sfx.sfxLaser(1, -0.3)], [2.3, 'plasma_2', () => sfx.sfxLaser(1, -0.3)], [3.5, 'missil', () => sfx.sfxMissile(1, 0.4)], [4.2, 'explosao_pequena', () => sfx.sfxExplosion(0.8, false, 0.5)],
+      [5.5, 'dinheiro', () => sfx.sfxPickup('money')], [6.2, 'pouso', () => sfx.sfxLand(0.8)], [7, 'batida', () => sfx.sfxBump(0.8, -0.5)], [7.6, 'mureta', () => sfx.sfxWall(0.7, 0.6)], [8.5, 'explosao_grande', () => sfx.sfxExplosion(1, true, 0.2)], [10, 'mina', () => sfx.sfxDrop(0.9, 'mine')], [10.8, 'impacto', () => sfx.sfxHit(0.9, -0.2)]];
+    // `music`/`engine`/`fx`: as mesmas 12 s só com a cama (música + motor) ou só com o motor, para
+    // medir o destaque dos efeitos sobre a cama e sobre o motor (rodada 11)
+    const mixCorrida = (music, engine, fx) => render(12, async (c, a) => {
       const s = new SynthRock(c, a.music);
-      a.music.gain.value = 0.7;
+      a.music.gain.value = music ? 0.7 : 0;
       s.play(SONGS[0]);
       const e = new EngineSound();
-      e.start();
-      const events = [[0.3, () => sfx.sfxCountdown(false)], [1.3, () => sfx.sfxCountdown(true)], [2, () => sfx.sfxLaser(1, -0.3)], [2.3, () => sfx.sfxLaser(1, -0.3)], [3.5, () => sfx.sfxMissile(1, 0.4)], [4.2, () => sfx.sfxExplosion(0.8, false, 0.5)],
-        [5.5, () => sfx.sfxPickup('money')], [6.2, () => sfx.sfxLand(0.8)], [7, () => sfx.sfxBump(0.8, -0.5)], [7.6, () => sfx.sfxWall(0.7, 0.6)], [8.5, () => sfx.sfxExplosion(1, true, 0.2)], [10, () => sfx.sfxDrop(0.9, 'mine')], [10.8, () => sfx.sfxHit(0.9, -0.2)]];
+      if (engine) e.start();
       let next = 0;
       return (t) => {
         s.schedule();
         const p = engineProfile(Math.min(t, 6));
-        e.update(p.s, p.th, p.b);
-        while (next < events.length && events[next][0] <= t) events[next++][1]();
+        if (engine) e.update(p.s, p.th, p.b);
+        while (fx && next < mixEvents.length && mixEvents[next][0] <= t) mixEvents[next++][2]();
       };
-    }, 0.025)));
+    }, 0.025);
+    const mixFull = await mixCorrida(true, true, true);
+    res.push(analyse('mix_corrida', mixFull));
+    // destaque dos efeitos (rodada 11): pico de 100 ms do efeito (0–0,4 s após o disparo) menos o RMS
+    // da cama sem efeitos no mesmo trecho; e o mesmo acima de 200 Hz (alto-falante de celular/notebook
+    // não reproduz o sub-grave) contra o motor sozinho. Metas: explosão ≥ +8 dB, batida/mureta ≥ +5 dB
+    // sobre a cama; ≥ +6 dB acima de 200 Hz sobre o motor
+    const hp200 = async (x) => {
+      const c = new OfflineAudioContext(1, x.length, SR);
+      const b = c.createBuffer(1, x.length, SR); b.copyToChannel(x, 0);
+      const s = c.createBufferSource(); s.buffer = b; let node = s;
+      for (let k = 0; k < 2; k++) { const f = c.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 200; node.connect(f); node = f; }
+      node.connect(c.destination); s.start();
+      return (await c.startRendering()).getChannelData(0);
+    };
+    const rmsDb = (x, a0, a1) => { let s = 0; const i0 = Math.floor(a0 * SR), i1 = Math.min(x.length, Math.floor(a1 * SR)); for (let i = i0; i < i1; i++) s += x[i] * x[i]; return 10 * Math.log10(s / Math.max(1, i1 - i0) + 1e-12); };
+    const peak100 = (x, a0, a1) => { let best = -120; for (let t0 = a0; t0 + 0.1 <= a1; t0 += 0.01) best = Math.max(best, rmsDb(x, t0, t0 + 0.1)); return best; };
+    const contraste = async (full, bed, engineOnly, events) => {
+      const fh = await hp200(full.mono), eh = engineOnly ? await hp200(engineOnly.mono) : null;
+      const out = {};
+      for (const [te, name] of events) {
+        const o = { sobreCama_dB: +(peak100(full.mono, te, te + 0.4) - rmsDb(bed.mono, te, te + 0.4)).toFixed(1) };
+        if (eh) o.acima200Hz_sobreMotor_dB = +(peak100(fh, te, te + 0.4) - rmsDb(eh, te, te + 0.4)).toFixed(1);
+        out[name] = o;
+      }
+      return out;
+    };
+    const mixBed = await mixCorrida(true, true, false), mixEngine = await mixCorrida(false, true, false);
+    const extraContraste = {
+      mix_corrida: {
+        camaRMS_dB: +rmsDb(mixBed.mono, 1, 12).toFixed(1),
+        motorRMS_dB: +rmsDb(mixEngine.mono, 1, 12).toFixed(1),
+        efeitos: await contraste(mixFull, mixBed, mixEngine, mixEvents.filter(([te]) => te >= 2)),
+      },
+      metas: { explosao_sobreCama_dB: 8, batida_mureta_sobreCama_dB: 5, acima200Hz_sobreMotor_dB: 6 },
+      observacao: 'pico de 100 ms do efeito (0–0,4 s após o disparo) menos o RMS da mesma janela na gravação sem efeitos (cama = música + motor; motor = só o motor). A cama sem efeitos não tem o ducking: é o nível que o efeito precisa vencer.',
+    };
     // mixagem de corrida com a música do jogador (pasta music/), nivelada como no jogo
     const files = m.bundledTracks();
     if (files.length) {
       const track = files.find((f) => !/peter/i.test(f.name)) ?? files[0];
-      res.push(analyse('mix_corrida_musica_usuario', await render(12, async (c, a) => {
+      const userEvents = [[1.3, 'vai', () => sfx.sfxCountdown(true)], [1.5, 'locutor_largada', () => { ann.busyUntil = 0; ann.say('start', null, 3); }], [4, 'plasma', () => sfx.sfxLaser(1, -0.3)], [4.3, 'plasma_2', () => sfx.sfxLaser(1, -0.3)], [5.2, 'missil', () => sfx.sfxMissile(1, 0.4)], [5.9, 'explosao_grande', () => sfx.sfxExplosion(0.9, true, 0.3)], [7.4, 'locutor_lightsUp', () => { ann.busyUntil = 0; ann.say('lightsUp', 'snake', 3); }], [9.5, 'nitro', () => sfx.sfxAssist('nitro', 1)], [10.5, 'batida', () => sfx.sfxBump(0.8, -0.5)]];
+      const mixUsuario = (fx) => render(12, async (c, a) => {
         const ab = await (await fetch(track.url)).arrayBuffer();
         const buf = await c.decodeAudioData(ab);
         // mesmo nivelamento do jogo: RMS-alvo 0.2 com ganho entre 0.4 e 4
@@ -1292,17 +1472,61 @@ async function som() {
         await loadAnn();
         const e = new EngineSound();
         e.start();
-        const events = [[1.3, () => sfx.sfxCountdown(true)], [1.5, () => { ann.busyUntil = 0; ann.say('start', null, 3); }], [4, () => sfx.sfxLaser(1, -0.3)], [4.3, () => sfx.sfxLaser(1, -0.3)], [5.2, () => sfx.sfxMissile(1, 0.4)], [5.9, () => sfx.sfxExplosion(0.9, true, 0.3)], [7.4, () => { ann.busyUntil = 0; ann.say('lightsUp', 'snake', 3); }], [9.5, () => sfx.sfxAssist('nitro', 1)], [10.5, () => sfx.sfxBump(0.8, -0.5)]];
         let next = 0;
         return (t) => {
           const p = engineProfile(Math.min(t, 6));
           e.update(p.s, p.th, t > 9.5 && t < 11);
-          while (next < events.length && events[next][0] <= t) events[next++][1]();
+          while (fx && next < userEvents.length && userEvents[next][0] <= t) userEvents[next++][2]();
         };
-      }, 0.025)));
+      }, 0.025);
+      const userFull = await mixUsuario(true);
+      res.push(analyse('mix_corrida_musica_usuario', userFull));
+      const userBed = await mixUsuario(false);
+      extraContraste.mix_corrida_musica_usuario = {
+        faixa: track.name,
+        camaRMS_dB: +rmsDb(userBed.mono, 1, 12).toFixed(1),
+        efeitos: await contraste(userFull, userBed, null, userEvents.filter(([, n]) => !n.startsWith('locutor'))),
+      };
     }
     // ---- rodada 10 (Som 7) ----
     const extra = {};
+    extra.contraste = extraContraste;
+    // espectro médio (FFT 8192, Hann, 50%) e energia por banda (dB) de um trecho mono
+    const spectrum = (x) => {
+      const N = 8192, P = new Float64Array(N / 2);
+      const re = new Float64Array(N), im = new Float64Array(N);
+      for (let st = 0; st + N <= x.length; st += N / 2) {
+        for (let i = 0; i < N; i++) { re[i] = x[st + i] * (0.5 - 0.5 * Math.cos((2 * Math.PI * i) / N)); im[i] = 0; }
+        for (let i = 1, j = 0; i < N; i++) { let bit = N >> 1; for (; j & bit; bit >>= 1) j ^= bit; j ^= bit; if (i < j) { const tr = re[i]; re[i] = re[j]; re[j] = tr; } }
+        for (let len = 2; len <= N; len <<= 1) {
+          const ang = (-2 * Math.PI) / len;
+          for (let i = 0; i < N; i += len) for (let k = 0; k < len / 2; k++) {
+            const wr = Math.cos(ang * k), wi = Math.sin(ang * k), a0 = i + k, b0 = a0 + len / 2;
+            const vr = re[b0] * wr - im[b0] * wi, vi = re[b0] * wi + im[b0] * wr;
+            re[b0] = re[a0] - vr; im[b0] = im[a0] - vi; re[a0] += vr; im[a0] += vi;
+          }
+        }
+        for (let k = 0; k < N / 2; k++) P[k] += re[k] * re[k] + im[k] * im[k];
+      }
+      return { P, hz: SR / N, band: (lo, hi) => { let e = 0; for (let k = Math.ceil(lo / (SR / N)); k < Math.min(N / 2, hi / (SR / N)); k++) e += P[k]; return 10 * Math.log10(e + 1e-20); } };
+    };
+    // motor em regime (rodada 11, item 21): corpo abaixo de 100 Hz e agudos em relação aos médios
+    // (300–1500 Hz) e periodicidade (autocorrelação normalizada máxima, lag 2,5–25 ms, janelas de
+    // 100 ms: 1 = zumbido perfeitamente periódico)
+    extra.motorTimbre = {};
+    for (const [nome, sp, th, b] of [['lenta', 0, 0, false], ['corrida', 0.7, 1, false], ['alto_giro', 1, 1, false], ['nitro', 1.15, 1, true]]) {
+      const clip = await render(3, async () => { const e = new EngineSound(); e.start(); return () => e.update(sp, th, b, 0); });
+      const x = clip.mono.subarray(Math.floor(1.5 * SR));
+      const S = spectrum(x), mid = S.band(300, 1500);
+      let per = 0, nw = 0;
+      for (let st = 0; st + 4410 + 1200 < x.length; st += 2205) {
+        let e0 = 0; for (let i = 0; i < 4410; i++) e0 += x[st + i] * x[st + i];
+        let best = 0;
+        for (let L = 110; L < 1100; L++) { let s2 = 0, e1 = 0; for (let i = 0; i < 4410; i++) { s2 += x[st + i] * x[st + i + L]; e1 += x[st + i + L] * x[st + i + L]; } best = Math.max(best, s2 / Math.sqrt(e0 * e1 + 1e-20)); }
+        per += best; nw++;
+      }
+      extra.motorTimbre[nome] = { rms_dB: +rmsDb(x, 0, x.length / SR).toFixed(1), abaixo100Hz_vs_medios_dB: +(S.band(20, 100) - mid).toFixed(1), de100a300Hz_vs_medios_dB: +(S.band(100, 300) - mid).toFixed(1), de1k5a5k_vs_medios_dB: +(S.band(1500, 5000) - mid).toFixed(1), periodicidade: +(per / Math.max(1, nw)).toFixed(2) };
+    }
     // motor: varredura 0 → 100% em 8 s, pé embaixo, com e sem nitro (item 21 / nitro)
     const sweep = (nitro) => render(10, async () => {
       const e = new EngineSound();
@@ -1311,18 +1535,38 @@ async function som() {
     });
     res.push(analyse('motor_varredura', await sweep(false)));
     res.push(analyse('motor_nitro', await sweep(true)));
-    // final da campanha (item 58): trilha de vitória + fogos + multidão + locutor, como em showChampion
+    // final da campanha (item 58): o hino que showChampion toca (Music.playAnthem → anthemSource: a
+    // faixa do menu/abertura do jogador ou a trilha sintetizada do menu) + fogos + multidão + locutor
+    const anthem = m.anthemSource(m.bundledTracks());
+    extra.finalCampanha = { musica: anthem.kind === 'file' ? 'faixa do jogador: ' + anthem.name : 'trilha sintetizada: ' + anthem.song.name };
     res.push(analyse('final_campanha', await render(14, async (c, a) => {
       await loadAnn();
-      const s = new SynthRock(c, a.music);
-      a.music.gain.value = 0.7;
-      s.play(SONGS[0]);
+      let s = null;
+      if (anthem.kind === 'file') {
+        const buf = await c.decodeAudioData(await (await fetch(anthem.url)).arrayBuffer());
+        const d = buf.getChannelData(0);
+        const n = Math.min(d.length, buf.sampleRate * 20);
+        let sum = 0;
+        for (let i = 0; i < n; i++) sum += d[i] * d[i];
+        const rms = Math.sqrt(sum / Math.max(1, n));
+        const src = c.createBufferSource();
+        src.buffer = buf;
+        const g = c.createGain();
+        g.gain.value = Math.min(4, Math.max(0.4, 0.2 / (rms || 0.2))) * 0.7; // nivelamento do jogo, volume 0.7, humor "corrida"
+        src.connect(g);
+        g.connect(a.music);
+        src.start(0);
+      } else {
+        s = new SynthRock(c, a.music);
+        a.music.gain.value = 0.7;
+        s.play(anthem.song);
+      }
       const later = [];
       const show = sfx.finaleShow((sec, fn) => later.push([c.currentTime + sec, fn]));
       const cues = show.cues.map(([sec, fn]) => [0.9 + sec, fn]).sort((x, y) => x[0] - y[0]);
       const says = [[0.05, 'dominating', 'Viper Mackay'], [4.2, 'holyToledo', null]];
       return (t) => {
-        s.schedule();
+        s?.schedule();
         while (cues.length && cues[0][0] <= t) cues.shift()[1]();
         for (let i = later.length - 1; i >= 0; i--) if (later[i][0] <= t) later.splice(i, 1)[0][1]();
         while (says.length && says[0][0] <= t) { const [, k, who] = says.shift(); ann.busyUntil = 0; ann.say(k, who, 3); }
@@ -1341,17 +1585,28 @@ async function som() {
       });
       res.push(analyse('rival_passando_esq_dir', clip));
       const seg = (arr, a0, a1) => { let s = 0; const i0 = Math.floor(a0 * SR), i1 = Math.floor(a1 * SR); for (let i = i0; i < i1; i++) s += arr[i] * arr[i]; return 10 * Math.log10(s / (i1 - i0) + 1e-12); };
-      // tom dominante por autocorrelação (40–400 Hz) antes e depois de cruzar: Doppler = razão
-      const pitch = (a0) => {
-        const i0 = Math.floor(a0 * SR), N = 8192;
-        let best = 0, lag = 0;
-        for (let L = Math.floor(SR / 400); L < SR / 40; L++) { let s = 0; for (let i = 0; i < N; i++) s += clip.mono[i0 + i] * clip.mono[i0 + i + L]; if (s > best) { best = s; lag = L; } }
-        return lag ? +(SR / lag).toFixed(1) : 0;
+      // Doppler no MESMO harmônico (rodada 11; a autocorrelação pulava de harmônico): pico do espectro
+      // perto da frequência de queima esperada (speedRatio 0,8 → giro ~0,9 → ~283 Hz), antes e depois
+      const fEsperada = 50 + (0.25 + 3 * 0.03 + 0.9 * 0.62) * 260;
+      const pitch = (a0, a1) => {
+        const S = spectrum(clip.mono.subarray(Math.floor(a0 * SR), Math.floor(a1 * SR)));
+        let best = -1, kb = 0;
+        for (let k = Math.floor((fEsperada * 0.85) / S.hz); k < (fEsperada * 1.15) / S.hz; k++) if (S.P[k] > best) { best = S.P[k]; kb = k; }
+        // interpolação parabólica do pico
+        const [y0, y1, y2] = [S.P[kb - 1], S.P[kb], S.P[kb + 1]].map((v) => Math.log(v + 1e-20));
+        return +((kb + (0.5 * (y0 - y2)) / (y0 - 2 * y1 + y2 || 1)) * S.hz).toFixed(1);
       };
+      const antes = pitch(1.3, 2.1), depois = pitch(2.9, 3.7);
+      // motor do jogador na mesma velocidade, para comparar o nível do rival a 3 m
+      const player = await render(2.5, async () => { const e = new EngineSound(); e.start(); return () => e.update(0.8, 1, false, 0); });
       extra.espacializacao = {
-        antes_1a2s: { L_dB: +seg(clip.L, 1, 2).toFixed(1), R_dB: +seg(clip.R, 1, 2).toFixed(1), tomHz: pitch(1.6) },
-        depois_3a4s: { L_dB: +seg(clip.L, 3, 4).toFixed(1), R_dB: +seg(clip.R, 3, 4).toFixed(1), tomHz: pitch(3.2) },
-        observacao: 'pan -1→+1 e velocidade de aproximação +14 → −14 m/s: antes do cruzamento o lado esquerdo domina e o tom é mais alto (Doppler); depois, o direito domina e o tom cai.',
+        antes_1a2s: { L_dB: +seg(clip.L, 1, 2).toFixed(1), R_dB: +seg(clip.R, 1, 2).toFixed(1), tomHz: antes },
+        depois_3a4s: { L_dB: +seg(clip.L, 3, 4).toFixed(1), R_dB: +seg(clip.R, 3, 4).toFixed(1), tomHz: depois },
+        razaoDoppler: +(antes / depois).toFixed(3),
+        razaoDopplerTeorica: +((343 / (343 - 14 * 0.9)) / (343 / (343 + 14 * 0.9))).toFixed(3),
+        rivalA3m_dB: +seg(clip.mono, 2.35, 2.65).toFixed(1),
+        motorJogadorMesmaVelocidade_dB: +rmsDb(player.mono, 1.5, 2.5).toFixed(1),
+        observacao: 'pan -0,8→+0,8 (limite do jogo) e aproximação +14 → −14 m/s: antes do cruzamento o lado esquerdo domina e o tom é mais alto (Doppler); depois, o direito domina e o tom cai. Tom = pico do espectro perto da frequência de queima.',
       };
     }
     // motores nas telas de resultados, viagem e final: motor do jogador + 2 rivais acelerando e, em
@@ -1423,6 +1678,19 @@ async function som() {
       // referência (arquivo cru) e cada fala: arquivo cru e depois da cadeia de arena do jogo
       const refB = Uint8Array.from(atob(refWavB64), (ch) => ch.charCodeAt(0)).buffer;
       const ref = await voiceMetrics(await decode(refB));
+      // trechos gritados (rodada 11): janelas de 400 ms com energia a até 8 dB do máximo, emendadas
+      const gritado = (x) => {
+        const w = Math.floor(0.4 * SR), hop = Math.floor(0.1 * SR), lv = [];
+        for (let st = 0; st + w <= x.length; st += hop) { let e = 0; for (let i = st; i < st + w; i++) e += x[i] * x[i]; lv.push(10 * Math.log10(e / w + 1e-12)); }
+        const top = Math.max(...lv), keep = new Uint8Array(x.length);
+        lv.forEach((v, k) => { if (v > top - 8) keep.fill(1, k * hop, k * hop + w); });
+        const out = [];
+        for (let i = 0; i < x.length; i++) if (keep[i]) out.push(x[i]);
+        return Float32Array.from(out);
+      };
+      const lutaX = await decode(Uint8Array.from(atob(lutaWavB64), (ch) => ch.charCodeAt(0)).buffer);
+      const refGrito = { luta: await voiceMetrics(gritado(lutaX)), arena: await voiceMetrics(gritado(await decode(Uint8Array.from(atob(refWavB64), (ch) => ch.charCodeAt(0)).buffer))) };
+      const TAXA_GRITO = 4.5;
       const throughArena = async (x) => {
         const c = new OfflineAudioContext(1, x.length + Math.floor(0.5 * SR), SR);
         const b = c.createBuffer(1, x.length, SR); b.copyToChannel(x, 0);
@@ -1435,20 +1703,26 @@ async function som() {
         const x = await decode(await (await fetch(m.publicUrl(`audio/locutor/${f}.mp3`))).arrayBuffer());
         const cru = await voiceMetrics(x);
         const arena = await voiceMetrics(await throughArena(x));
-        falas[f] = { cru, arena, abaixoDaReferencia: { loudness: cru.loudnessMomentaneoMaxLUFS < ref.loudnessMomentaneoMaxLUFS, esforco: cru.esforcoVocal_dB_2a4k_vs_300a800 < ref.esforcoVocal_dB_2a4k_vs_300a800, taxa: cru.silabasPorSeg < ref.silabasPorSeg }, arenaAtingeReferencia: { loudness: arena.loudnessMomentaneoMaxLUFS >= ref.loudnessMomentaneoMaxLUFS, esforco: arena.esforcoVocal_dB_2a4k_vs_300a800 >= ref.esforcoVocal_dB_2a4k_vs_300a800 } };
+        const g = refGrito.luta;
+        falas[f] = { cru, arena, atingeGrito: { esforco: cru.esforcoVocal_dB_2a4k_vs_300a800 >= g.esforcoVocal_dB_2a4k_vs_300a800, taxa: cru.silabasPorSeg >= TAXA_GRITO, esforcoArena: arena.esforcoVocal_dB_2a4k_vs_300a800 >= g.esforcoVocal_dB_2a4k_vs_300a800, taxaArena: arena.silabasPorSeg >= TAXA_GRITO }, abaixoDaReferencia: { loudness: cru.loudnessMomentaneoMaxLUFS < ref.loudnessMomentaneoMaxLUFS, esforco: cru.esforcoVocal_dB_2a4k_vs_300a800 < ref.esforcoVocal_dB_2a4k_vs_300a800, taxa: cru.silabasPorSeg < ref.silabasPorSeg }, arenaAtingeReferencia: { loudness: arena.loudnessMomentaneoMaxLUFS >= ref.loudnessMomentaneoMaxLUFS, esforco: arena.esforcoVocal_dB_2a4k_vs_300a800 >= ref.esforcoVocal_dB_2a4k_vs_300a800 } };
       }
       extra.locutor = {
         referencia: { arquivo: 'scripts/locutor/voz-referencia-arena.wav (Alba MacKenna, CC-BY 4.0)', ...ref },
+        referenciaGritada: { luta: { arquivo: 'scripts/locutor/voz-referencia-luta.wav (klankbeeld, CC-BY 4.0), só trechos a até 8 dB do máximo', ...refGrito.luta }, arena: refGrito.arena, taxaMinimaGrito: TAXA_GRITO },
+        metricasPython: 'F0 mediano, faixa e escolha dos takes: .tts/takes-luta/refazer.json (scripts/locutor/gerar.py refazer)',
         falas,
         observacao: 'loudness = máximo momentâneo (janela 400 ms, ponderação K); esforço = energia 2–4 kHz menos 300–800 Hz nos quadros com voz; taxa = picos silábicos do envelope 300–3000 Hz por segundo de fala. "arena" = a fala depois de arenaChain (src/audio/announcer.ts), usada nas falas de largada/ataque (ARENA_LINES).',
       };
     }
     window.__somExtra = extra;
     return res;
-  }, refWav);
+  }, { refWavB64: refWav, lutaWavB64: lutaWav });
   const extra = await page.evaluate(() => window.__somExtra);
   fs.writeFileSync(path.join(dir, 'locutor_emocao.json'), JSON.stringify(extra.locutor, null, 2));
-  fs.writeFileSync(path.join(dir, 'espacializacao_e_telas.json'), JSON.stringify({ espacializacao: extra.espacializacao, motorNasTelas: extra.motorNasTelas }, null, 2));
+  // rodada 11: destaque dos efeitos sobre a cama/motor, timbre do motor, Doppler e o hino do final
+  fs.writeFileSync(path.join(dir, 'contraste_mix.json'), JSON.stringify(extra.contraste, null, 2));
+  fs.writeFileSync(path.join(dir, 'motor_timbre.json'), JSON.stringify(extra.motorTimbre, null, 2));
+  fs.writeFileSync(path.join(dir, 'espacializacao_e_telas.json'), JSON.stringify({ espacializacao: extra.espacializacao, motorNasTelas: extra.motorNasTelas, finalCampanha: extra.finalCampanha }, null, 2));
   const metrics = [];
   for (const c of clips) {
     fs.writeFileSync(path.join(dir, `${c.name}.wav`), Buffer.from(c.wav, 'base64'));
@@ -1484,15 +1758,29 @@ async function desempenho() {
           const t = [];
           // tempo de step() e render() separados (performance.mark/measure)
           const custo = { step: 0, render: 0, passos: 0 };
+          // render() > 100 ms: o que subiu para a GPU no engasgo (renderer.info antes/depois) e as subetapas
+          const lentos = [];
+          g.prof = {};
+          const gpuInfo = () => ({ programas: g.renderer.info.programs?.length ?? 0, geometrias: g.renderer.info.memory.geometries, texturas: g.renderer.info.memory.textures });
+          const somaProf = () => Object.fromEntries(Object.entries(g.prof ?? {}).map(([k, e]) => [k, e.soma]));
+          const t00 = performance.now();
           g.render = function (...a) {
             const t0 = performance.now();
             t.push(t0);
+            const antes = gpuInfo();
+            const p0 = somaProf();
             performance.mark('rr-render');
             try {
               return orig.apply(this, a);
             } finally {
               performance.measure('rr-render', 'rr-render');
-              custo.render += performance.now() - t0;
+              const d = performance.now() - t0;
+              custo.render += d;
+              if (d > 100) {
+                const sub = {};
+                for (const [k, v] of Object.entries(somaProf())) if (v - (p0[k] ?? 0) > 0.5) sub[k] = +(v - (p0[k] ?? 0)).toFixed(1);
+                lentos.push({ aosMs: Math.round(t0 - t00), ms: +d.toFixed(1), antes, depois: gpuInfo(), subetapas: sub });
+              }
             }
           };
           g.step = function (...a) {
@@ -1509,6 +1797,8 @@ async function desempenho() {
           setTimeout(() => {
             g.render = orig;
             g.step = origStep;
+            const subetapas = Object.fromEntries(Object.entries(g.prof ?? {}).map(([k, e]) => [k, { somaMs: Math.round(e.soma), maiorMs: +e.maior.toFixed(1), n: e.n }]));
+            g.prof = null;
             performance.clearMarks();
             performance.clearMeasures();
             const iv = t.slice(1).map((x, i) => x - t[i]).sort((a, b) => a - b);
@@ -1523,6 +1813,8 @@ async function desempenho() {
               renderMsQuadro: t.length ? +(custo.render / t.length).toFixed(2) : 0,
               stepMsPasso: custo.passos ? +(custo.step / custo.passos).toFixed(2) : 0,
               passos: custo.passos,
+              renderLentos: lentos.sort((x, y) => y.ms - x.ms).slice(0, 10),
+              subetapas,
             });
           }, ms);
         }),
@@ -1589,7 +1881,8 @@ async function desempenho() {
       'fpsP95 = qps do quadro no percentil 95 do tempo de quadro (os 5% mais lentos). menuQps = quadros desenhados por segundo atrás do menu principal (limite ~30). ' +
       'pausaQuadros = quadros desenhados em 4 s de pausa (esperado 0: imagem congelada). trava30 = nível baixo travou a corrida em 30 qps. ' +
       'O menu principal só desenha ao entrar e quando algo muda (menuQps/desenhoQps perto de 0 é o esperado). ' +
-      'renderMsQuadro/stepMsPasso = custo médio de render() por quadro e de step() por passo (performance.mark rr-render/rr-step).',
+      'renderMsQuadro/stepMsPasso = custo médio de render() por quadro e de step() por passo (performance.mark rr-render/rr-step). ' +
+      'renderLentos = render() > 100 ms (aosMs = início desde o começo da medição) com renderer.info antes/depois e as subetapas; subetapas = trechos de step()/render() (game.prof).',
     pista: 'chem6-1',
     tela: '960x540',
     amostras,

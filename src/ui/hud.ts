@@ -1,6 +1,6 @@
 import type { Track } from '../sim/track';
 import './hud.css';
-import { drawTrack, trackTransform } from './trackMap';
+import { drawTrack, trackTransform, type MapTransform } from './trackMap';
 import { withIcons } from './icons';
 import { THEMES } from '../render/themes';
 
@@ -101,7 +101,7 @@ export class Hud {
   private minimap: HTMLCanvasElement;
   private mapCtx: CanvasRenderingContext2D;
   private mapBase: HTMLCanvasElement;
-  private mapTransform: (x: number, z: number) => [number, number];
+  private mapTransform: MapTransform;
   private toastTimer = 0;
   private centerTimer = 0;
   /** repetição da entrada da mensagem central (sem ler offsetWidth) */
@@ -110,6 +110,9 @@ export class Hud {
   /** indicador de ping do online (criado no primeiro uso) */
   private pingEl: HTMLElement | null = null;
   private pingKey = '';
+  /** aviso de conexão instável do online (criado no primeiro uso) */
+  private netWarnEl: HTMLElement | null = null;
+  private netWarnText: string | null = null;
 
   constructor(root: HTMLElement) {
     this.el = document.createElement('div');
@@ -197,9 +200,16 @@ export class Hud {
     this.lapDots.innerHTML = Array.from({ length: laps }, (_, k) => `<i class="${k < this.lapNow - 1 ? 'done' : k === this.lapNow - 1 ? 'now' : ''}"></i>`).join('');
   }
 
+  /** próxima escrita do cronômetro (a ≤ 20 Hz: os centésimos mudam a cada quadro e cada escrita custa layout) */
+  private timeTimer = 0;
+
   update(dt: number, data: HudData): void {
     // só escreve no DOM quando o texto muda: cada escrita custa recálculo de layout em celular fraco
-    setText(this.time, formatTime(data.time));
+    this.timeTimer -= dt;
+    if (this.timeTimer <= 0) {
+      this.timeTimer = 0.05;
+      setText(this.time, formatTime(data.time));
+    }
     setText(this.best, data.best !== null ? `MELHOR ${formatTime(data.best)}` : '');
     setText(this.speed, String(Math.round(Math.abs(data.speedKmh))));
     const posKey = `${data.place}`;
@@ -262,10 +272,14 @@ export class Hud {
     for (let i = 0; i < data.carCount; i++) {
       const c = data.cars[i];
       if (c.me !== (pass === 1)) continue;
-      const [x, y] = this.mapTransform(c.x, c.z);
+      const pt = this.mapTransform(c.x, c.z, this.mapPt);
+      const x = pt[0];
+      const y = pt[1];
       if (c.me) {
         const h = c.heading ?? 0;
-        const [fx, fy] = this.mapTransform(c.x + Math.sin(h), c.z + Math.cos(h));
+        const ft = this.mapTransform(c.x + Math.sin(h), c.z + Math.cos(h), this.mapPt);
+        const fx = ft[0];
+        const fy = ft[1];
         const a = Math.atan2(fy - y, fx - x);
         // seta pulsante: acha o jogador de relance
         const r = 7.5 * k * (1 + 0.16 * Math.sin(this.clock * 7));
@@ -302,6 +316,8 @@ export class Hud {
   }
 
   private mapTimer = 0;
+  /** par reaproveitado pelas conversões do minimapa (sem vetores novos a cada desenho) */
+  private readonly mapPt: [number, number] = [0, 0];
   /** pixels do canvas por pixel de tela no minimapa (0 = medir de novo) */
   private mapK = 0;
 
@@ -396,6 +412,29 @@ export class Hud {
     dot.style.color = color;
     this.pingEl.lastElementChild!.textContent = text;
     this.pingEl.title = 'Ping com o host';
+  }
+
+  /** Aviso fixo do online (ex.: "Conexão instável…"); null esconde. Só mexe no DOM quando muda. */
+  setNetWarning(text: string | null): void {
+    if (text === this.netWarnText) return;
+    this.netWarnText = text;
+    if (!text) {
+      if (this.netWarnEl) this.netWarnEl.style.display = 'none';
+      return;
+    }
+    if (!this.netWarnEl) {
+      this.netWarnEl = document.createElement('div');
+      this.netWarnEl.className = 'rh-netwarn';
+      this.netWarnEl.setAttribute('role', 'status');
+      Object.assign(this.netWarnEl.style, {
+        position: 'absolute', top: '22%', left: '50%', transform: 'translateX(-50%)', padding: '6px 14px', borderRadius: '6px',
+        background: 'rgba(0,0,0,0.65)', color: '#ffd21a', font: '700 14px/1.2 "Trebuchet MS", sans-serif', textShadow: '0 1px 2px #000',
+        pointerEvents: 'none', whiteSpace: 'nowrap', zIndex: '5',
+      });
+      this.el.appendChild(this.netWarnEl);
+    }
+    this.netWarnEl.textContent = text;
+    this.netWarnEl.style.display = 'block';
   }
 
   setMirror(visible: boolean, rect?: { x: number; y: number; w: number; h: number }): void {

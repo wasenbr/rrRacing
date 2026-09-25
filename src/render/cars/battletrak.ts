@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { carFrame, cockpitRig, Kit, polyShape, sideProfile, wheelTravel, type CarVisual } from './common';
+import { nitroThrust } from './kit';
 
 const TL = 4.5; // comprimento das esteiras
 const TR = 0.75; // raio das pontas das esteiras (altura = 2 * TR = 1,5 m): ~25% mais altas que o casco
@@ -226,7 +227,7 @@ export function createBattleTrak(color: number, shadows: boolean): CarVisual {
   for (const sx of [-1, 1]) k.add(new THREE.BoxGeometry(0.2, 0.03, 2.1), k.paint, sx * 0.44, lowY(1.16) + 0.01, -0.85);
   for (const sx of [-1, 1]) k.add(new THREE.BoxGeometry(0.04, 0.035, 2.1), k.accent, sx * 0.58, lowY(1.16) + 0.015, -0.85);
   k.lights([[0.34, 0.58, 2.6]], [[0.5, lowY(0.95), -2.27]], 0.22);
-  const flames = k.flames([[0, EXH_Y, -3.15]], 1.1);
+  const flames = k.flames([[0, EXH_Y, -2.53]], 0.24, nitroThrust('battletrak'));
 
   const eye = new THREE.Vector3(0, 1.85, 0.2);
   const { cockpit, steeringWheel } = cockpitRig(k, { eye, halfWidth: 0.9, weapon: 'missiles', hoodLength: 1.7, hoodMat: blackGlass }, body);

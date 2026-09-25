@@ -63,9 +63,10 @@ export function setAudioLite(on: boolean): void {
 }
 
 /** Nível fixo da música na mixagem (o volume do jogador multiplica isto). */
-const MUSIC_TRIM = 0.3;
+// rodada 11: cama (música + motor) ~-19 dB RMS, para batidas e explosões saltarem +5–8 dB sobre ela
+const MUSIC_TRIM = 0.2;
 const SFX_TRIM = 1;
-const ENGINE_TRIM = 0.22;
+const ENGINE_TRIM = 0.14;
 const VOICE_TRIM = 1.1;
 
 export interface AudioOut {
@@ -102,9 +103,9 @@ function buildGraph(c: BaseAudioContext): void {
   ctx = c as AudioContext;
   master = ctx.createGain();
   master.gain.value = muted ? 0 : 1;
-  // limitador: segura os picos em ~-2 dBFS (o soft clip acima de -0,9 dBFS quase nunca atua)
+  // limitador em -1,5 dB: só segura picos raros (em -3 dB achatava os golpes contra a cama)
   const limiter = ctx.createDynamicsCompressor();
-  limiter.threshold.value = -3;
+  limiter.threshold.value = -1.5;
   limiter.knee.value = 0;
   limiter.ratio.value = 20;
   limiter.attack.value = 0.001;
@@ -267,8 +268,9 @@ function watchState(c: AudioContext): void {
 export function duck(amount: number, recover = 0.8, liftDb = 0): void {
   if (!ctx || !impactDuck || !engineDuck || !sfxLift) return;
   const t = ctx.currentTime;
-  const k = Math.min(0.85, Math.max(0, amount));
-  for (const [g, depth] of [[impactDuck.gain, k], [engineDuck.gain, k * 0.6]] as const) {
+  const k = Math.min(0.9, Math.max(0, amount));
+  // o motor também abaixa quase tanto quanto a música (antes 60%: o ronco tapava as batidas)
+  for (const [g, depth] of [[impactDuck.gain, k], [engineDuck.gain, k * 0.85]] as const) {
     const cur = g.value;
     // já abaixado: afunda mais, proporcionalmente (piso de ~-18 dB para a cama não sumir)
     const low = Math.max(0.12, Math.min(1 - depth, cur * (1 - depth * 0.55)));
@@ -279,7 +281,7 @@ export function duck(amount: number, recover = 0.8, liftDb = 0): void {
   }
   if (liftDb > 0) {
     const g = sfxLift.gain;
-    const peak = Math.max(g.value, Math.pow(10, Math.min(3, liftDb) / 20));
+    const peak = Math.max(g.value, Math.pow(10, Math.min(4, liftDb) / 20));
     g.cancelScheduledValues(t);
     g.setValueAtTime(g.value, t);
     g.linearRampToValueAtTime(peak, t + 0.005);

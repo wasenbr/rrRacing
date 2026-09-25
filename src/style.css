@@ -177,6 +177,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
   display: flex; align-items: flex-end; gap: 12px;
 }
 .touch-rcol, .touch-gcol { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+/* TIRO–ACEL com vão ≥ 16 px em qualquer tela (o dedo no ACEL não encosta no TIRO sem querer; para atirar
+   sem soltar o gás, desliza do ACEL para dentro do TIRO — ver controls.ts) */
+.touch-right .touch-gcol { gap: 16px; }
 .touch-right .brake { width: 72px; height: 72px; background: rgba(120, 24, 20, 0.6); border-color: rgba(255, 140, 120, 0.85); }
 .touch-right .sharp { width: 64px; height: 64px; background: rgba(90, 30, 130, 0.62); border-color: rgba(210, 150, 255, 0.9); }
 .touch-right .sharp span { font-size: 9px; letter-spacing: 0; }
@@ -692,7 +695,7 @@ h3 {
 .touch-top .ico, .fs-float .ico { width: 22px; height: 22px; vertical-align: middle; }
 .fs-float { display: grid; place-items: center; padding: 0; }
 /* botão flutuante de tela cheia: faixa própria à direita, fora do card */
-.overlay.fs-pad { padding-right: max(64px, calc(env(safe-area-inset-right) + 58px)); }
+.overlay.fs-pad { padding-right: max(72px, calc(env(safe-area-inset-right) + 66px)); }
 
 /* nova campanha: piloto escolhido em destaque + cards menores */
 .char-pick { display: grid; grid-template-columns: 236px 1fr; gap: 16px; align-items: start; }
@@ -741,7 +744,7 @@ h3 {
 .cars .car { display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start; }
 .cars .car .car-img.card-img { width: 100%; height: 150px; aspect-ratio: auto; object-fit: cover; flex: none; }
 .cars .car b { min-height: 1.3em; }
-.cars .car em { margin-top: auto; padding-top: 6px; }
+.cars .car > em { margin-top: auto; padding-top: 6px; }
 
 /* corrida rápida no celular deitado: pistas, pilotos e carros em fileiras que rolam de lado
    (a tela deixa de ser uma rolagem vertical longa); o piloto escolhido mostra só o texto */
@@ -760,7 +763,7 @@ h3 {
   .quick .trk { padding: 4px; }
   .quick .cars { grid-auto-columns: 172px; }
   .quick .cars .car .car-img.card-img { height: 92px; margin-bottom: 4px; }
-  .quick .cars .car em { font-size: 11px; padding-top: 4px; }
+  .quick .cars .car > em { font-size: 11px; padding-top: 4px; }
   .quick .char-pick { grid-template-columns: 190px 1fr; gap: 10px; align-items: center; }
   .quick .cf-portrait { display: none; }
   .quick .cf-info p { font-size: 12px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
@@ -874,6 +877,10 @@ h3 {
 .hub-top .hub-planet em { font-style: normal; font-size: 13px; color: var(--accent); }
 .hub-money { display: flex; flex-direction: column; align-items: flex-end; justify-content: center; }
 .hub-money b { font-family: var(--display); font-weight: 400; font-size: 24px; }
+/* teto de dinheiro: selo discreto sob o saldo (e nos resultados) */
+.capped-seal { display: inline-block; margin-top: 3px; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; line-height: 1.3;
+  color: #ffd98a; background: rgba(242, 195, 24, 0.14); border: 1px solid rgba(242, 195, 24, 0.45); text-align: right; max-width: 220px; }
+.results .capped-seal { margin-top: 6px; text-align: center; max-width: none; }
 /* número da corrida em destaque (item 61) */
 .race-badge {
   display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 170px;
@@ -987,6 +994,10 @@ h3 {
   .hub > .notice:not(.boss):not(.promoted) { display: none; }
   .hub-track .season-cal { display: none; }
   .hub-track .trk-img { max-height: 84px; }
+  /* sem rolagem nem por poucos px (media 396 em 390): menos respiro em volta do cartão */
+  .overlay:has(.hub) { padding-top: 4px; padding-bottom: 4px; }
+  .card.hub { padding-top: 8px; padding-bottom: 8px; }
+  .hub-actions { margin-top: 4px; }
 }
 @media (max-width: 640px) {
   .hub-top .hub-planet { gap: 6px; padding: 4px 8px; }
@@ -1023,7 +1034,7 @@ h3 {
 .warp-to .planet-img { display: block; width: min(var(--stage-h), 84vw); filter: drop-shadow(0 0 36px rgba(255, 180, 80, 0.5));
   animation: warp-arrive 1.8s cubic-bezier(0.3, 0.7, 0.3, 1.02) 0.8s both, warp-float 3.2s ease-in-out 2.8s infinite; }
 .warp-from { left: 4%; top: 6%; display: flex; flex-direction: column; align-items: center; z-index: 2; }
-.warp-from .planet-img { width: min(16vh, 120px); animation: warp-leave 1.8s ease-in 0.5s both; }
+.warp-from .planet-img { width: min(16vh, 120px); animation: warp-leave 2.4s ease-in-out 0.3s both; }
 .warp-from small { font-size: 12px; letter-spacing: 2px; color: var(--muted); text-transform: uppercase; animation: warp-fade-out 0.6s ease 1.1s both; }
 .warp-check { position: absolute; top: 0; right: 0; width: 34px; height: 34px; border-radius: 50%; background: #2fb82f; color: #062006; font-weight: 900; font-size: 22px;
   line-height: 34px; text-align: center; box-shadow: 0 0 14px rgba(92, 255, 92, 0.7); animation: warp-stamp 0.45s cubic-bezier(0.3, 1.6, 0.5, 1) 0.2s both, warp-fade-out 0.5s ease 1.3s forwards; }
@@ -1065,7 +1076,8 @@ h3 {
 @keyframes warp-in { from { opacity: 0; } }
 @keyframes warp-stars { to { transform: translateX(-260px); } }
 @keyframes warp-stamp { from { transform: scale(3); opacity: 0; } }
-@keyframes warp-leave { 0% { transform: none; } 100% { transform: translate(-60%, -30%) scale(0.35); opacity: 0; filter: grayscale(0.6); } }
+/* o planeta vencido abre a cena grande, no centro do palco, e então fica para trás */
+@keyframes warp-leave { 0%, 18% { transform: translate(120%, 90%) scale(2.6); } 55% { transform: none; opacity: 1; } 100% { transform: translate(-60%, -30%) scale(0.35); opacity: 0; filter: grayscale(0.6); } }
 @keyframes warp-fade-out { to { opacity: 0; } }
 @keyframes warp-fade-in { from { opacity: 0; transform: translateY(10px); } }
 @keyframes warp-arrive { 0% { transform: scale(0.12); opacity: 0; } 25% { opacity: 1; } 100% { transform: none; opacity: 1; } }
@@ -1167,10 +1179,13 @@ h3 {
 .fin-podium.p2 .fin-car .car-img, .fin-podium.p3 .fin-car .car-img { width: min(21vh, 26vw, 190px); filter: drop-shadow(0 8px 10px rgba(0, 0, 0, 0.7)); }
 .fin-car.duo .car-img { width: min(15vh, 18vw, 140px) !important; }
 .fin-car.duo .car-img + .car-img { margin-left: -28%; }
+/* 3º lugar: os dois carros encostam no bloco sem cobrir o número nem o nome */
+.fin-podium.p3 .fin-car { margin-bottom: -4px; }
+.fin-podium.p3 .fin-block { position: relative; z-index: 2; }
 .fin-block { width: min(30vh, 32vw, 250px); height: min(10vh, 76px); border-radius: 6px 6px 0 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
   background: linear-gradient(180deg, #ffe27a, #d89a10 40%, #8a5a00); box-shadow: 0 0 30px rgba(255, 190, 40, 0.45), inset 0 3px 0 rgba(255, 255, 255, 0.5); }
 .fin-podium.p2 .fin-block { width: min(22vh, 27vw, 190px); height: min(7vh, 54px); background: linear-gradient(180deg, #f2f4f8, #aeb4c0 45%, #5c6270); box-shadow: inset 0 3px 0 rgba(255, 255, 255, 0.6); }
-.fin-podium.p3 .fin-block { width: min(22vh, 27vw, 190px); height: min(5vh, 40px); background: linear-gradient(180deg, #f0b27a, #b86a2a 45%, #5a2e0a); box-shadow: inset 0 3px 0 rgba(255, 255, 255, 0.45); }
+.fin-podium.p3 .fin-block { width: min(22vh, 27vw, 190px); height: min(6.5vh, 50px); background: linear-gradient(180deg, #f0b27a, #b86a2a 45%, #5a2e0a); box-shadow: inset 0 3px 0 rgba(255, 255, 255, 0.45); }
 .fin-block span { font-family: var(--display); font-size: min(5vh, 38px); line-height: 1; color: #4a2a00; text-shadow: 0 1px 0 rgba(255, 255, 255, 0.5); }
 .fin-podium.p2 .fin-block span, .fin-podium.p3 .fin-block span { font-size: min(3.4vh, 26px); color: #222; }
 .fin-block b { display: flex; align-items: center; gap: 4px; max-width: 96%; overflow: hidden; font-size: 12px; line-height: 1.1; color: #2a1600; white-space: nowrap; text-overflow: ellipsis; }
@@ -1232,4 +1247,81 @@ h3 {
   .fin-link { width: 8px; }
   .fin-pl { width: 48px; }
   .fin-pl .planet-img { width: 34px; }
+}
+
+/* ---------- Rodada 11: interface e celular ---------- */
+/* FORTE/FRACO na mesma linha do nome do atributo: a marca é um <em> dentro do card, e a regra do texto das
+   armas (.car em: bloco, margem e respiro de 6 px) empurrava a marca para baixo da linha de 16 px */
+.cars .stat em, .shop-carcard .stat em { display: block; margin: 0; padding: 0; line-height: 16px; font-size: 11px; align-self: center; }
+/* carro do rival na garagem: ponto colorido + nome em linha (o "small" em bloco virava um "|" antes do nome) */
+.rivals li small.rv-car { display: flex; }
+/* nome completo do piloto escolhido (só aparece quando o retrato grande some: corrida rápida no celular) */
+.cf-name { display: none; }
+
+/* resultado em telas de notebook (720p): o CONTINUAR cabe sem rolar */
+@media (max-height: 760px) {
+  .card.results { padding-top: 16px; padding-bottom: 14px; }
+  .card.results h2 { margin-bottom: 4px; font-size: clamp(24px, 3.6vw, 32px); }
+  .card.results .notice { margin: 6px 0; padding: 6px 10px; }
+  .card.results .notice:has(.promo) { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; }
+  .notice .planet-img.promo { width: 44px; margin: 0; }
+  .card.results .res-list { gap: 4px; margin: 6px 0 8px; }
+  .card.results .res-row { padding: 3px 10px; }
+  .card.results .res-row .portrait { width: 40px; height: 40px; }
+  .card.results .res-row .car-img { width: 64px; margin: -12px 0; }
+  .card.results td { padding: 3px 4px; }
+  .card.results .money { margin: 2px 0; }
+  .card.results .go { margin-top: 8px; padding: 10px; }
+}
+
+/* celular deitado */
+@media (max-height: 460px) {
+  /* corrida rápida: pilotos numa grade de 4 colunas (todos à vista, Olaf incluído), nome inteiro em até
+     2 linhas e o nome do escolhido por extenso ao lado */
+  .quick .char-pick .chars { grid-auto-flow: row; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-auto-columns: auto; overflow: visible; padding-bottom: 0; }
+  .quick .char-pick .char { padding: 4px 2px 3px; }
+  .quick .char-pick .char .portrait { width: 58px; height: 58px; }
+  .quick .char-pick .char .nameplate.mini { margin: -10px 0 0; max-width: 100%; }
+  .quick .char-pick .nameplate.mini span { font-size: 10px; letter-spacing: 0; line-height: 1.1; padding: 3px 7px 2px; white-space: normal; overflow: visible; text-overflow: clip; }
+  .quick .cf-name { display: block; font-family: var(--display); font-weight: 400; font-size: 17px; letter-spacing: 1px; text-transform: uppercase; color: #f4f8ff; line-height: 1.1; margin-bottom: 2px; }
+
+  /* loja: carro de ~120 px ao lado das barras, itens em linha compacta, armas lado a lado com foto baixa */
+  .shop-head h2 { font-size: 24px; margin: 0; }
+  .shop-head b { font-size: 18px; }
+  .card:has(.shop-body) .tabs { margin: 6px 0; }
+  .card:has(.shop-body) .tab { padding: 5px 6px; font-size: 14px; }
+  .card:has(.shop-body) > button:not(.go) { padding: 7px; margin-top: 6px; font-size: 14px; }
+  .shop-car { grid-template-columns: 120px 1fr; gap: 10px; align-items: center; padding-bottom: 4px; }
+  .shop-car-img { padding: 0; }
+  .shop-car-img .car-img.card-img { width: 120px; max-width: 120px; margin: 0 auto 2px; }
+  .shop-car-img b { font-size: 13px; }
+  .shop-car-stats { padding: 6px 8px; }
+  .shop-car-stats h4 { display: none; }
+  .shop-car-stats .stats { gap: 3px; }
+  .shop-car-stats .stat { font-size: 11px; grid-template-columns: 84px 1fr 40px; }
+  .shop-car-stats .stat i b { height: 8px; }
+  .shop-car-stats .stat em { font-size: 10px; }
+  .upg-legend { margin: 3px 0 0; font-size: 11px; }
+  .shop-body > .shop-row { gap: 8px; padding: 4px 0; min-height: 56px; }
+  .shop-body > .shop-row .upg-icon { width: 44px; height: 44px; border-radius: 8px; }
+  .shop-body > .shop-row b { font-size: 13px; }
+  .shop-body > .shop-row .pips i { width: 10px; height: 6px; }
+  .shop-body > .shop-row .grow > small { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .shop-body > .shop-row .grow { min-width: 0; }
+  .upg-prev { grid-template-columns: 1fr 1fr; gap: 1px 12px; margin-top: 2px; max-width: none; }
+  .up-row { grid-template-columns: 62px 1fr 34px; gap: 5px; font-size: 11px; }
+  .up-row i { height: 6px; }
+  .shop-body > .shop-row .buy, .shop-body > .shop-row .maxed { min-width: 88px; padding: 8px 6px; font-size: 13px; }
+  .weapon-cards { padding: 0 0 4px; }
+  .weapon-card { gap: 4px; }
+  .weapon-img { aspect-ratio: auto; height: 96px; }
+  .weapon-img .item-img { width: 100%; height: 100%; aspect-ratio: auto; object-fit: cover; }
+  .weapon-slot { font-size: 10px; left: 5px; top: 5px; padding: 1px 6px; }
+  .weapon-card .grow small { font-size: 11px; margin-top: 2px; }
+  .weapon-card .buy, .weapon-card .maxed { padding: 7px 6px; }
+}
+/* iPhone pequeno deitado (667x375): coluna do escolhido mais estreita e placa com letra menor, sem cortar */
+@media (max-height: 460px) and (max-width: 700px) {
+  .quick .char-pick { grid-template-columns: 150px 1fr; }
+  .quick .char-pick .nameplate.mini span { font-size: 9px; padding: 3px 5px 2px; }
 }

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { bodySink, carFrame, carveTires, cockpitRig, Kit, Linkage, sideProfile, tireSpan, wheel, wheelDrop, wheelTravel, type CarVisual, type TireSpot } from './common';
+import { nitroThrust } from './kit';
 
 const WR = 0.82; // rodas de monster truck, como no sprite do original
 const WX = 0.94; // meia-bitola
@@ -228,7 +229,7 @@ export function createDirtDevil(color: number, shadows: boolean): CarVisual {
   k.decalOn(roof, 0.8, 0.7, 0, CAB.z - 0.1, 'number');
   k.decalOn(tub, 0.62, 0.6, 0, 1.55, 'stripes');
   for (const sx of [-1, 1]) k.decalSide(tub, 0.6, 0.48, sx, TUB.y + 0.3, 0.3, 'number');
-  const flames = k.flames([[-0.7, BOT + 1.0, -BL - 0.1], [0.7, BOT + 1.0, -BL - 0.1]], 0.7);
+  const flames = k.flames([[-0.62, BOT + 1.0, -BL + 0.1], [0.62, BOT + 1.0, -BL + 0.1]], 0.1, nitroThrust('dirtdevil'));
 
   // rodas enormes com aro cromado (anel e calota) por cima da roda padrão
   const lip = new THREE.TorusGeometry(WR * 0.6, 0.06, 8, 28).rotateY(Math.PI / 2);

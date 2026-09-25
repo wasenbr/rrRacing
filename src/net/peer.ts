@@ -1,5 +1,5 @@
 import type { DataConnection, Peer as PeerType } from 'peerjs';
-import { REJOIN_MS, Rtt } from './session';
+import { LEAVE_FLUSH_MS, REJOIN_MS, Rtt } from './session';
 import { MAX_CLIENT_MSG } from './sync';
 
 /**
@@ -104,6 +104,25 @@ const RATE = 60;
 const BURST = 120;
 /** Rótulo do segundo canal (sem ordem): estados e comandos, sem travar atrás de um pacote perdido. */
 const FAST = 'fast';
+
+/**
+ * O PeerJS abre o canal "sem garantia" só sem ordem (ordered: false), mas ainda retransmitindo: um
+ * estado velho reenviado atrasa os novos. Durante o `connect` (que cria o canal na hora), o canal
+ * rápido sai com maxRetransmits: 0 (perdeu, perdeu: o próximo pacote já traz o estado novo).
+ */
+function withoutRetransmits<T>(open: () => T): T {
+  const proto = (globalThis as { RTCPeerConnection?: { prototype: RTCPeerConnection } }).RTCPeerConnection?.prototype;
+  const orig = proto?.createDataChannel;
+  if (!proto || !orig) return open();
+  proto.createDataChannel = function (this: RTCPeerConnection, label: string, init?: RTCDataChannelInit) {
+    return orig.call(this, label, label === FAST ? { ...init, ordered: false, maxRetransmits: 0 } : init);
+  };
+  try {
+    return open();
+  } finally {
+    proto.createDataChannel = orig;
+  }
+}
 
 type Msg = { t?: unknown; ts?: unknown } | null;
 const kind = (m: unknown): unknown => (m as Msg)?.t;
@@ -268,6 +287,11 @@ export class NetHost {
     return false;
   }
 
+  /** @internal Sala sobre um peer já aberto (os testes usam um transporte simulado). */
+  static withPeer(peer: PeerType, code: string): NetHost {
+    return new NetHost(peer, code);
+  }
+
   /** Cria a sala; se o código já estiver em uso, sorteia outro. */
   static async create(): Promise<NetHost> {
     for (let i = 0; ; i++) {
@@ -383,7 +407,7 @@ export class NetClient {
     conn.on('error', gone);
     // canal rápido, sem ordem, para estados e comandos (sem ele, tudo vai pelo confiável)
     try {
-      const f = peer.connect(PREFIX + code, { reliable: false, serialization: 'json', label: FAST });
+      const f = withoutRetransmits(() => peer.connect(PREFIX + code, { reliable: false, serialization: 'json', label: FAST }));
       f.on('open', () => {
         if (!this.closed) this.fast = f;
       });
@@ -402,6 +426,11 @@ export class NetClient {
       if (now - this.lastSeen > this.patience) gone();
       else this.sendFast({ t: 'ping', ts: now });
     }, PING_MS);
+  }
+
+  /** @internal Convidado sobre uma conexão já aberta (os testes usam um transporte simulado). */
+  static withConn(peer: PeerType, conn: DataConnection, code: string): NetClient {
+    return new NetClient(peer, conn, code);
   }
 
   /** Conecta e manda a primeira mensagem (`hello`). */
@@ -457,5 +486,18 @@ export class NetClient {
     this.closed = true;
     clearInterval(this.timer);
     this.peer.destroy();
+  }
+
+  /**
+   * Saída de propósito: manda o "saí" pelo canal confiável e só fecha depois de um instante (destruir
+   * o peer na hora descartava a mensagem, e o host guardava a vaga como se fosse queda).
+   */
+  leave(msg: unknown): void {
+    if (this.closed) return;
+    // fechado antes de mandar: o fim da conexão que vem depois não vira "caiu, reconectando"
+    this.closed = true;
+    clearInterval(this.timer);
+    this.send(msg);
+    setTimeout(() => this.peer.destroy(), LEAVE_FLUSH_MS);
   }
 }

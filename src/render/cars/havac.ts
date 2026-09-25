@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { carFrame, cockpitRig, Kit, polyShape, sideProfile, type CarVisual } from './common';
+import { nitroThrust } from './kit';
 
 /** Retângulo de cantos arredondados (visto de cima), centrado na origem: x = largura, y = comprimento. */
 function roundRect(hw: number, hl: number, r: number): THREE.Shape {
@@ -253,7 +254,7 @@ export function createHavac(color: number, shadows: boolean): CarVisual {
   k.decalOn(deck, 0.42, 0.42, 0.5, 1.28, 'number');
   // lanternas: faróis no bico e lanternas traseiras no convés
   k.lights([[0.36, 0.64, 1.64]], [[0.62, 0.66, -1.58]], 0.2);
-  const flames = k.flames([[-0.56, FY, FZ - 0.9], [0.56, FY, FZ - 0.9]], 1.1);
+  const flames = k.flames([[-FX, FY, FZ - FL], [FX, FY, FZ - FL]], FR, nitroThrust('havac'));
 
   // colchão de ar: brilho suave no chão, embaixo da saia
   const haloMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0x3ab0ff), transparent: true, opacity: 0.2, blending: THREE.AdditiveBlending, depthWrite: false });

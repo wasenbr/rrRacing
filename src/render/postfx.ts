@@ -49,6 +49,12 @@ export class PostFx {
     this.composer.setSize(w, h);
   }
 
+  /** Libera os alvos e passes (queda automática desliga o bloom: o jogo passa a desenhar direto na tela). */
+  dispose(): void {
+    this.composer.dispose();
+    for (const p of this.composer.passes) p.dispose();
+  }
+
   render(camera: THREE.Camera): void {
     this.renderPass.camera = camera;
     this.composer.render();

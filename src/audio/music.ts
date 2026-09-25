@@ -1,7 +1,7 @@
 import type { ThemeId } from '../sim/track';
 import { audio } from './context';
 import { addTracks, clearTracks, loadTracks } from './musicStore';
-import { SONGS, SynthRock } from './synthrock';
+import { SONGS, SynthRock, type Song } from './synthrock';
 
 /**
  * Músicas colocadas na pasta `music/` do projeto (PC). São incluídas no build automaticamente.
@@ -36,6 +36,19 @@ const THEME_SONG: Record<ThemeId | 'menu', number> = {
   nho: 5,
   inferno: 4,
 };
+
+/**
+ * Hino do final da campanha (item 58): a faixa do menu/abertura do jogador (a preferida, "Peter
+ * Gunn", ou a primeira) ou, sem faixas, a trilha sintetizada do menu. Usado pelo jogo e pela
+ * gravação da evidência (scripts/evidencias.mjs), para as duas tocarem o mesmo caminho.
+ */
+export function anthemSource(tracks: { name: string; url: string }[] = BUNDLED): { kind: 'file'; index: number; name: string; url: string } | { kind: 'synth'; song: Song } {
+  if (tracks.length) {
+    const i = Math.max(0, tracks.findIndex((t) => MENU_PREFERENCE.test(t.name)));
+    return { kind: 'file', index: i, name: tracks[i].name, url: tracks[i].url };
+  }
+  return { kind: 'synth', song: SONGS[THEME_SONG.menu] };
+}
 
 export type MusicMood = 'race' | 'menu' | 'pause';
 const MOOD_LEVEL: Record<MusicMood, number> = { race: 1, menu: 0.6, pause: 0.25 };
@@ -184,6 +197,33 @@ export class Music {
       const song = SONGS[THEME_SONG[theme]];
       this.synth.play(song);
       this.onTrackChange?.(`${song.name} (trilha sintetizada)`);
+    }
+  }
+
+  /**
+   * Final da campanha: o hino (faixa do menu/abertura ou trilha do menu) no volume cheio de corrida.
+   * Antes usava play('menu', 'race'), que com faixas do jogador tocava a PRÓXIMA faixa de corrida.
+   */
+  playAnthem(): void {
+    this.mood = 'race';
+    if (!this.ensure()) return;
+    if (!this.enabled) {
+      this.stopAll();
+      return;
+    }
+    const src = anthemSource(this.tracks);
+    if (src.kind === 'file') {
+      this.synth?.stop();
+      const deck = this.decks[this.active];
+      // já tocando a faixa do menu (veio da garagem): só sobe o volume; senão troca com crossfade
+      if (!this.current || this.current.index !== src.index || deck.el.paused || deck.el.ended) this.start(src.index, true);
+      return;
+    }
+    this.synth ??= new SynthRock(audio()!.ctx, this.gain!);
+    if (this.currentTheme !== 'menu' || !this.synth.playing) {
+      this.currentTheme = 'menu';
+      this.synth.play(src.song);
+      this.onTrackChange?.(`${src.song.name} (trilha sintetizada)`);
     }
   }
 

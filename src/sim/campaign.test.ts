@@ -2,16 +2,16 @@ import { describe, expect, it } from 'vitest';
 import { trackById, TRACKS } from '../data/tracks';
 import { VEHICLES } from '../data/vehicles';
 import {
-  advanceEarly, applyRaceResult, bossBonus, bossOf, CAMPAIGN_RULES, canAdvanceEarly, carComingSoon, carsForSale, CHAMPION_BONUS, currentPlanet, currentTrackId, decodeSave, encodeSave,
+  advanceEarly, applyRaceResult, bossBonus, bossOf, campaignChargePrice, CAMPAIGN_RULES, CHARGE_ROOM, chargeScale, canAdvanceEarly, carComingSoon, carsForSale, CHAMPION_BONUS, currentPlanet, currentTrackId, decodeSave, encodeSave,
   forfeitCosts, forfeitRace, HOARD_MONEY, hoardFactor, markRaceStarted, moneyScale, resolveAbandonedRace, shopHeadroom, newCampaign, opponentsFor, PLANET_MONEY, planetCount, planetForLevel, PLANETS, planetTracks, playerSpec, POINTS, prizesFor, raceKind, RIVAL_LEVEL,
   rivalAggression, rivalEngine, rivalExtraCharges, rivalLevel, RIVALS, seasonInfo, seasonSchedule, shopLevel, START_MONEY, tier, type CampaignState,
 } from './campaign';
 import {
-  attributeTags, buildSpec, CAR_PRICES, carAttributes, carSwapCost, chargePrice, maxedSetup, maxExtraCharges, newCarSetup, tradeInFor, tradeInValue, UPGRADE_KINDS, upgradeAvailable, upgradeLabel, upgradeName,
+  attributeTags, buildSpec, CAR_PRICES, carAttributes, carSwapCost, CHARGE_KINDS, chargePrice, maxedSetup, maxExtraCharges, newCarSetup, tradeInFor, tradeInValue, UPGRADE_KINDS, upgradeAvailable, upgradeLabel, upgradeName,
   upgradePrice, upgradesSpent,
 } from './garage';
 import { Track } from './track';
-import { MAX_CHARGES, type VehicleSpec } from './vehicle';
+import { forwardSpeed, MAX_CHARGES, type VehicleSpec } from './vehicle';
 import { createWorld, DIFFICULTY, PRIZES, stepWorld, type Difficulty } from './world';
 
 describe('garagem', () => {
@@ -116,6 +116,18 @@ describe('garagem', () => {
     const t = Object.fromEntries(Object.keys(VEHICLES).map((id) => [id, attributeTags(VEHICLES[id])]));
     expect(t.dirtdevil.handling).toBe('good');
     expect(t.airblade.accel).toBe('good');
+    // o Havac é o mais rápido; mísseis + Scatter não são poder de fogo fraco; o Marauder arranca na média
+    expect(t.havac.speed).toBe('good');
+    expect(t.battletrak.firepower).toBeUndefined();
+    expect(t.marauder.accel).toBeUndefined();
+    // a barra manda: nunca "fraco" no atributo de barra mais cheia, nem "forte" com barra abaixo do meio
+    for (const id of Object.keys(t)) {
+      const bar = carAttributes(VEHICLES[id]);
+      for (const [k, tag] of Object.entries(t[id]) as [keyof typeof bar, string][]) {
+        if (tag === 'bad') expect(bar[k]).toBeLessThan(Math.max(...Object.values(bar)));
+        if (tag === 'good') expect(bar[k]).toBeGreaterThanOrEqual(0.5);
+      }
+    }
     // só marca quem se afasta de verdade da média dos outros carros
     const others = (id: string, f: (v: (typeof VEHICLES)[string]) => number) => {
       const o = Object.values(VEHICLES).filter((v) => v.id !== id).map(f);
@@ -123,7 +135,7 @@ describe('garagem', () => {
     };
     for (const id of Object.keys(t)) {
       const sp = VEHICLES[id].maxSpeed / others(id, (v) => v.maxSpeed) - 1;
-      if (t[id].speed) expect(Math.abs(sp)).toBeGreaterThanOrEqual(0.05);
+      if (t[id].speed) expect(Math.abs(sp)).toBeGreaterThanOrEqual(0.04);
       const ar = VEHICLES[id].armor / others(id, (v) => v.armor) - 1;
       if (t[id].armor) expect(Math.abs(ar)).toBeGreaterThanOrEqual(0.07);
     }
@@ -168,7 +180,9 @@ describe('campanha', () => {
     expect(prizesFor(s).slice(0, 3)).toEqual([7000, 5000, 3000]);
     s.planet = 5;
     s.difficulty = 'hard';
-    expect(prizesFor(s)[0]).toBe(11500); // Inferno no Difícil: ×1,8 × 0,65
+    expect(prizesFor(s)[0]).toBe(13500); // Inferno no Difícil: ×2,1 × 0,65
+    // o último planeta nunca paga menos que o anterior (a sobra é segurada pelo teto da loja)
+    for (let i = 1; i < PLANET_MONEY.length; i++) expect(PLANET_MONEY[i]).toBeGreaterThanOrEqual(PLANET_MONEY[i - 1]);
     s.planet = 0;
     s.difficulty = 'normal';
     const { races, promote } = seasonInfo(s);
@@ -377,9 +391,10 @@ describe('progressão dos carros', () => {
   const accel = (s: VehicleSpec) => s.accel + 0.15 * s.nitroAccel; // mesma conta das barras (parte do turbo)
 
   /** Dirt Devil < Marauder < Air Blade < Battle Trak < Havac, ordem estrita. */
-  function expectLadder(f: (id: string) => number, higherIsBetter = true) {
+  function expectLadder(f: (id: string) => number, higherIsBetter = true, margin = 0) {
     const v = CAR_ORDER.map((id) => (higherIsBetter ? f(id) : -f(id)));
-    for (let i = 1; i < v.length; i++) expect(v[i], CAR_ORDER[i]).toBeGreaterThan(v[i - 1]);
+    const all = v.map((x) => Math.abs(x).toFixed(2)).join(' ');
+    for (let i = 1; i < v.length; i++) expect(v[i] - v[i - 1], `${CAR_ORDER[i]}: ${all}`).toBeGreaterThan(margin);
   }
 
   it('com todas as melhorias, cada carro supera o anterior em final; blindagem e arranque seguem o estilo', () => {
@@ -445,8 +460,36 @@ describe('progressão dos carros', () => {
       return sum / defs.length;
     };
     const times = Object.fromEntries(CAR_ORDER.map((id) => [id, lap(id)]));
-    expectLadder((id) => times[id], false);
+    // degrau que se sente: pelo menos 0,15 s por volta entre um carro e o próximo
+    expectLadder((id) => times[id], false, 0.15);
   }, 60000);
+
+  it('volta solo do piloto simples (cenário "handling" das evidências): cada degrau abre 0,15 s', () => {
+    // mesmo piloto de scripts/evidencias.mjs: segue a linha central com acelerador cheio e freia só nas
+    // curvas fechadas; 1ª volta na primeira pista, sem nitro
+    const lap = (id: string) => {
+      const spec = maxed(id);
+      const track = new Track(TRACKS[0]);
+      const w = createWorld(track, [{ name: 'P', color: 0, spec, ai: null }], 99, 1, PRIZES);
+      w.started = true;
+      const r = w.racers[0];
+      const wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
+      for (let t = 0; !r.progress.lapTimes.length && t < 40; t += 1 / 60) {
+        const q = track.query(r.car.x, r.car.z, r.car.pieceIndex);
+        const v = forwardSpeed(r.car);
+        const p = track.pointAtDist(q.dist + 6 + Math.max(0, v) * 0.3);
+        const d = wrap(Math.atan2(p.x - r.car.x, p.z - r.car.z) - r.car.heading);
+        const bend = wrap(track.pointAtDist(q.dist + 8 + v * 0.45).heading - track.pointAtDist(q.dist).heading);
+        const brake = Math.abs(bend) > 0.9 && v > spec.maxSpeed * 0.7;
+        const input = { throttle: brake ? 0 : 1, brake: brake ? 0.6 : 0, steer: Math.max(-1, Math.min(1, -d * 2.5)), fire: false, drop: false, nitro: false };
+        stepWorld(w, { 0: input }, 1 / 60);
+      }
+      expect(r.progress.lapTimes.length, id).toBe(1);
+      return r.progress.lapTimes[0];
+    };
+    const times = Object.fromEntries(CAR_ORDER.map((id) => [id, lap(id)]));
+    expectLadder((id) => times[id], false, 0.15);
+  }, 30000);
 });
 
 describe('rivais e economia da campanha', () => {
@@ -539,8 +582,10 @@ describe('rivais e economia da campanha', () => {
    * cabe no bolso (guarda dinheiro para ele), e no resto do tempo compra a peça que a loja do planeta
    * vende e cabe no bolso, motor primeiro. Mede o dinheiro e o carro ao fim de cada planeta.
    */
-  function simulate(d: Difficulty) {
+  function simulate(d: Difficulty, opts: { charges?: boolean } = {}) {
     const places = [2, 1, 3, 2, 2, 1];
+    /** cargas compradas em cada planeta (opts.charges: depois das peças, até 2 por planeta) */
+    const chargesBought: number[] = [];
     const s = newCampaign('jake', 0, d);
     const bought: { id: string; planet: number; tier: number; race: number; cost: number }[] = [];
     /** valor investido (carro + peças) ao entrar em cada planeta */
@@ -565,7 +610,19 @@ describe('rivais e economia da campanha', () => {
           const p = s.car.upgrades[k] < shopLevel(s) ? upgradePrice(s.car, k) : null;
           return p !== null && p <= s.money - reserveForNext(s);
         });
-        if (!k) break;
+        if (!k) {
+          // com as peças em dia (nada mais cabe), uma carga extra por vez: até 2 por planeta
+          if (!opts.charges || (chargesBought[s.planet] ?? 0) >= 2) break;
+          const ck = CHARGE_KINDS.find((c) => {
+            const p = campaignChargePrice(s, c);
+            return p !== null && p <= s.money - reserveForNext(s);
+          });
+          if (!ck) break;
+          s.money -= campaignChargePrice(s, ck)!;
+          s.car.charges[ck]++;
+          chargesBought[s.planet] = (chargesBought[s.planet] ?? 0) + 1;
+          continue;
+        }
         s.money -= upgradePrice(s.car, k)!;
         s.car.upgrades[k]++;
       }
@@ -579,7 +636,7 @@ describe('rivais e economia da campanha', () => {
       const prize = prizesFor(s)[Math.min(place, prizesFor(s).length) - 1];
       applyRaceResult(s, place, prize + Math.round(4000 * moneyScale(s)), 1);
     }
-    return { s, bought, worth, havacMax, cash, cars };
+    return { s, bought, worth, havacMax, cash, cars, chargesBought };
   }
 
   it('jogador mediano troca de carro na ordem do original, planeta a planeta, em cada dificuldade', () => {
@@ -639,6 +696,35 @@ describe('rivais e economia da campanha', () => {
     expect(worth[4]).toBeLessThan(500000);
   });
 
+  it('cargas de arma na economia: preço acompanha planeta e dificuldade; o mediano compra 1–2 por planeta', () => {
+    // preço escala com o multiplicador do dinheiro (sem o teto: guardar não barateia a loja)
+    const s = newCampaign('jake', 0, 'normal');
+    const base = chargePrice(s.car, 'front', VEHICLES.dirtdevil)!;
+    expect(campaignChargePrice(s, 'front')).toBe(Math.round((base * chargeScale(s)) / 500) * 500);
+    const hard = newCampaign('jake', 0, 'hard');
+    expect(campaignChargePrice(hard, 'front')!).toBeLessThan(campaignChargePrice(s, 'front')!);
+    s.planet = 4;
+    expect(campaignChargePrice(s, 'front')!).toBeGreaterThan(base);
+    s.money = 10_000_000;
+    expect(campaignChargePrice(s, 'front')).toBe(Math.round((base * chargeScale(s)) / 500) * 500);
+    // o que falta de cargas entra no que a loja ainda vende (antes ficava fora do teto)
+    const full = newCampaign('jake', 0, 'hard');
+    full.planet = 5;
+    full.car = maxedSetup('havac');
+    expect(shopHeadroom(full)).toBeGreaterThan(0);
+    for (const k of CHARGE_KINDS) full.car.charges[k] = maxExtraCharges(VEHICLES.havac, k);
+    expect(shopHeadroom(full)).toBe(0);
+    for (const d of ['easy', 'normal', 'hard'] as const) {
+      const { s: end, chargesBought, bought } = simulate(d, { charges: true });
+      expect(end.champion, d).toBe(true);
+      expect(bought.map((b) => b.id), d).toEqual(d === 'easy' ? CAR_ORDER.slice(1, 4) : CAR_ORDER.slice(1));
+      const per = Array.from({ length: CAMPAIGN_RULES[d].planets }, (_, i) => chargesBought[i] ?? 0);
+      for (const n of per) expect(n, `${d}: ${per.join(' ')}`).toBeLessThanOrEqual(2);
+      // em quase todos os planetas sobra para 1–2 cargas depois das peças
+      expect(per.filter((n) => n >= 1).length, `${d}: ${per.join(' ')}`).toBeGreaterThanOrEqual(per.length - 1);
+    }
+  });
+
   it('teto de dinheiro no último planeta: não sobra fortuna sem nada para comprar', () => {
     for (const d of ['normal', 'hard'] as const) {
       const { cash } = simulate(d);
@@ -674,7 +760,17 @@ describe('rivais e economia da campanha', () => {
           const p = s.car.upgrades[k] < shopLevel(s) ? upgradePrice(s.car, k) : null;
           return p !== null && p <= s.money;
         });
-        if (!k) break;
+        if (!k) {
+          // peças em dia: as cargas que contam no teto (até CHARGE_ROOM por arma)
+          const ck = CHARGE_KINDS.find((c) => {
+            const p = campaignChargePrice(s, c);
+            return p !== null && s.car.charges[c] < CHARGE_ROOM && p <= s.money;
+          });
+          if (!ck) break;
+          s.money -= campaignChargePrice(s, ck)!;
+          s.car.charges[ck]++;
+          continue;
+        }
         s.money -= upgradePrice(s.car, k)!;
         s.car.upgrades[k]++;
       }
@@ -715,6 +811,7 @@ describe('rivais e economia da campanha', () => {
     const inf = newCampaign('jake', 0, 'hard');
     inf.planet = 5;
     inf.car = maxedSetup('havac');
+    for (const k of CHARGE_KINDS) inf.car.charges[k] = maxExtraCharges(VEHICLES.havac, k);
     expect(shopHeadroom(inf)).toBe(0);
   });
 
@@ -739,7 +836,7 @@ describe('rivais e economia da campanha', () => {
       return sum / defs.length;
     };
     const deltas: Record<string, number[]> = {};
-    for (const d of ['normal', 'hard'] as const) {
+    for (const d of ['easy', 'normal', 'hard'] as const) {
       const { cars } = simulate(d);
       deltas[d] = [];
       for (let t = 0; t < CAMPAIGN_RULES[d].planets * 2; t++) {
@@ -763,6 +860,15 @@ describe('rivais e economia da campanha', () => {
       for (let t = 1; t < v.length; t++) expect(v[t], fmt(d)).toBeGreaterThan(v[t - 1] - 0.2);
       expect(v[v.length - 1] - v[0], fmt(d)).toBeGreaterThan(0.4);
     }
+    // Fácil também tem desafio: o local anda junto do jogador mediano (de −0,1 a +0,4 s por volta),
+    // um pouco mais forte a cada planeta, e sempre abaixo do Normal no fim
+    const e = deltas.easy;
+    for (const x of e) {
+      expect(x, fmt('easy')).toBeGreaterThan(-0.1);
+      expect(x, fmt('easy')).toBeLessThan(0.4);
+    }
+    for (let t = 1; t < e.length; t++) expect(e[t], fmt('easy')).toBeGreaterThan(e[t - 1] - 0.15);
+    expect(e[e.length - 1] - e[0], fmt('easy')).toBeGreaterThan(0.1);
     // o Difícil aperta mais que o Normal
     expect(deltas.hard[0], fmt('hard')).toBeGreaterThan(deltas.normal[0]);
     expect(deltas.hard.at(-1)!, fmt('hard')).toBeGreaterThan(0.6);

@@ -4,11 +4,12 @@ import { carThumbnail, itemThumbnail, SHOWROOM_COLOR, type CarThumbStyle, type S
 import { planetThumbnail } from '../render/planetThumbs';
 import type { ThemeId } from '../sim/track';
 import {
-  bossBonus, CAMPAIGN_RULES, canAdvanceEarly, carComingSoon, carsForSale, forfeitCosts, DIVISIONS, planetCount, planetForLevel, PLANETS, POINTS, raceKind, rulesOf, seasonInfo, shopLevel, START_MONEY,
+  bossBonus, campaignChargePrice, CAMPAIGN_RULES, canAdvanceEarly, carComingSoon, carsForSale, DIVISIONS, moneyCapped, planetCount, planetForLevel, PLANETS, POINTS, raceKind, rulesOf, seasonInfo, shopLevel, START_MONEY,
   type CampaignState, type OpponentSetup, type PlanetDef, type PlanetNews, type RaceKind, type RaceOutcome, RIVALS, CHAMPION_BONUS, seasonSchedule,
 } from '../sim/campaign';
+import { pauseView } from '../sim/campaignFlow';
 import {
-  armamentText, attributeTags, ATTRIBUTE_LABEL, buildSpec, CAR_PRICES, carAttributes, CHARACTERS, CHARGE_KINDS, chargePrice, chargeWeapon, MAX_UPGRADE, maxExtraCharges,
+  armamentText, attributeTags, ATTRIBUTE_LABEL, buildSpec, CAR_PRICES, carAttributes, CHARACTERS, CHARGE_KINDS, chargeWeapon, MAX_UPGRADE, maxExtraCharges,
   carSwapCost, TRADE_CAP, tradeInValue, UPGRADE_KINDS, upgradeAvailable, upgradeHelp, upgradeLabel, upgradeName, upgradePrice, upgradesSpent, type CarAttributes, type CarSetup, type Character,
   type ChargeKind, type UpgradeKind,
 } from '../sim/garage';
@@ -20,7 +21,7 @@ import type { SlotInfo } from '../core/storage';
 import { formatTime } from './hud';
 import { isTouchDevice, setTiltSteering, tiltSteeringEnabled, tiltSupported } from '../input/controls';
 import { portraitSvg, warmPortraits } from './portraits';
-import { trackThumbnail } from './trackThumb';
+import { trackOutlineUrl, trackThumbnail } from './trackThumb';
 import { icon, iconizeHtml } from './icons';
 import { idleJob, idleJobsUrgent } from './idleQueue';
 import { APP_VERSION } from '../version';
@@ -128,6 +129,8 @@ export interface MenuActions {
   buyUpgrade(kind: UpgradeKind): void;
   buyCharge(kind: ChargeKind): void;
   showPassword(): void;
+  /** o final da campanha foi visto até o fim (ou pulado): sai do save */
+  championSeen(): void;
   backToHub(): void;
   resume(): void;
   restart(): void;
@@ -183,6 +186,8 @@ export interface AudioSettings {
   battery: BatteryPref;
   /** a economia está em uso agora */
   batteryNow: boolean;
+  /** o navegador informa a bateria (getBattery); sem isso a Automática decide pela folga do aparelho */
+  batteryDetect?: boolean;
 }
 
 export interface ResultRow {
@@ -242,6 +247,8 @@ export interface CampaignReport {
   playoffLeft: number;
   /** planetas da campanha nesta dificuldade */
   planets: number;
+  /** bolso acima do que a loja vende: os prêmios estão reduzidos (hoardFactor) */
+  moneyCapped?: boolean;
 }
 
 /* ------------------------------------------------------------------ */
@@ -376,6 +383,9 @@ function planetList(count: number): string {
   return names.length > 1 ? `${names.slice(0, -1).join(', ')} e ${names[names.length - 1]}` : names[0];
 }
 
+/** Selo do teto de dinheiro (garagem e resultados): o jogador entende por que os prêmios encolheram. */
+const CAPPED_SEAL = '<span class="capped-seal" title="Com mais dinheiro do que a loja ainda vende, prêmios e bônus rendem só uma parte.">Prêmios reduzidos: você já tem mais do que a loja vende</span>';
+
 /** Rota dos planetas da campanha (só os da dificuldade: Fácil 3, Normal 5, Difícil 6). */
 function planetRoute(current: number, champion = false, count = PLANETS.length): string {
   return `<div class="planet-route">${PLANETS.slice(0, count).map((p, i) => {
@@ -409,7 +419,7 @@ const thumbPending = new Set<string>();
 function applyThumb(key: string, url: string): void {
   if (typeof document === 'undefined') return;
   document.querySelectorAll<HTMLImageElement>('img.loading[data-thumb]').forEach((el) => {
-    if (el.dataset.thumb !== key) return;
+    if (el.dataset.thumb !== key || (!url && el.classList.contains('trk-img'))) return;
     el.src = url || BLANK;
     el.classList.remove('loading');
   });
@@ -469,7 +479,8 @@ function trackKey(def: TrackDef, w = 200, h = 130): string {
 function trackImg(def: TrackDef, w = 200, h = 130): string {
   const key = trackKey(def, w, h);
   const url = thumbReady.get(key);
-  return `<img class="trk-img${url ? '' : ' loading'}" data-thumb="${esc(key)}" src="${url ?? BLANK}" style="aspect-ratio:${w}/${h}" alt="" draggable="false"/>`;
+  // enquanto a miniatura não fica pronta, o traçado vetorial da pista ocupa o quadro (nunca vazio)
+  return `<img class="trk-img${url ? '' : ' loading'}" data-thumb="${esc(key)}" src="${url ?? trackOutlineUrl(def, w, h)}" style="aspect-ratio:${w}/${h}" alt="" draggable="false"/>`;
 }
 
 function dateLabel(ms: number): string {
@@ -684,7 +695,7 @@ export class Menus {
       <summary>Controles</summary>
       <p><b>Teclado:</b> ↑/W acelera · ↓/S freia/ré · ←→/A D vira · Q/E derrapar (freio de mão) · Ctrl esq./Espaço atira · \ ou X arma traseira · Shift assistência (nitro/pulo) · C câmera · Esc pausa · M som</p>
       <p><b>Controle:</b> RT acelera · LT freia · analógico vira · LB derrapar · X/RB atira · B arma traseira · L3/R3 assistência · Y câmera · Start pausa</p>
-      <p><b>Celular:</b> polegar esquerdo no volante: toque à esquerda ou à direita da faixa para virar, como as setas do teclado (arrastando para cima, atira sem soltar a direção) e tem TIRO, a arma traseira (mina/óleo) e a assistência (nitro/pulo) logo acima, cada botão com o ícone da arma atual; polegar direito acelera, freia e tem o botão DERRAPAR. Em “Som e opções”: aceleração automática (o polegar direito ganha um TIRO) e direção por inclinação.</p>
+      <p><b>Celular:</b> polegar esquerdo no volante: toque à esquerda ou à direita da faixa para virar, como as setas do teclado (arrastando para cima, atira sem soltar a direção) e tem TIRO, a arma traseira (mina/óleo) e a assistência (nitro/pulo) logo acima, cada botão com o ícone da arma atual; polegar direito acelera, freia e tem o botão DERRAPAR (deslizando do ACEL até o TIRO logo acima, atira sem soltar o gás). Em “Som e opções”: aceleração automática (o polegar direito ganha um TIRO) e direção por inclinação.</p>
       <p>Armas e nitro recarregam a cada volta. Dinheiro e blindagem aparecem pela pista.</p>
     </details>`;
   }
@@ -809,7 +820,7 @@ export class Menus {
   private charFeature(id = this.newChar.characterId): string {
     const c = CHARACTERS.find((k) => k.id === id) ?? CHARACTERS[0];
     return `<div class="cf-portrait">${portraitSvg(c.id, 208)}<div class="nameplate"><span>${esc(c.name)}</span></div></div>
-      <div class="cf-info"><small class="home">${esc(c.homeworld ?? '')}</small><p>${esc(c.description)}</p><div class="skills">${this.bonusText(c)}</div></div>`;
+      <div class="cf-info"><b class="cf-name">${esc(c.name)}</b><small class="home">${esc(c.homeworld ?? '')}</small><p>${esc(c.description)}</p><div class="skills">${this.bonusText(c)}</div></div>`;
   }
 
   /** Grade de pilotos (Nova campanha e Corrida rápida): destaque grande + retratos com placa metálica do nome. */
@@ -829,7 +840,7 @@ export class Menus {
     this.show(`
       <div class="card wide">
         <h2>NOVA CAMPANHA</h2>
-        ${planetRoute(0)}
+        <div class="new-route">${planetRoute(0, false, CAMPAIGN_RULES[this.newChar.difficulty].planets)}</div>
         <p class="sub center">Comece em ${esc(PLANETS[0].name)}, Divisão B, com ${money(START_MONEY)}. Some pontos para subir de divisão
           (1º: ${POINTS[0]} pts · 2º: ${POINTS[1]} · 3º: ${POINTS[2]}). A Divisão A de cada planeta fecha com um duelo contra o chefe local;
           se faltar ponto, a repescagem é um duelo contra ele. A dificuldade decide até onde vai a galáxia.</p>
@@ -864,7 +875,7 @@ export class Menus {
               ? `<div class="slot empty"><div class="slot-n">${s.slot + 1}</div><div class="slot-info"><b>Vazio</b></div>
                   ${mode === 'save' ? `<button class="buy" data-save="${s.slot}">Salvar aqui</button>` : ''}</div>`
               : `<div class="slot"><div class="slot-n">${s.slot + 1}</div>${portraitSvg(s.characterId, 56)}${carImg(s.vehicleId, s.color, 96, 'transparent')}
-                  <div class="slot-info"><b>${esc(s.pilot)}</b><small class="slot-planet">${planetImg(PLANET_THEME[s.planet], 32, 'mini')}${esc(s.planet)} · Divisão ${esc(s.division)}${s.champion ? ` · ${icon('trophy')}` : ''}</small>
+                  <div class="slot-info"><b>${esc(s.pilot)}</b><small class="slot-planet">${planetImg(PLANET_THEME[s.planet], 32, 'mini')}${esc(s.planet)} · Divisão ${esc(s.division)} · ${esc(DIFFICULTY_LABEL[s.difficulty] ?? '')}${s.champion ? ` · ${icon('trophy')}` : ''}</small>
                   <small><span class="gold">${money(s.money)}</span> · ${dateLabel(s.savedAt)}</small></div>
                   <div class="slot-btns">
                     ${mode === 'save' ? `<button class="buy" data-save="${s.slot}">Substituir</button>` : `<button class="buy" data-loadslot="${s.slot}">Carregar</button>`}
@@ -911,7 +922,7 @@ export class Menus {
         <div class="hub-top">
           <div class="hub-planet">${planetImg(d.planet.theme, 72)}<span><small>PLANETA ${s.planet + 1}/${planetCount(s)}</small><b>${esc(d.planet.name)}</b><em>Divisão ${div}</em></span></div>
           ${this.raceBadge(s)}
-          <div class="hub-money"><small>DINHEIRO</small><b class="gold">${money(s.money)}</b></div>
+          <div class="hub-money"><small>DINHEIRO</small><b class="gold">${money(s.money)}</b>${moneyCapped(s) ? CAPPED_SEAL : ''}</div>
         </div>
         <div class="hub-progress">
           ${planetRoute(s.planet, s.champion, planetCount(s))}
@@ -956,6 +967,9 @@ export class Menus {
           <div class="hub-cam"><small>CÂMERA</small>${this.cameraPicker()}</div>
         </div>
       </div>`);
+    // a próxima pista é desenho 2D barato: gera na hora, sem esperar a fila das miniaturas 3D
+    // (na garagem do chefe a fila ainda estava nos carros e o quadro ficava vazio)
+    makeThumb(trackKey(d.track.def, 320, 200));
   }
 
   /**
@@ -1076,7 +1090,8 @@ export class Menus {
     } else if (this.shopTab === 'weapons') {
       const baseCar = d.vehicles[s.car.vehicleId];
       body = CHARGE_KINDS.map((k) => {
-        const price = chargePrice(s.car, k, baseCar);
+        // (preço da campanha: acompanha o dinheiro do planeta e da dificuldade)
+        const price = campaignChargePrice(s, k);
         const kind = chargeWeapon(baseCar, k);
         const total = k === 'front' ? d.spec.frontCharges : k === 'rear' ? d.spec.rearCharges : d.spec.nitroCharges;
         const cap = total + Math.max(0, maxExtraCharges(baseCar, k) - s.car.charges[k]);
@@ -1157,7 +1172,7 @@ export class Menus {
         ${toggle('sfx', 'Efeitos sonoros', a.sfx)}
         ${toggle('announcer', 'Locutor', a.announcer)}
         <div class="shop-row"><div class="grow"><b>Qualidade gráfica</b><small>Em uso: ${QUALITY_LABELS[a.qualityNow]}. Baixa deixa o jogo liso em aparelhos simples.</small></div><button class="toggle on" data-quality="${a.quality}">${QUALITY_LABELS[a.quality].toUpperCase()}</button></div>
-        <div class="shop-row"><div class="grow"><b>Economia de bateria</b><small>${a.batteryNow ? 'Ligada agora' : 'Desligada agora'}. Automática liga fora da tomada: 30 quadros por segundo e menos resolução, sombras e fumaça.</small></div><button class="toggle ${a.battery === 'off' ? '' : 'on'}" data-battery="${a.battery}">${BATTERY_LABELS[a.battery].toUpperCase()}</button></div>
+        <div class="shop-row"><div class="grow"><b>Economia de bateria</b><small>${a.batteryNow ? 'Ligada agora' : 'Desligada agora'}. ${a.batteryDetect === false ? 'Este navegador não informa a bateria: a Automática fica em até 60 quadros por segundo e liga a economia se o aparelho não der conta' : 'Automática liga fora da tomada'}: 30 quadros por segundo e menos resolução, sombras e fumaça.</small></div><button class="toggle ${a.battery === 'off' ? '' : 'on'}" data-battery="${a.battery}">${BATTERY_LABELS[a.battery].toUpperCase()}</button></div>
         ${a.touch ? toggle('autothrottle', 'Aceleração automática', a.autoThrottle, 'O carro acelera sozinho; o polegar direito freia e atira') : ''}
         ${a.touch && tiltSupported() ? toggle('tilt', 'Direção por inclinação', tiltSteeringEnabled(), 'Vire o celular como um volante; o polegar esquerdo fica só com as armas') : ''}
         ${a.touch ? this.fsButtonHtml() : ''}
@@ -1248,7 +1263,7 @@ export class Menus {
     this.show(`
       <div class="card">
         <h2>SALA ${esc(v.code)}</h2>
-        <p class="small-note center">Mande o link para os amigos: quem abrir já entra na sala.</p>
+        <p class="small-note center">Mande o link para os amigos: quem abrir escolhe nome e carro e entra na sala.</p>
         <div class="join-row"><input class="room-link" readonly value="${esc(v.link)}"/><button class="buy" data-act="share-link">${canShare ? 'Enviar' : 'Copiar'}</button></div>
         <p class="pw-msg share-msg"></p>
         <h3>Pilotos</h3>
@@ -1282,14 +1297,16 @@ export class Menus {
   /* ---------------- pausa e resultado ---------------- */
 
   /**
-   * Pausa. `started`: a corrida já largou (na contagem sair não custa nada); `glLost`: o vídeo caiu (sair
-   * ou reiniciar também não custa).
+   * Pausa. `started`: a corrida já largou (na contagem sair não custa nada); `glLostThisRace`: o vídeo
+   * caiu nesta corrida (sair ou reiniciar não custa, mesmo depois de ele voltar); `glLostNow`: o vídeo
+   * está fora agora (reiniciar fica desabilitado: largaria às cegas). A regra é a mesma que decide a
+   * cobrança no jogo (campaignFlow.pauseView/leaveRace).
    */
-  showPause(online = false, started = true, glLost = false): void {
+  showPause(online = false, started = true, glLostThisRace = false, glLostNow = glLostThisRace): void {
     // campanha (fora do Fácil): sair ou reiniciar depois da largada conta como último lugar (e gasta o duelo)
     const st = this.inCampaign ? this.lastHub?.state : undefined;
-    const canCost = !online && !!st && forfeitCosts(st);
-    const costs = canCost && started && !glLost;
+    const view = pauseView({ campaign: st ?? null, online, started, videoLostThisRace: glLostThisRace, videoLostNow: glLostNow });
+    const costs = view.costs;
     const duel = costs && raceKind(st!) !== 'normal';
     const quitLabel = online
       ? 'Sair da sala'
@@ -1298,13 +1315,22 @@ export class Menus {
         : this.inCampaign
           ? 'Sair da corrida (não conta)'
           : 'Sair da corrida';
-    const freeNote = !canCost ? '' : glLost ? 'O vídeo caiu: sair ou reiniciar agora não conta para a temporada.' : !started ? 'A corrida ainda não largou: sair ou reiniciar agora não conta.' : '';
+    const freeNote =
+      view.note === 'video'
+        ? glLostNow
+          ? 'O vídeo caiu: esta corrida não conta para a temporada. Sair agora não custa nada.'
+          : 'O vídeo caiu nesta corrida: ela não conta para a temporada. Sair ou reiniciar não custa nada.'
+        : view.note === 'not-started'
+          ? 'A corrida ainda não largou: sair ou reiniciar agora não conta.'
+          : !online && glLostNow
+            ? 'Sem vídeo: reiniciar volta quando o vídeo voltar.'
+            : '';
     this.show(`
       <div class="card small pause">
         <h2>${online ? 'MENU' : 'PAUSADO'}</h2>
         ${online ? '<p class="small-note center">No online a corrida não para.</p>' : ''}
         <button class="go" data-act="resume">Continuar</button>
-        ${online ? '' : `<button data-act="restart"${costs ? ' data-forfeit="1"' : ''}>${costs ? 'Desistir e ir para a próxima' : 'Reiniciar corrida'}</button>`}
+        ${online ? '' : `<button data-act="restart"${costs ? ' data-forfeit="1"' : ''}${view.restartEnabled ? '' : ' disabled title="Aguardando o vídeo voltar"'}>${costs ? 'Desistir e ir para a próxima' : 'Reiniciar corrida'}</button>`}
         <button data-act="settings">${icon('gear')} Som e opções</button>
         ${this.fsButtonHtml()}
         <button class="quit" data-act="${online ? 'online-leave' : 'quit'}"${costs ? ' data-forfeit="1"' : ''}>${icon('eject')} ${quitLabel}</button>
@@ -1394,6 +1420,8 @@ export class Menus {
   /** Resumo do título: estatísticas, recompensa e o que fazer agora (garagem ou nova campanha mais difícil). */
   private showChampionSummary(d: HubData): void {
     this.lastHub = d;
+    // o final foi visto (ou pulado): só agora sai do save
+    this.actions.championSeen();
     const s = d.state;
     const st = s.stats;
     const winPct = st.races ? Math.round((st.wins / st.races) * 100) : 0;
@@ -1411,7 +1439,7 @@ export class Menus {
           ${stat('ABATES', String(st.kills))}
           ${stat('GANHOS', money(st.earnings))}
         </div>
-        <div class="notice promoted">Recompensa: troféu da galáxia e <b class="gold">${money(CHAMPION_BONUS)}</b> de prêmio, já somado ao seu saldo de <b>${money(s.money)}</b>. A garagem continua aberta: corra em ${esc(PLANETS[planetCount(s) - 1].name)} para gastar o prêmio.</div>
+        <div class="notice promoted">Recompensa: troféu da galáxia e <b class="gold">${money(CHAMPION_BONUS)}</b> de prêmio, já somado ao seu saldo de <b>${money(s.money)}</b>. A garagem continua aberta: em ${esc(PLANETS[planetCount(s) - 1].name)} as corridas valem só dinheiro e diversão${moneyCapped(s) ? ' — com o bolso acima do que a loja vende, os prêmios vêm reduzidos até você gastar' : ''}.</div>
         <button class="go" data-act="champion-next" data-diff-next="${next}">${diff === next ? 'Nova campanha no' : 'Próximo desafio: campanha no'} ${esc(DIFFICULTY_LABEL[next])} ${icon('arrowRight')}</button>
         <div class="row-buttons">
           <button data-act="hub">Voltar à garagem</button>
@@ -1452,6 +1480,7 @@ export class Menus {
                   : `Faltaram pontos (${report.points}/${report.promote}). Repescagem: vença ${esc(report.boss)} no duelo (${tries(report.playoffLeft)}).`
           }
           ${report.outcome === 'continue' ? `+${report.pointsEarned} pontos · total ${report.points}/${report.promote}` : ''}
+          ${report.moneyCapped ? `<br>${CAPPED_SEAL}` : ''}
         </div>`
       : '';
     const podium = rows
@@ -1569,8 +1598,12 @@ export class Menus {
       this.clearConfirm();
     }
     if (d.diff) {
-      if (d.group === 'new') this.newChar.difficulty = d.diff as Difficulty;
-      else this.quick.difficulty = d.diff as Difficulty;
+      if (d.group === 'new') {
+        this.newChar.difficulty = d.diff as Difficulty;
+        // a rota mostra só os planetas da dificuldade escolhida (Fácil 3, Normal 5, Difícil 6)
+        const route = this.el.querySelector('.new-route');
+        if (route) route.innerHTML = planetRoute(0, false, CAMPAIGN_RULES[this.newChar.difficulty].planets);
+      } else this.quick.difficulty = d.diff as Difficulty;
     }
     if (d.color) {
       if (d.group === 'new') this.newChar.color = Number(d.color);

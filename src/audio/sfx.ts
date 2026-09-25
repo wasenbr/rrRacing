@@ -26,20 +26,31 @@ const vary = (k = 0.06) => 1 + (Math.random() * 2 - 1) * k;
  * `near` (0..1, o volume já atenuado pela distância) fecha o passa-baixa de 18 kHz (colado no
  * jogador) até 1,5 kHz (longe): sons distantes ficam abafados, como no ar de verdade.
  */
-function voice(a: AudioOut, vol: number, pan: number, near = 1): GainNode {
+function voice(a: AudioOut, vol: number, pan: number, near = 1, thin = 0): GainNode {
   const g = a.ctx.createGain();
   g.gain.value = vol;
   const p = a.ctx.createStereoPanner();
   p.pan.value = Math.max(-1, Math.min(1, pan));
   const n = Math.max(0, Math.min(1, near));
+  // `thin` (dB, negativo): prateleira abaixo de 140 Hz. Nas batidas o sub-grave das amostras comia a
+  // folga do limitador e o estalo (o que se ouve no celular) ficava baixo (rodada 11)
+  let head: AudioNode = p;
+  if (thin < 0) {
+    const ls = a.ctx.createBiquadFilter();
+    ls.type = 'lowshelf';
+    ls.frequency.value = 140;
+    ls.gain.value = thin;
+    ls.connect(p);
+    head = ls;
+  }
   if (n < 0.98) {
     const lp = a.ctx.createBiquadFilter();
     lp.type = 'lowpass';
     lp.Q.value = 0.5;
     lp.frequency.value = 1500 * Math.pow(12, n);
     g.connect(lp);
-    lp.connect(p);
-  } else g.connect(p);
+    lp.connect(head);
+  } else g.connect(head);
   p.connect(a.out);
   return g;
 }
@@ -51,7 +62,7 @@ function voice(a: AudioOut, vol: number, pan: number, near = 1): GainNode {
 function punch(vol: number, amount: number, recover = 0.4): void {
   if (vol < 0.25) return;
   const v = Math.min(1, vol);
-  duck(amount * v, recover, amount >= 0.45 ? 3 * v : amount >= 0.3 ? 1.5 * v : 0);
+  duck(amount * v, recover, amount >= 0.6 ? 4 * v : amount >= 0.45 ? 3 * v : amount >= 0.3 ? 2 * v : 0);
 }
 
 /** Envelope percussivo (ataque exponencial curto, queda exponencial). */
@@ -136,6 +147,26 @@ function subThump(ctx: BaseAudioContext, out: AudioNode, peak: number, t = ctx.c
   osc(ctx, 'sine', f * vary(0.06), f * 0.78, 0.16, g, t);
 }
 
+/**
+ * Estalo de lataria (1,5–6 kHz): é o que se ouve de uma batida em alto-falante de celular/notebook,
+ * que não reproduz abaixo de ~150 Hz (rodada 11: os golpes tinham 77–94% da energia abaixo de
+ * 120 Hz e sumiam). Ruído saturado em duas bandas + ressonância metálica aguda e curta.
+ * Pré-gravado (synthLayer 'estalo'): as batidas são frequentes.
+ */
+function crackSynth(ctx: BaseAudioContext, out: AudioNode, t: number, p = 1): void {
+  noiseSrc(ctx, filter(ctx, 'bandpass', 2600 * p, 0.7, env(ctx, dirt(ctx, out, 3), 0.9, 0.0008, 0.16, t)), 0.2, t);
+  noiseSrc(ctx, filter(ctx, 'bandpass', 4800 * p, 0.9, env(ctx, out, 0.45, 0.0005, 0.06, t)), 0.1, t);
+  metalRing(ctx, out, 1500 * p * vary(0.1), 0.5, 0.28, t);
+}
+
+/** Estalo de lataria com volume próprio (`peak`) e afinação `p`. */
+function crack(ctx: BaseAudioContext, out: AudioNode, peak: number, p = 1): void {
+  const g = ctx.createGain();
+  g.gain.value = peak;
+  g.connect(out);
+  synthLayer(ctx, g, 'estalo', 0.3, crackSynth, p);
+}
+
 type SampleOpts ={ vol?: number; rate?: number; offset?: number; duration?: number; t?: number; fadeOut?: number };
 
 /** Toca uma amostra (sorteia se vier uma lista). Retorna false se ainda não estiver carregada. */
@@ -153,9 +184,10 @@ function sample(a: AudioOut, out: AudioNode, name: SfxName | SfxName[], o: Sampl
 
 /**
  * VK Plasma Rifle: canhão de plasma sujo, não "pew" de ficção científica. A amostra de plasma toca
- * grave (0,6–0,7x, o chirp descendente vira um rosnado curto) e passa por distorção e passa-baixa;
- * um estalo seco marca o disparo, um soco grave dá peso e a cauda é crepitação (estalos de ruído
- * aleatórios decaindo), sem tom que "canta".
+ * pouco abaixo do tom (~0,85x) e passa por distorção e passa-baixa em ~5 kHz; um estalo seco marca
+ * o disparo e a cauda é crepitação (estalos de ruído aleatórios decaindo), sem tom que "canta".
+ * Rodada 11: sem o soco sub-grave (150→50 Hz) e com a descarga uma oitava acima: em 0,6x a amostra
+ * e o soco viravam um rosnado grave que sumia em alto-falante pequeno.
  */
 export function sfxLaser(vol = 1, pan = 0): void {
   const a = audio();
@@ -165,43 +197,42 @@ export function sfxLaser(vol = 1, pan = 0): void {
   const p = vary(0.07);
   punch(vol, 0.3, 0.25);
   // corpo: amostra grave → distorção → passa-baixa (tira o brilho de "pew")
-  const body = filter(ctx, 'lowpass', 2400, 0.6, out);
-  const has = sample(a, dirt(ctx, body, 3.5), ['plasma_a', 'plasma_b', 'plasma_c'], { vol: 0.75, rate: (0.6 + Math.random() * 0.1) * p, duration: 0.15, fadeOut: 0.07 });
+  // passa-alta em 150 Hz: as amostras de plasma têm um ronco sub-grave que não é do disparo
+  const body = filter(ctx, 'highpass', 150, 0.7, filter(ctx, 'lowpass', 5000, 0.6, out));
+  const has = sample(a, dirt(ctx, body, 3.5), ['plasma_a', 'plasma_b', 'plasma_c'], { vol: 0.8, rate: (0.8 + Math.random() * 0.1) * p, duration: 0.15, fadeOut: 0.07 });
   if (!has) {
     const bp = filter(ctx, 'bandpass', 900 * p, 0.8, env(ctx, dirt(ctx, out, 3.5), 0.7, 0.003, 0.16));
     osc(ctx, 'sawtooth', 700 * p, 260 * p, 0.16, bp);
     osc(ctx, 'square', 660 * p, 240 * p, 0.16, bp);
   }
-  sample(a, out, 'batida_soco', { vol: 0.6, rate: 1.4 * p, duration: 0.14, fadeOut: 0.08 });
+  sample(a, filter(ctx, 'highpass', 180, 0.7, out), 'batida_soco', { vol: 0.5, rate: 1.4 * p, duration: 0.12, fadeOut: 0.07 });
   // camadas sintéticas: pré-gravadas (os inimigos atiram muito; montar ~60 nós de áudio por tiro
   // custava ~3,5 ms e causava travadas e som picotado). Enquanto a gravação não fica pronta, ao vivo.
   synthLayer(ctx, out, 'plasma', 0.4, laserSynth, p);
 }
 
-/** Parte sintética do plasma: estalo, soco grave, rosnado descendente e crepitação. */
+/** Parte sintética do plasma: estalo seco, descarga descendente e crepitação (sem sub-grave). */
 function laserSynth(ctx: BaseAudioContext, out: AudioNode, t: number, p = 1): void {
-  // estalo do disparo: ruído curtíssimo saturado (o "crack" da descarga)
-  noiseSrc(ctx, filter(ctx, 'bandpass', 2600, 0.8, env(ctx, dirt(ctx, out, 4), 0.9, 0.0005, 0.025, t)), 0.04, t);
-  noiseSrc(ctx, filter(ctx, 'highpass', 5000, 0.7, env(ctx, out, 0.35, 0.0005, 0.012, t)), 0.02, t);
-  // soco grave (camada suja)
-  osc(ctx, 'sine', 150 * p, 50, 0.14, env(ctx, dirt(ctx, out, 3), 0.9, 0.002, 0.14, t), t);
-  // cauda grave: dente de serra varrendo de ~260 para ~55 Hz em 0,25 s, bem distorcida e abafada
-  // (rosnado pesado que desce, não "pew" agudo)
+  // estalo do disparo: ruído curtíssimo saturado (o "crack" seco da descarga)
+  noiseSrc(ctx, filter(ctx, 'bandpass', 3000, 0.8, env(ctx, dirt(ctx, out, 4), 1.1, 0.0005, 0.02, t)), 0.04, t);
+  noiseSrc(ctx, filter(ctx, 'highpass', 5000, 0.7, env(ctx, out, 0.4, 0.0005, 0.012, t)), 0.02, t);
+  // descarga: dente de serra varrendo de ~520 para ~140 Hz em 0,2 s, distorcida (desce sem virar
+  // rosnado sub-grave nem "pew" agudo)
   const growlEnv = ctx.createGain();
   growlEnv.gain.setValueAtTime(0.0001, t);
-  growlEnv.gain.exponentialRampToValueAtTime(1, t + 0.006);
-  growlEnv.gain.setValueAtTime(1, t + 0.14);
-  growlEnv.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
+  growlEnv.gain.exponentialRampToValueAtTime(0.8, t + 0.005);
+  growlEnv.gain.setValueAtTime(0.8, t + 0.09);
+  growlEnv.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
   growlEnv.connect(out);
   const growl = ctx.createBiquadFilter();
   growl.type = 'lowpass';
   growl.Q.value = 1.2;
-  growl.frequency.setValueAtTime(1400, t);
-  growl.frequency.exponentialRampToValueAtTime(260, t + 0.25);
+  growl.frequency.setValueAtTime(3200, t);
+  growl.frequency.exponentialRampToValueAtTime(700, t + 0.2);
   growl.connect(growlEnv);
-  const gd = dirt(ctx, growl, 6);
-  osc(ctx, 'sawtooth', 260 * p, 55 * p, 0.25, gd, t);
-  osc(ctx, 'square', 130 * p, 40 * p, 0.25, gd, t).detune.value = 12;
+  const gd = dirt(ctx, filter(ctx, 'highpass', 160, 0.7, growl), 6);
+  osc(ctx, 'sawtooth', 520 * p, 140 * p, 0.2, gd, t);
+  osc(ctx, 'square', 260 * p, 90 * p, 0.2, gd, t).detune.value = 12;
   // crepitação: estalos aleatórios cada vez mais fracos e mais graves (~130 ms), por cima do rosnado
   const n = 6 + Math.floor(Math.random() * 3);
   for (let i = 0; i < n; i++) {
@@ -245,7 +276,7 @@ function bake(name: string, len: number, synth: Synth): AudioBuffer[] {
 /** Pré-grava as camadas sintéticas dos efeitos frequentes (chamar com o áudio já criado). */
 export function prepareSfx(): void {
   const all: [string, number, Synth][] = [
-    ['plasma', 0.4, laserSynth], ['missil', 0.3, missileSynth], ['sundog', 0.55, sundogSynth], ['impacto', 0.2, hitSynth],
+    ['plasma', 0.4, laserSynth], ['missil', 0.3, missileSynth], ['sundog', 0.55, sundogSynth], ['impacto', 0.2, hitSynth], ['estalo', 0.3, crackSynth],
     ['explosao_g', 2.4, explosionBigSynth], ['explosao_p', 1, explosionSmallSynth],
   ];
   for (const [name, len, synth] of all) if (!bakes.has(name)) bake(name, len, synth);
@@ -323,7 +354,7 @@ export function sfxExplosion(vol = 1, big = true, pan = 0): void {
   const a = audio();
   if (!a || vol < 0.02) return;
   const { ctx } = a;
-  const out = voice(a, vol * (big ? 1 : 1.5), pan, vol);
+  const out = voice(a, vol * (big ? 1.8 : 2.2), pan, vol, -6);
   const t = ctx.currentTime;
   const p = vary(0.08);
   const len = big ? 2.2 : 0.8;
@@ -333,8 +364,12 @@ export function sfxExplosion(vol = 1, big = true, pan = 0): void {
     : sample(a, out, ['explosao_curta_a', 'explosao_curta_b'], { vol: 0.9, rate: 1.05 * p });
   // estalo de ataque: a explosão chega de uma vez (sem ele a pequena demora a "abrir")
   sample(a, out, 'batida_soco', { vol: big ? 0.6 : 0.9, rate: 0.75 * p });
-  sample(a, out, 'explosao_sub', { vol: big ? 1 : 0.55, rate: big ? 0.9 : 1.2, duration: big ? 2 : 0.8, fadeOut: 0.4 });
+  // rodada 11: sub-grave mais baixo (dominava: 87% da energia abaixo de 120 Hz) e estalo de 1,5–6 kHz
+  sample(a, out, 'explosao_sub', { vol: big ? 0.65 : 0.4, rate: big ? 0.9 : 1.2, duration: big ? 2 : 0.8, fadeOut: 0.4 });
   if (big) sample(a, out, 'explosao_cauda', { vol: 0.6, rate: 0.85 * p, t: t + 0.05 });
+  // corpo médio do estouro (a amostra "curta b" é quase toda 120–1500 Hz)
+  if (big) sample(a, out, 'explosao_curta_b', { vol: 0.7, rate: 0.9 * p });
+  crack(ctx, out, big ? 2 : 1.6, 0.9 * p);
   // estalo, corpo de ruído e soco grave (o corpo fica mais baixo quando há amostra)
   if (big) synthLayer(ctx, out, crunch ? 'explosao_g' : 'explosao_g_so', len + 0.2, crunch ? explosionBigSynth : explosionBigAlone, p);
   else synthLayer(ctx, out, crunch ? 'explosao_p' : 'explosao_p_so', len + 0.2, crunch ? explosionSmallSynth : explosionSmallAlone, p);
@@ -342,12 +377,12 @@ export function sfxExplosion(vol = 1, big = true, pan = 0): void {
   const debris = big ? 6 : 2;
   for (let i = 0; i < debris; i++) {
     const tt = t + 0.15 + Math.random() * len * 0.6;
-    if (!sample(a, out, ['impacto_metal_a', 'impacto_metal_b'], { vol: 0.12 + Math.random() * 0.15, rate: 0.8 + Math.random() * 0.8, t: tt })) {
+    if (!sample(a, out, ['impacto_metal_a', 'impacto_metal_b'], { vol: 0.2 + Math.random() * 0.2, rate: 1 + Math.random() * 0.8, t: tt })) {
       noiseSrc(ctx, filter(ctx, 'highpass', 2000 + Math.random() * 3000, 0.8, env(ctx, out, 0.2, 0.001, 0.05, tt)), 0.1, tt);
     }
   }
-  if (big) punch(vol, 0.7, 1.4);
-  else punch(vol, 0.5, 0.5);
+  if (big) punch(vol, 0.85, 1.4);
+  else punch(vol, 0.65, 0.5);
 }
 
 function explosionSynth(ctx: BaseAudioContext, out: AudioNode, t: number, p: number, big: boolean, crunch: boolean): void {
@@ -360,7 +395,7 @@ function explosionSynth(ctx: BaseAudioContext, out: AudioNode, t: number, p: num
   lp.frequency.exponentialRampToValueAtTime(big ? 120 : 220, t + len * 0.8);
   lp.connect(env(ctx, dirt(ctx, out, 2), (big ? 1 : 0.7) * (crunch ? 0.45 : 1), 0.004, len, t));
   noiseSrc(ctx, lp, len + 0.1, t, 0.7);
-  osc(ctx, 'sine', (big ? 85 : 140) * p, 28, big ? 0.7 : 0.3, env(ctx, out, big ? 1.1 : 0.7, 0.003, big ? 0.8 : 0.35, t), t);
+  osc(ctx, 'sine', (big ? 85 : 140) * p, 28, big ? 0.7 : 0.3, env(ctx, out, big ? 0.7 : 0.45, 0.003, big ? 0.8 : 0.35, t), t);
 }
 const explosionBigSynth: Synth = (c, o, t, p = 1) => explosionSynth(c, o, t, p, true, true);
 const explosionBigAlone: Synth = (c, o, t, p = 1) => explosionSynth(c, o, t, p, true, false);
@@ -372,19 +407,24 @@ export function sfxHit(vol = 1, pan = 0): void {
   const a = audio();
   if (!a || vol < 0.02) return;
   const { ctx } = a;
-  const out = voice(a, vol * 5.5, pan, vol);
-  punch(vol, 0.4, 0.35);
+  const out = voice(a, vol * 7, pan, vol, -9);
+  punch(vol, 0.45, 0.35);
   const p = vary(0.12);
-  const has = sample(a, out, ['impacto_metal_a', 'impacto_metal_b', 'impacto_placa'], { vol: 1, rate: 0.85 * p });
-  sample(a, out, 'batida_grave', { vol: 0.7, rate: 0.8 * p }); // corpo grave do impacto
+  // metal +4 dB e mais agudo (rodada 11: 94% da energia abaixo de 120 Hz, sumia no celular)
+  const has = sample(a, out, ['impacto_metal_a', 'impacto_metal_b', 'impacto_placa'], { vol: 1.6, rate: 1.05 * p });
+  sample(a, out, 'batida_grave', { vol: 0.35, rate: 0.8 * p }); // corpo grave do impacto
   if (!has) metalRing(ctx, out, 430 * p, 0.55, 0.35);
   synthLayer(ctx, out, 'impacto', 0.2, hitSynth, p);
-  subThump(ctx, out, 0.2);
+  crack(ctx, out, 0.5, 1.2 * p);
+  subThump(ctx, out, 0.12);
 }
 
 function hitSynth(ctx: BaseAudioContext, out: AudioNode, t: number, p = 1): void {
-  noiseSrc(ctx, filter(ctx, 'bandpass', 2500 * p, 0.8, env(ctx, out, 0.6, 0.001, 0.06, t)), 0.08, t);
-  osc(ctx, 'sine', 170 * p, 55, 0.12, env(ctx, out, 0.8, 0.002, 0.12, t), t);
+  // estalo/metal de 1,5–6 kHz na frente; o soco grave fica por baixo
+  noiseSrc(ctx, filter(ctx, 'bandpass', 2500 * p, 0.8, env(ctx, dirt(ctx, out, 2.5), 1, 0.001, 0.06, t)), 0.08, t);
+  noiseSrc(ctx, filter(ctx, 'bandpass', 5000 * p, 1, env(ctx, out, 0.5, 0.0005, 0.03, t)), 0.05, t);
+  metalRing(ctx, out, 1250 * p, 0.3, 0.16, t);
+  osc(ctx, 'sine', 170 * p, 55, 0.12, env(ctx, out, 0.35, 0.002, 0.12, t), t);
 }
 
 /** Arma traseira: mina (Bear Claw), leque de minas (KO Scatterpack) ou óleo (BF's Slipsauce). */
@@ -393,7 +433,7 @@ export function sfxDrop(vol = 1, kind: string = 'mine', pan = 0): void {
   if (!a || vol < 0.02) return;
   const { ctx } = a;
   // subido na rodada 10 (mina RMS -27 dB): carga caindo tem que se ouvir no meio da corrida
-  const out = voice(a, vol * (kind === 'oil' ? 3.4 : 4), pan, vol);
+  const out = voice(a, vol * (kind === 'oil' ? 3.4 : 5), pan, vol, -6);
   const t = ctx.currentTime;
   punch(vol, 0.4, 0.35);
   sample(a, out, 'batida_grave', { vol: 0.5, rate: 0.8 * vary(0.1) }); // baque da carga caindo
@@ -416,8 +456,9 @@ export function sfxDrop(vol = 1, kind: string = 'mine', pan = 0): void {
   for (const dt of drops) {
     const r = vary(0.1) * (scatter ? 1.15 : 1);
     if (!sample(a, out, 'mina_clunk', { vol: 0.95, rate: r, t: t + dt })) metalRing(ctx, out, 620 * r, 0.3, 0.18, t + dt);
-    osc(ctx, 'sine', 150 * r, 50, 0.14, env(ctx, out, 0.8, 0.002, 0.15, t + dt), t + dt);
-    subThump(ctx, out, 0.3, t + dt, 62);
+    crack(ctx, out, 1.5, 1.2 * r);
+    osc(ctx, 'sine', 150 * r, 50, 0.14, env(ctx, out, 0.5, 0.002, 0.15, t + dt), t + dt);
+    subThump(ctx, out, 0.25, t + dt, 62);
   }
   // bipes de armar (sinal de perigo)
   const base = scatter ? 0.3 : 0.25;
@@ -494,17 +535,20 @@ export function sfxBump(vol = 1, pan = 0): void {
   const a = audio();
   if (!a || vol < 0.05) return;
   const { ctx } = a;
-  const out = voice(a, vol * 1.4, pan);
+  const out = voice(a, vol * 3.2, pan, 1, -9);
   const p = vary(0.15);
-  punch(vol, 0.35, 0.35);
+  punch(vol, 0.55, 0.4);
   const has = sample(a, out, 'batida_soco', { vol: 1, rate: 0.8 * p });
-  sample(a, out, 'batida_grave', { vol: 0.8, rate: 1.1 * p });
+  sample(a, out, 'batida_grave', { vol: 0.45, rate: 1.1 * p });
+  // lataria amassando: metal e estalo de 1,5–6 kHz (o que se ouve em alto-falante pequeno)
+  sample(a, out, ['impacto_metal_a', 'impacto_metal_b'], { vol: 0.9, rate: 0.9 * p });
+  crack(ctx, out, 2.2, p);
   if (!has) {
     noiseSrc(ctx, filter(ctx, 'lowpass', 1400 * p, 0.8, env(ctx, out, 0.9, 0.002, 0.14)), 0.18, ctx.currentTime, 0.8);
     metalRing(ctx, out, 240 * p, 0.45, 0.28);
   }
-  osc(ctx, 'sine', 100 * p, 42, 0.12, env(ctx, out, 0.8, 0.002, 0.13));
-  subThump(ctx, out, 0.75, ctx.currentTime, 58);
+  osc(ctx, 'sine', 100 * p, 42, 0.12, env(ctx, out, 0.4, 0.002, 0.13));
+  subThump(ctx, out, 0.35, ctx.currentTime, 58);
 }
 
 /** Batida na mureta (raspão metálico). */
@@ -512,14 +556,16 @@ export function sfxWall(vol = 1, pan = 0): void {
   const a = audio();
   if (!a || vol < 0.05) return;
   const { ctx } = a;
-  const out = voice(a, vol * 3, pan);
+  const out = voice(a, vol * 5, pan, 1, -9);
   const p = vary(0.15);
-  punch(vol, 0.45, 0.35);
-  const has = sample(a, out, 'mureta', { vol: 1, rate: 0.85 * p });
-  sample(a, out, 'batida_soco', { vol: 0.7, rate: 1.1 * p }); // estalo seco do contato
-  sample(a, out, 'batida_grave', { vol: 0.6, rate: 0.8 * p });
-  noiseSrc(ctx, filter(ctx, 'bandpass', 900 * p, 0.6, env(ctx, out, has ? 0.5 : 0.9, 0.002, 0.22)), 0.26);
-  osc(ctx, 'sine', 90 * p, 40, 0.15, env(ctx, out, 0.7, 0.002, 0.15));
+  punch(vol, 0.55, 0.4);
+  const has = sample(a, out, 'mureta', { vol: 1, rate: 0.95 * p });
+  sample(a, out, 'batida_soco', { vol: 0.6, rate: 1.1 * p }); // estalo seco do contato
+  sample(a, out, 'batida_grave', { vol: 0.3, rate: 0.8 * p });
+  sample(a, out, ['impacto_metal_a', 'impacto_metal_b'], { vol: 0.7, rate: 1.1 * p });
+  crack(ctx, out, 1.8, 1.1 * p);
+  noiseSrc(ctx, filter(ctx, 'bandpass', 1400 * p, 0.6, env(ctx, out, has ? 0.5 : 0.9, 0.002, 0.22)), 0.26);
+  osc(ctx, 'sine', 90 * p, 40, 0.15, env(ctx, out, 0.3, 0.002, 0.15));
   if (!has) metalRing(ctx, out, 310 * p, 0.3, 0.25);
 }
 
@@ -528,13 +574,16 @@ export function sfxLand(vol = 1, pan = 0): void {
   const a = audio();
   if (!a || vol < 0.05) return;
   const { ctx } = a;
-  const out = voice(a, vol * 2, pan);
+  const out = voice(a, vol * 3.2, pan, 1, -6);
   punch(vol, 0.4, 0.35);
-  sample(a, out, 'batida_grave', { vol: 0.9, rate: 0.7 * vary(0.1) });
-  osc(ctx, 'sine', 95 * vary(0.1), 38, 0.2, env(ctx, out, 1, 0.003, 0.22));
+  sample(a, out, 'batida_grave', { vol: 0.6, rate: 0.7 * vary(0.1) });
+  // clunk da suspensão (médios/agudos: o pouso também se ouve em alto-falante pequeno)
+  sample(a, out, 'mina_clunk', { vol: 0.6, rate: 0.8 * vary(0.1) });
+  crack(ctx, out, 1.6, 0.7);
+  osc(ctx, 'sine', 95 * vary(0.1), 38, 0.2, env(ctx, out, 0.6, 0.003, 0.22));
   noiseSrc(ctx, filter(ctx, 'lowpass', 500, 0.7, env(ctx, out, 0.6, 0.003, 0.12)), 0.15);
   osc(ctx, 'sawtooth', 260, 180, 0.18, filter(ctx, 'bandpass', 700, 6, env(ctx, out, 0.12, 0.02, 0.16)));
-  subThump(ctx, out, 0.6, ctx.currentTime, 55);
+  subThump(ctx, out, 0.3, ctx.currentTime, 55);
 }
 
 /** Carro caindo da pista: assobio descendo e baque distante. */
@@ -821,7 +870,9 @@ export function sfxFireworkBurst(vol = 1, pan = 0, out?: AudioNode): void {
   duck(0.7 * Math.min(1, vol), 0.9, 3 * Math.min(1, vol));
   // baque grave
   subThump(ctx, dest, 1.1, t, 68);
-  osc(ctx, 'sine', 110 * vary(0.08), 38, 0.5, env(ctx, dest, 0.9, 0.003, 0.55, t), t);
+  osc(ctx, 'sine', 110 * vary(0.08), 38, 0.6, env(ctx, dest, 1, 0.003, 0.7, t), t);
+  // estrondo grave (rodada 11: os fogos soavam só estalo); o crepitar agudo continua por cima
+  sample(a, dest, 'explosao_sub', { vol: 0.5, rate: 1.1 * vary(0.08), duration: 0.9, fadeOut: 0.45 });
   const lp = ctx.createBiquadFilter();
   lp.type = 'lowpass';
   lp.Q.value = 0.7;

@@ -8,17 +8,22 @@ import { CAR_SCALE, createVehicleState, forwardSpeed, stepVehicle, type Assist, 
 /** Parâmetros das armas (dano em pontos de blindagem). */
 export const WEAPONS = {
   /** VK Plasma Rifles: bola de plasma rápida, reta, dano médio (arma inicial: precisa render tanto quanto as outras) */
-  laser: { speed: 85, life: 1.05, damage: 25, knock: 3.5, hop: 0, turnRate: 0 },
+  //  (dano 25 → 22 na rodada 10: Dirt Devil e Marauder eram os que mais destruíam, e quem liderava
+  //  — Air Blade, Havac — explodia demais nas corridas mistas)
+  laser: { speed: 85, life: 1.05, damage: 22, knock: 3.5, hop: 0, turnRate: 0 },
   /** Rogue Missiles: a arma mais forte — teleguiado suave para a frente, joga o alvo para cima.
    *  `maxTurn`: a curva total fica num cone em torno da direção do disparo (dá para desviar) */
-  missile: { speed: 58, life: 2.4, damage: 30, knock: 9, hop: 7, turnRate: 1.4, maxTurn: 0.12 },
+  //  (empurrão 9 → 7 e pulo 7 → 5 na rodada 10: um míssil tirava o alvo da disputa)
+  missile: { speed: 58, life: 2.4, damage: 30, knock: 7, hop: 5, turnRate: 1.4, maxTurn: 0.12 },
   /** Sundog Beams: lento, persegue o alvo em qualquer direção (até para trás), pouco dano; some na mureta.
    *  `chase`: só persegue nos primeiros segundos, depois segue reto (dá para fugir dele) */
-  sundog: { speed: 42, life: 2.2, damage: 14, knock: 2, hop: 0, turnRate: 1.7, chase: 1.2 },
-  /** Bear Claw Mines */
-  mine: { damage: 32, hop: 9, radius: 1.6, armTime: 0.6, life: 40 },
-  /** KO Scatterpack: leque de minas pequenas atrás do carro */
-  scatter: { count: 4, spread: 3.2, damage: 12, hop: 6, radius: 1.1, armTime: 0.35, life: 25 },
+  //  (dano 14 → 22: com 30–57 acertos por corrida ele quase não destruía ninguém — rodada 10)
+  sundog: { speed: 42, life: 2.2, damage: 22, knock: 2, hop: 0, turnRate: 1.7, chase: 1.2 },
+  /** Bear Claw Mines (arma 0,9 s depois de cair: quem vem colado passa antes; rodada 10, acerto ~80% → ~45%) */
+  mine: { damage: 32, hop: 9, radius: 1.6, armTime: 0.9, life: 40 },
+  /** KO Scatterpack: leque de minas pequenas atrás do carro (raio 0,9: dá para passar entre elas; dura
+   *  12 s — com 25 s o leque da volta anterior cobria a pista toda e ~80% dos leques acertavam alguém) */
+  scatter: { count: 4, spread: 3.2, damage: 12, hop: 6, radius: 0.9, armTime: 0.35, life: 12 },
   // óleo (BF's Slipsauce): mancha pequena e desviável; dura 25 s ou some depois de `spins` giros, e
   // cada carro tem no máximo OIL_PER_CAR manchas. Esteiras e aerodeslizador giram metade.
   oil: { radius: 1.35, life: 25, spinTime: 0.8, minSpeed: 12, spins: 2 },
@@ -499,36 +504,22 @@ function stepHazards(world: World, dt: number): void {
         }
       }
     } else if (h.kind === 'slime' || h.kind === 'puddle' || h.kind === 'snow' || h.kind === 'lava') {
-      const w = WEAPONS[h.kind];
       for (const r of world.racers) {
-        if (!r.alive || !r.car.grounded || r.finishPlace) continue;
-        // o aerodeslizador ignora poças que só fazem derrapar
-        if (h.kind === 'puddle' && r.spec.traction === 'hover') continue;
-        if (Math.hypot(r.car.x - h.x, r.car.z - h.z) < w.radius) {
-          const k = Math.exp(-w.drag * dt);
-          r.car.vx *= k;
-          r.car.vz *= k;
-          if (h.kind === 'puddle') r.slipTime = WEAPONS.puddle.slip;
-          if (h.kind === 'lava' && r.invuln <= 0) {
-            damage(world, r, -1, WEAPONS.lava.dps * dt);
-            if (world.rng() < dt * 4) world.events.push({ type: 'burn', racer: r.id });
-          }
+        if (!r.alive || r.finishPlace || !puddleTouch(r.car, r.spec, h, dt)) continue;
+        if (h.kind === 'puddle') r.slipTime = WEAPONS.puddle.slip;
+        if (h.kind === 'lava' && r.invuln <= 0) {
+          damage(world, r, -1, WEAPONS.lava.dps * dt);
+          if (world.rng() < dt * 4) world.events.push({ type: 'burn', racer: r.id });
         }
       }
     } else {
       if (h.age > WEAPONS.oil.life) dead = true;
       else {
         for (const r of world.racers) {
-          if (!r.alive || r.finishPlace || !r.car.grounded || r.spinTime > 0 || r.oilGrace > 0 || (r.id === h.owner && h.age < 1.5)) continue;
-          if (h.age < 0.25) continue; // a mancha ainda está se espalhando
-          if (Math.hypot(r.car.x - h.x, r.car.z - h.z) < WEAPONS.oil.radius && forwardSpeed(r.car) > WEAPONS.oil.minSpeed) {
-            // esteiras e aerodeslizador resistem ao óleo (giram metade), mas não são imunes: todos competitivos
-            const resist = Math.max(r.spec.spinResist ?? 0, r.spec.traction === 'treads' || r.spec.traction === 'hover' ? 0.5 : 0);
-            // jogador humano no Fácil/Normal roda menos (0,5 s): arcade, perdoa o erro
-            const human = !r.ai && world.difficulty !== 'hard' ? 0.625 : 1;
-            r.spinTime = WEAPONS.oil.spinTime * (1 - resist) * human;
-            r.spinTotal = r.spinTime;
-            r.oilGrace = r.spinTime + 1.2;
+          if (!r.alive || r.finishPlace) continue;
+          const spin = oilSpinTime(r, r.spec, r.id, !r.ai && world.difficulty !== 'hard', h);
+          if (spin > 0) {
+            startSpin(r, spin);
             world.events.push({ type: 'spin', racer: r.id });
             h.spins = (h.spins ?? 0) + 1;
             if (h.spins >= WEAPONS.oil.spins) {
@@ -542,6 +533,100 @@ function stepHazards(world: World, dt: number): void {
     if (!dead) keep.push(h);
   }
   world.hazards = keep;
+}
+
+/* Regras de um carro só (poças, óleo, derrapagem): usadas pelo mundo e pela previsão do convidado online. */
+
+/** O que a previsão precisa de um piloto além do carro (os mesmos campos de `Racer`). */
+export interface DriverState {
+  car: VehicleState;
+  slipTime: number;
+  spinTime: number;
+  spinTotal: number;
+  oilGrace: number;
+}
+
+/** Poça fixa (gosma, poça, neve, lava) sob o carro no chão: freia e devolve true (a derrapagem e a lava ficam com quem chama). */
+export function puddleTouch(car: VehicleState, spec: VehicleSpec, h: Hazard, dt: number): boolean {
+  if (h.kind !== 'slime' && h.kind !== 'puddle' && h.kind !== 'snow' && h.kind !== 'lava') return false;
+  if (!car.grounded) return false;
+  // o aerodeslizador ignora poças que só fazem derrapar
+  if (h.kind === 'puddle' && spec.traction === 'hover') return false;
+  const w = WEAPONS[h.kind];
+  if (Math.hypot(car.x - h.x, car.z - h.z) >= w.radius) return false;
+  const k = Math.exp(-w.drag * dt);
+  car.vx *= k;
+  car.vz *= k;
+  return true;
+}
+
+/**
+ * Mancha de óleo: por quanto tempo este carro gira ao passar nela (0 = não gira). `human`: jogador
+ * humano fora do Difícil (roda menos: arcade, perdoa o erro).
+ */
+export function oilSpinTime(d: DriverState, spec: VehicleSpec, id: number, human: boolean, h: Hazard): number {
+  if (h.kind !== 'oil' || h.age > WEAPONS.oil.life) return 0;
+  if (!d.car.grounded || d.spinTime > 0 || d.oilGrace > 0 || (id === h.owner && h.age < 1.5)) return 0;
+  if (h.age < 0.25) return 0; // a mancha ainda está se espalhando
+  if (Math.hypot(d.car.x - h.x, d.car.z - h.z) >= WEAPONS.oil.radius || forwardSpeed(d.car) <= WEAPONS.oil.minSpeed) return 0;
+  // esteiras e aerodeslizador resistem ao óleo (giram metade), mas não são imunes: todos competitivos
+  const resist = Math.max(spec.spinResist ?? 0, spec.traction === 'treads' || spec.traction === 'hover' ? 0.5 : 0);
+  return WEAPONS.oil.spinTime * (1 - resist) * (human ? 0.625 : 1);
+}
+
+/** Começa o giro no óleo (com a proteção para não rodar de novo na mesma mancha). */
+export function startSpin(d: DriverState, time: number): void {
+  d.spinTime = time;
+  d.spinTotal = time;
+  d.oilGrace = time + 1.2;
+}
+
+/**
+ * Aderência e comandos do passo: derrapando na poça (perde aderência) ou girando no óleo (gira, sem
+ * acelerar nem esterçar). Desconta os tempos.
+ */
+export function driveTraction(d: DriverState, spec: VehicleSpec, id: number, input: ControlInput, dt: number): { spec: VehicleSpec; input: ControlInput } {
+  if (d.slipTime > 0) {
+    d.slipTime = Math.max(0, d.slipTime - dt);
+    spec = { ...spec, grip: spec.grip * (spec.traction === 'treads' ? 0.5 : 0.25) };
+  }
+  if (d.spinTime > 0) {
+    // derrapando no óleo: perde aderência e gira
+    d.spinTime -= dt;
+    spec = { ...spec, grip: 0.6 };
+    d.car.heading += ((Math.PI * 2) / d.spinTotal) * dt * (id % 2 === 0 ? 1 : -1);
+    input = { ...input, throttle: 0, steer: 0, nitro: false };
+  }
+  return { spec, input };
+}
+
+/**
+ * Um passo de um carro só, sem o resto do mundo: derrapagem, giro no óleo, poças fixas e manchas de
+ * óleo, na mesma ordem de `stepWorld` (as poças agem depois do movimento). Previsão do convidado
+ * online: não mexe nas poças (quem conta os giros e o dano é o host). `contacts`: batidas contra os
+ * rivais logo depois do movimento, como em `collideCars`.
+ */
+export function stepDriver(
+  d: DriverState,
+  spec: VehicleSpec,
+  input: ControlInput,
+  id: number,
+  human: boolean,
+  track: Track,
+  hazards: readonly Hazard[],
+  dt: number,
+  contacts?: (car: VehicleState) => void,
+): void {
+  d.oilGrace = Math.max(0, d.oilGrace - dt);
+  const t = driveTraction(d, spec, id, input, dt);
+  stepVehicle(d.car, t.spec, t.input, track, dt);
+  contacts?.(d.car);
+  for (const h of hazards) {
+    if (h.kind === 'oil') {
+      const spin = oilSpinTime(d, spec, id, human, h);
+      if (spin > 0) startSpin(d, spin);
+    } else if (puddleTouch(d.car, spec, h, dt) && h.kind === 'puddle') d.slipTime = WEAPONS.puddle.slip;
+  }
 }
 
 function stepPickups(world: World, dt: number): void {
@@ -682,6 +767,36 @@ function parkInput(world: World, r: Racer): { input: ControlInput; hold: boolean
  * Avança o mundo um passo fixo. `humanInputs[id]` traz os comandos dos jogadores humanos;
  * os demais são decididos pela IA. Tudo determinístico (mesma semente + mesmos comandos = mesma corrida).
  */
+/** Vácuo (rodada 10: corridas "em fila"): até quanto a final cresce colado atrás de outro carro. */
+export const DRAFT_SPEED = 0.1;
+const DRAFT_MIN = 2.5;
+const DRAFT_MAX = 18;
+const DRAFT_LATERAL = 1.7;
+
+/**
+ * Quanto `r` está no vácuo de alguém (0..1): outro carro à frente, na mesma linha (até DRAFT_LATERAL m
+ * de lado, no referencial dele), entre DRAFT_MIN e DRAFT_MAX m; mais forte quanto mais perto. Só em
+ * velocidade (acima de 18 m/s os dois).
+ */
+export function draftFactor(world: World, r: Racer): number {
+  const c = r.car;
+  if (forwardSpeed(c) < 18) return 0;
+  let best = 0;
+  for (const o of world.racers) {
+    if (o === r || !o.alive || o.finishPlace || forwardSpeed(o.car) < 18) continue;
+    const dx = o.car.x - c.x;
+    const dz = o.car.z - c.z;
+    const fx = forwardX(o.car.heading);
+    const fz = forwardZ(o.car.heading);
+    const along = dx * fx + dz * fz;
+    if (along < DRAFT_MIN || along > DRAFT_MAX) continue;
+    const side = Math.abs(dx * fz - dz * fx);
+    if (side > DRAFT_LATERAL || Math.abs(o.car.y - c.y) > 1.5) continue;
+    best = Math.max(best, 1 - (along - DRAFT_MIN) / (DRAFT_MAX - DRAFT_MIN) * 0.6);
+  }
+  return best;
+}
+
 export function stepWorld(world: World, humanInputs: Record<number, ControlInput>, dt: number): void {
   world.events = [];
   if (world.started) world.raceTime += dt;
@@ -705,18 +820,13 @@ export function stepWorld(world: World, humanInputs: Record<number, ControlInput
     else if (r.ai) input = computeAiInput(world, r, dt);
     else input = humanInputs[r.id] ?? emptyInput();
 
-    let spec = r.spec;
-    if (r.slipTime > 0) {
-      r.slipTime = Math.max(0, r.slipTime - dt);
-      spec = { ...spec, grip: spec.grip * (spec.traction === 'treads' ? 0.5 : 0.25) };
-    }
-    if (r.spinTime > 0) {
-      // derrapando no óleo: perde aderência e gira
-      r.spinTime -= dt;
-      spec = { ...spec, grip: 0.6 };
-      r.car.heading += ((Math.PI * 2) / r.spinTotal) * dt * (r.id % 2 === 0 ? 1 : -1);
-      input = { ...input, throttle: 0, steer: 0, nitro: false };
-    }
+    // derrapando na poça ou girando no óleo (mesma regra da previsão online, ver driveTraction)
+    const traction = driveTraction(r, r.spec, r.id, input, dt);
+    let spec = traction.spec;
+    // vácuo: colado atrás de outro carro, anda mais (final e menos arrasto) — é assim que se passa na reta
+    const draft = world.started && !r.finishPlace ? draftFactor(world, r) : 0;
+    if (draft > 0) spec = { ...spec, maxSpeed: spec.maxSpeed * (1 + DRAFT_SPEED * draft), drag: spec.drag * (1 - 0.6 * draft) };
+    input = traction.input;
     r.lastInput = input;
     const px = r.car.x;
     const pz = r.car.z;

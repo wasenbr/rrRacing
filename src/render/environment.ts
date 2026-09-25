@@ -82,7 +82,11 @@ function skyMaterial(top: number, horizon: number, sun: number, stars: number, m
           col += vec3(star) * (0.6 + 0.8 * hash(g + 7.0));
         }
         float s = max(dot(d, sunDir), 0.0);
-        col += sunColor * (pow(s, 40.0) * 0.25 + pow(s, 900.0) * 4.0);
+        // sol: disco de borda suave e brilho em falloff exponencial (sem halo de borda dura); no céu
+        // de dia (New Mojave, sem estrelas) o disco fica abaixo do limiar do bloom, que abria um
+        // halo gigante recortado em volta dele
+        float disc = smoothstep(0.99930, 0.99975, s) * (stars > 0.5 ? 4.0 : 1.3);
+        col += sunColor * (exp((s - 1.0) * 70.0) * 0.3 + exp((s - 1.0) * 9.0) * (stars > 0.5 ? 0.05 : 0.08) + disc);
         // Nho: sol baixo, halo largo e quente no horizonte
         if (mood > 1.5 && mood < 2.5) col += sunColor * pow(s, 6.0) * 0.18 * exp(-max(d.y, 0.0) * 5.0);
         col *= mix(0.4, 1.0, smoothstep(-0.3, 0.02, d.y));
@@ -454,7 +458,8 @@ export function buildGround(track: Track, theme: Theme, shadows: boolean, lite =
     normal.repeat.set(size / 14, size / 14);
     mat = make(
       { map: t.map, emissiveMap: t.emissive, emissive: 0xffffff, emissiveIntensity: 1.2, normalMap: normal, normalScale: new THREE.Vector2(1.2, 1.2) },
-      { roughness: 0.8 },
+      // pouco reflexo do céu: em ângulo rasante (cockpit/perseguição) o Fresnel deixava a lava cinza-rosada
+      { roughness: 0.8, envMapIntensity: 0.15 },
     );
     scroll = [t.map, t.emissive];
   } else {

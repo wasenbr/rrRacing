@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { createRng, leftX, leftZ } from '../sim/math';
 import type { CenterPoint } from '../sim/track';
 import { fbm, maxAnisotropy, normalMap } from './textures';
-import type { Theme } from './themes';
+import { THEMES, type Theme } from './themes';
 
 /**
  * Peças da pista com a cara de cada planeta do original: piso (grade, hexágonos, terra, escamas),
@@ -30,6 +30,33 @@ export function tex(c: HTMLCanvasElement, srgb = true): THREE.CanvasTexture {
 }
 
 const hexStr = (c: number) => `#${c.toString(16).padStart(6, '0')}`;
+
+/** Mistura duas cores '#rrggbb' (t = 0 → a, 1 → b). */
+function mixHex(a: string, b: string, t: number): string {
+  const ca = parseInt(a.slice(1), 16);
+  const cb = parseInt(b.slice(1), 16);
+  let out = 0;
+  for (const sh of [16, 8, 0]) out |= Math.round(((ca >> sh) & 255) * (1 - t) + ((cb >> sh) & 255) * t) << sh;
+  return hexStr(out);
+}
+
+/**
+ * Cor de fundo do piso: todos os planetas partem de chapa metálica (visual alvo). Drakonis, Nho e
+ * Bogmire tinham a cor do planeta chapada e saturada: puxa para aço e deixa o tom para as juntas,
+ * a poeira e as manchas (Chem VI e New Mojave ficam como estão, aprovados).
+ */
+function roadBase(theme: Theme): string {
+  if (theme === THEMES.drakonis) return mixHex(theme.road, '#2e2c34', 0.5);
+  if (theme.roadPattern === 'ice') return mixHex(theme.road, '#52606e', 0.7);
+  if (theme.roadPattern === 'dirt') return mixHex(theme.road, '#4a4640', 0.65);
+  return theme.road;
+}
+
+/** Hash 0..1 de uma célula inteira (tom por placa, repetível). */
+function cellRand(a: number, b: number): number {
+  const v = Math.sin(a * 127.1 + b * 311.7) * 43758.5453;
+  return v - Math.floor(v);
+}
 
 function speckle(ctx: CanvasRenderingContext2D, w: number, h: number, count: number, alpha: number, seed: number): void {
   const rng = createRng(seed);
@@ -272,7 +299,7 @@ export function roadMaps(theme: Theme): RoadMaps {
   // o que é desenhado em cada padrão: cor, linhas (emissivo) e alturas
   const color = canvas(S * K, S * K, (ctx) => {
     ctx.scale(K, K);
-    ctx.fillStyle = theme.road;
+    ctx.fillStyle = roadBase(theme);
     ctx.fillRect(0, 0, S, S);
     // variação suave da cor (manchas)
     ctx.globalAlpha = theme.roadPattern === 'dirt' ? 0.35 : 0.18;
@@ -295,11 +322,10 @@ export function roadMaps(theme: Theme): RoadMaps {
   const h = height.getContext('2d')!;
   h.save();
   h.scale(0.5 * K, 0.5 * K);
-  // base de placas metálicas comum a todos os planetas (menos a terra batida de Bogmire): a grade
-  // já tem placas, ganha só a chapa xadrez; hexágonos, escamas e gelo ganham também as juntas
-  if (theme.roadPattern !== 'dirt') {
-    plateBase(c, h, S, CELLS, theme.roadPattern === 'grid' ? 0 : theme.roadPattern === 'ice' ? 0.45 : 0.7);
-  }
+  // base de placas metálicas comum a todos os planetas: a grade já tem placas, ganha só a chapa
+  // xadrez; hexágonos, escamas, gelo e a chapa enlameada de Bogmire ganham também as juntas
+  const drak = theme === THEMES.drakonis;
+  plateBase(c, h, S, CELLS, theme.roadPattern === 'grid' ? 0 : theme.roadPattern === 'ice' ? 0.55 : theme.roadPattern === 'dirt' ? 0.85 : 0.7);
 
   if (theme.roadPattern === 'grid') {
     // placas metálicas (alvo visual do usuário): cada placa quadrada é dividida em dois triângulos
@@ -311,7 +337,7 @@ export function roadMaps(theme: Theme): RoadMaps {
         const flip = (x + y) % 2 === 0;
         for (const tri of [0, 1]) {
           const k = 0.86 + rng() * 0.28;
-          c.fillStyle = `rgba(${k > 1 ? '255,255,255' : '0,0,0'},${Math.abs(k - 1) * 0.45})`;
+          c.fillStyle = `rgba(${k > 1 ? '255,255,255' : '0,0,0'},${Math.abs(k - 1) * (drak ? 0.7 : 0.45)})`;
           c.beginPath();
           if (flip) {
             if (tri === 0) c.moveTo(px, py), c.lineTo(px + cell, py), c.lineTo(px, py + cell);
@@ -340,11 +366,12 @@ export function roadMaps(theme: Theme): RoadMaps {
           c.fill();
         }
       }
-    c.strokeStyle = theme.roadGrid;
-    g.strokeStyle = theme.roadGrid;
+    // Drakonis: junta roxa apagada (metal escuro com um fio de cor), não uma grade neon chapada
+    c.strokeStyle = drak ? mixHex(theme.roadGrid, '#26222c', 0.5) : theme.roadGrid;
+    g.strokeStyle = drak ? mixHex(theme.roadGrid, '#000000', 0.55) : theme.roadGrid;
     h.strokeStyle = '#303030';
     for (const ctx of [c, g, h]) {
-      ctx.lineWidth = ctx === h ? 6 : ctx === g ? 2 : 3;
+      ctx.lineWidth = ctx === h ? 6 : ctx === g ? (drak ? 1.2 : 2) : drak ? 2.5 : 3;
       ctx.beginPath();
       for (let i = 0; i <= CELLS; i++) {
         ctx.moveTo(i * cell, 0);
@@ -388,6 +415,24 @@ export function roadMaps(theme: Theme): RoadMaps {
       }
       ctx.stroke();
     };
+    // tom por placa (losango): umas mais claras/foscas de geada, outras mais escuras; o losango
+    // de centro (m·cell/2, n·cell/2), m+n ímpar, repete a cada `cell` (hash no índice mod 2·CELLS)
+    const wrap = (v: number) => ((v % (2 * CELLS)) + 2 * CELLS) % (2 * CELLS);
+    for (let m = -1; m <= CELLS * 2 + 1; m++)
+      for (let n = -1; n <= CELLS * 2 + 1; n++) {
+        if (((m + n) & 1) === 0) continue;
+        const k = cellRand(wrap(m), wrap(n)) - 0.5;
+        const cx = (m * cell) / 2;
+        const cy = (n * cell) / 2;
+        c.fillStyle = k > 0 ? `rgba(200,215,230,${k * 0.32})` : `rgba(0,6,20,${-k * 0.5})`;
+        c.beginPath();
+        c.moveTo(cx - cell / 2, cy);
+        c.lineTo(cx, cy - cell / 2);
+        c.lineTo(cx + cell / 2, cy);
+        c.lineTo(cx, cy + cell / 2);
+        c.closePath();
+        c.fill();
+      }
     // brilho gelado em manchas diagonais
     for (let i = 0; i < 40; i++) {
       const x = rng() * S;
@@ -398,15 +443,15 @@ export function roadMaps(theme: Theme): RoadMaps {
       c.fillStyle = grd;
       c.fillRect(0, 0, S, S);
     }
-    c.lineWidth = 2.5;
-    c.strokeStyle = 'rgba(150,210,255,0.5)';
+    c.lineWidth = 2;
+    c.strokeStyle = 'rgba(170,200,230,0.35)';
     lines(c, 2.5);
     c.lineWidth = 3;
     c.strokeStyle = theme.roadGrid;
     lines(c, 0);
-    // grade azul-clara acesa ao lado da junta (a "grade azul" das pistas de Nho no SNES)
-    g.lineWidth = 1.5;
-    g.strokeStyle = '#3a8aff';
+    // fio azul-claro discreto ao lado da junta (a "grade azul" das pistas de Nho no SNES)
+    g.lineWidth = 1.2;
+    g.strokeStyle = '#2a5a9a';
     lines(g, 2.5);
     h.lineWidth = 7;
     h.strokeStyle = '#303030';
@@ -490,19 +535,32 @@ export function roadMaps(theme: Theme): RoadMaps {
       }
     speckle(c, S, S, 3000, 0.2, 4);
   } else {
-    // terra batida (Bogmire): sulcos de pneus, pedriscos, manchas de lama
+    // chapa enlameada (Bogmire): placas de metal com lama marrom espalhada (mais nas bordas),
+    // respingos, torrões e sulcos de pneus
+    const mud = mixHex(theme.road, '#2a1808', 0.35);
+    const mr = parseInt(mud.slice(1, 3), 16);
+    const mg = parseInt(mud.slice(3, 5), 16);
+    const mb = parseInt(mud.slice(5, 7), 16);
+    for (let i = 0; i < 90; i++) {
+      const x = rng() * S;
+      const side = Math.abs(x / S - 0.5) * 2;
+      c.fillStyle = `rgba(${mr},${mg},${mb},${(0.12 + rng() * 0.2) * (0.6 + side * 0.8)})`;
+      c.beginPath();
+      c.ellipse(x, rng() * S, 14 + rng() * 60, 8 + rng() * 34, rng() * 3, 0, Math.PI * 2);
+      c.fill();
+    }
     for (let i = 0; i < 70; i++) {
-      c.fillStyle = rng() > 0.5 ? `rgba(255,200,140,${0.04 + rng() * 0.07})` : `rgba(40,18,4,${0.06 + rng() * 0.1})`;
+      c.fillStyle = rng() > 0.5 ? `rgba(255,200,140,${0.03 + rng() * 0.05})` : `rgba(40,18,4,${0.06 + rng() * 0.1})`;
       c.beginPath();
       c.ellipse(rng() * S, rng() * S, 20 + rng() * 70, 10 + rng() * 40, rng() * 3, 0, Math.PI * 2);
       c.fill();
     }
-    speckle(c, S, S, 16000, 0.5, 1);
-    for (let i = 0; i < 700; i++) {
+    speckle(c, S, S, 6000, 0.4, 1);
+    for (let i = 0; i < 220; i++) {
       const x = rng() * S;
       const y = rng() * S;
       const r = 1 + rng() * 2.8;
-      c.fillStyle = `rgba(${140 + rng() * 60},${100 + rng() * 50},${60 + rng() * 40},0.9)`;
+      c.fillStyle = `rgba(${90 + rng() * 50},${60 + rng() * 35},${30 + rng() * 25},0.85)`;
       c.beginPath();
       c.arc(x, y, r, 0, Math.PI * 2);
       c.fill();
@@ -522,7 +580,7 @@ export function roadMaps(theme: Theme): RoadMaps {
   h.restore();
   // pouca poeira (≤ ~15% do piso somando esta camada e a de addRoadDirt): a cor do tema manda
   // (Chem VI preto e vermelho, New Mojave oliva, Nho azul, Inferno escuro); o gelo leva geada
-  const dustAmt = theme.roadPattern === 'dirt' ? 0.35 : theme.roadPattern === 'ice' ? 0.3 : 0.2;
+  const dustAmt = theme.roadPattern === 'dirt' ? 0.45 : theme.roadPattern === 'ice' ? 0.4 : drak ? 0.3 : 0.2;
   const rough = grime(color, height, theme, dustAmt);
   h.save();
   h.scale(0.5 * K, 0.5 * K);
@@ -545,13 +603,14 @@ export function roadMaps(theme: Theme): RoadMaps {
   // grão fino por cima do relevo
   const fine = fbm(HS, 64 * K, 2, 9);
   for (let i = 0; i < hh.length; i++) hh[i] = hh[i] * 0.85 + fine[i] * 0.15;
-  const normal = normalMap(hh, HS, (theme.roadPattern === 'dirt' ? 2.2 : 3.2) * K);
+  const normal = normalMap(hh, HS, (theme.roadPattern === 'dirt' ? 2.8 : 3.2) * K);
   normal.generateMipmaps = true;
   normal.minFilter = THREE.LinearMipmapLinearFilter;
   normal.anisotropy = maxAnisotropy;
-  const roughness = theme.roadPattern === 'ice' ? 0.22 : theme.roadPattern === 'dirt' ? 0.95 : 0.55;
-  const metalness = theme.roadPattern === 'dirt' ? 0 : theme.roadPattern === 'scales' ? 0.15 : theme.roadPattern === 'ice' ? 0.5 : 0.3;
-  const roughMap = grayCanvasTexture(rough, S * K, (d) => (theme.roadPattern === 'dirt' ? 0.95 : theme.roadPattern === 'ice' ? 0.2 + d * 0.7 : theme.roadPattern === 'scales' ? 0.78 + d * 0.2 : 0.45 + d * 0.55));
+  // gelo fosco (não espelhado) e chapa com lama (fosca onde tem barro, metal por baixo)
+  const roughness = theme.roadPattern === 'ice' ? 0.4 : theme.roadPattern === 'dirt' ? 0.8 : 0.55;
+  const metalness = theme.roadPattern === 'dirt' ? 0.25 : theme.roadPattern === 'scales' ? 0.15 : theme.roadPattern === 'ice' ? 0.4 : 0.3;
+  const roughMap = grayCanvasTexture(rough, S * K, (d) => (theme.roadPattern === 'dirt' ? 0.55 + d * 0.45 : theme.roadPattern === 'ice' ? 0.35 + d * 0.6 : theme.roadPattern === 'scales' ? 0.78 + d * 0.2 : 0.45 + d * 0.55));
   return { map: tex(color), emissive: theme.roadGlow > 0 ? tex(glow) : null, normal, roughness, metalness, roughnessMap: roughMap };
 }
 

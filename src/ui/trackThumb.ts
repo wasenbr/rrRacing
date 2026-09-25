@@ -345,3 +345,46 @@ export function trackThumbnail(def: TrackDef, width = 200, height = 130): Promis
   cache.set(key, url);
   return url;
 }
+
+const outlines = new Map<string, string>();
+
+/**
+ * Traçado vetorial da pista (SVG em data URL, síncrono e barato): fica no lugar da miniatura enquanto
+ * ela é desenhada, para o quadro nunca aparecer vazio (garagem do chefe, corrida rápida).
+ */
+export function trackOutlineUrl(def: TrackDef, width = 200, height = 130): string {
+  const key = `${def.id}|${width}x${height}`;
+  const hit = outlines.get(key);
+  if (hit !== undefined) return hit;
+  const t = THEMES[def.theme] ?? THEMES.chem6;
+  let path = '';
+  let start = '';
+  try {
+    const track = new Track(def);
+    const map = trackTransform(track, width, height, Math.round(Math.min(width, height) * 0.12));
+    path = track
+      .sampleCenterline(2)
+      .map((p, i) => {
+        const [x, y] = map(p.x, p.z);
+        return `${i ? 'L' : 'M'}${x.toFixed(1)} ${y.toFixed(1)}`;
+      })
+      .join('');
+    const [sx, sy] = map(track.pieces[0].x0, track.pieces[0].z0);
+    start = `<rect x="${(sx - 4).toFixed(1)}" y="${(sy - 4).toFixed(1)}" width="8" height="8" fill="#fff"/>`;
+  } catch {
+    /* pista inválida: só o chão */
+  }
+  const w = Math.max(5, Math.min(width, height) * 0.095);
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` +
+    `<rect width="100%" height="100%" fill="${tone(css(t.ground), 0.8)}"/>` +
+    (path
+      ? `<g fill="none" stroke-linejoin="round"><path d="${path}Z" stroke="rgba(0,0,0,.55)" stroke-width="${(w + 5).toFixed(1)}"/>` +
+        `<path d="${path}Z" stroke="${tone(t.rail[0], 1)}" stroke-width="${(w + 3).toFixed(1)}"/>` +
+        `<path d="${path}Z" stroke="${tone(t.road, 1)}" stroke-width="${w.toFixed(1)}"/></g>${start}`
+      : '') +
+    '</svg>';
+  const url = `data:image/svg+xml,${encodeURIComponent(svg)}`;
+  outlines.set(key, url);
+  return url;
+}

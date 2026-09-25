@@ -373,17 +373,20 @@ function drawItemBackdrop(g: CanvasRenderingContext2D, s: number): void {
 const ITEM_COLOR: Partial<Record<string, number>> = {
   laser: 0x50ff80, missile: 0xff7828, sundog: 0xffd23c, oil: 0x7896ff,
   mine: 0xff3c28, scatter: 0xff9628, nitro: 0x5ac8ff, jump: 0xffa032,
+  // blindagem: recorte azul-aço (a luz laranja padrão deixava a chapa marrom)
+  armor: 0x8ab4ff,
 };
 
 /**
  * Cor de vitrine de cada modelo na loja (carros que ainda não são do jogador): uma cor por carro, das
- * paletas do original, para os modelos não parecerem iguais lado a lado. Marauder vermelho (a cor do
- * sprite e da capa), Dirt Devil amarelo, Air Blade laranja, Battle Trak verde militar, Havac roxo.
+ * paletas do original, para os modelos não parecerem iguais lado a lado. Air Blade vermelho (o do alvo
+ * modernizado, referencias/modernizados/air-blade.png), Marauder azul, Dirt Devil amarelo, Battle Trak
+ * verde militar, Havac roxo.
  */
 export const SHOWROOM_COLOR: Record<string, number> = {
   dirtdevil: 0xf2c318,
-  marauder: 0xe02828,
-  airblade: 0xff7a1a,
+  marauder: 0x2f7bff,
+  airblade: 0xd41c1c,
   battletrak: 0x2fc840,
   havac: 0xb040e0,
 };
@@ -562,26 +565,39 @@ function slipsauceLabel(): THREE.Texture {
       g.lineTo(x + (h - 18), 9);
       g.fill();
     }
-    // gota de óleo com brilho
-    const cx = w * 0.5 - 92;
+    // gota + nome centrados no meio da textura (o lado virado para a câmera) e com no máximo ~1/3 da
+    // volta da lata: antes o nome começava no meio e passava da borda visível ("SLIPS…")
+    g.font = '900 30px "Arial Black", Impact, sans-serif';
+    const tw0 = g.measureText('SLIPSAUCE').width || 150;
+    const tw = Math.min(118, tw0);
+    const x0 = w * 0.5 - (28 + tw) / 2;
+    const cx = x0 + 11;
     const cy = h * 0.5;
     g.beginPath();
-    g.moveTo(cx, cy - 24);
-    g.bezierCurveTo(cx + 6, cy - 10, cx + 15, cy, cx + 15, cy + 8);
-    g.arc(cx, cy + 8, 15, 0, Math.PI);
-    g.bezierCurveTo(cx - 15, cy, cx - 6, cy - 10, cx, cy - 24);
+    g.moveTo(cx, cy - 20);
+    g.bezierCurveTo(cx + 5, cy - 10, cx + 11, cy, cx + 11, cy + 8);
+    g.arc(cx, cy + 8, 11, 0, Math.PI);
+    g.bezierCurveTo(cx - 11, cy, cx - 5, cy - 10, cx, cy - 20);
     g.fill();
     g.fillStyle = 'rgba(255,255,255,0.75)';
     g.beginPath();
-    g.arc(cx - 5, cy + 7, 4, 0, Math.PI * 2);
+    g.arc(cx - 4, cy + 7, 3, 0, Math.PI * 2);
     g.fill();
     g.fillStyle = '#140a02';
     g.textAlign = 'left';
     g.textBaseline = 'middle';
-    g.font = '900 34px "Arial Black", Impact, sans-serif';
-    g.fillText('SLIPSAUCE', cx + 24, h * 0.42);
-    g.font = '700 13px Arial, sans-serif';
-    g.fillText("BF'S · EXTRA ESCORREGADIO", cx + 26, h * 0.76);
+    // texto espremido na horizontal até caber (a curva da lata ainda o estica um pouco nas pontas)
+    const squeeze = (text: string, x: number, y: number, max: number) => {
+      const m = g.measureText(text).width || max;
+      g.save();
+      g.translate(x, y);
+      g.scale(Math.min(1, max / m), 1);
+      g.fillText(text, 0, 0);
+      g.restore();
+    };
+    squeeze('SLIPSAUCE', x0 + 28, h * 0.42, tw);
+    g.font = '700 12px Arial, sans-serif';
+    squeeze("BF'S · EXTRA ESCORREGADIO", x0 + 29, h * 0.76, tw);
   });
 }
 
@@ -788,11 +804,39 @@ function buildItem(item: ShopItem): THREE.Group {
       for (const y of [-0.72, 0.72]) k.add(new THREE.TorusGeometry(0.1, 0.04, 8, 14), k.steel, 0, y, 0);
       break;
     }
-    case 'armor':
-      k.plate(1.0, 1.2, 0, 0, 0, 0.9, 0);
-      k.plate(0.8, 1.0, 0.1, -0.1, -0.25, 0.9, 0.2);
-      k.add(new THREE.BoxGeometry(0.9, 0.08, 1.1), k.accent, -0.05, 0.08, 0.08).rotation.x = 0.9;
+    case 'armor': {
+      // chapa de blindagem de aço escovado (clara, com reflexo), chanfrada nos cantos, com uma segunda chapa
+      // por cima, faixa de perigo e rebites cromados na borda; de pé e virada para a câmera. Antes eram
+      // placas do aço sujo dos carros sob luz laranja: no ícone pequeno virava uma mancha marrom.
+      const steel = new THREE.MeshPhysicalMaterial({ color: 0xc4ccd8, metalness: 0.85, roughness: 0.3, clearcoat: 0.6, clearcoatRoughness: 0.18, envMapIntensity: 1.7 });
+      const dark = new THREE.MeshStandardMaterial({ color: 0x4a515c, metalness: 0.8, roughness: 0.38, envMapIntensity: 1.3 });
+      const shield = new THREE.Group();
+      g.add(shield);
+      const plateShape = (w: number, h: number, c: number) => {
+        const sh = new THREE.Shape();
+        sh.moveTo(-w / 2 + c, -h / 2);
+        sh.lineTo(w / 2 - c, -h / 2);
+        sh.lineTo(w / 2, -h / 2 + c);
+        sh.lineTo(w / 2, h / 2 - c);
+        sh.lineTo(w / 2 - c, h / 2);
+        sh.lineTo(-w / 2 + c, h / 2);
+        sh.lineTo(-w / 2, h / 2 - c);
+        sh.lineTo(-w / 2, -h / 2 + c);
+        sh.closePath();
+        return sh;
+      };
+      const slab = (w: number, h: number, c: number, depth: number) =>
+        new THREE.ExtrudeGeometry(plateShape(w, h, c), { depth, bevelEnabled: true, bevelThickness: 0.025, bevelSize: 0.025, bevelSegments: 2, curveSegments: 1 });
+      k.add(slab(1.0, 1.2, 0.2, 0.06), dark, 0, 0, -0.04, shield);
+      k.add(slab(0.9, 1.1, 0.17, 0.05), steel, 0, 0, 0.02, shield);
+      k.add(slab(0.56, 0.62, 0.1, 0.04), steel, 0, 0.1, 0.1, shield);
+      k.add(new THREE.BoxGeometry(0.62, 0.1, 0.03), k.warn, 0, -0.38, 0.1, shield);
+      const rivet = new THREE.SphereGeometry(0.035, 10, 8);
+      for (const [x, y] of [[-0.36, 0.5], [0.36, 0.5], [-0.36, -0.5], [0.36, -0.5], [-0.42, 0.18], [0.42, 0.18], [-0.42, -0.18], [0.42, -0.18], [-0.22, 0.34], [0.22, 0.34], [-0.22, -0.14], [0.22, -0.14]] as const)
+        k.add(rivet, k.chrome, x, y, Math.abs(y) > 0.4 || Math.abs(x) > 0.3 ? 0.1 : 0.15, shield);
+      shield.rotation.set(-0.25, 0.95, 0);
       break;
+    }
   }
   return g;
 }
@@ -829,11 +873,17 @@ export function itemThumbnail(item: ShopItem, size = 96): Promise<string> {
     if (studio) {
       const groundY = box.min.y - 0.02;
       const floor = makeFloor(box.getSize(new THREE.Vector3()), groundY, true);
-      const mirror = obj.clone();
-      mirror.position.y = 2 * groundY - mirror.position.y;
-      mirror.scale.y *= -1;
-      scene.add(floor, mirror);
-      extras.push(floor, mirror);
+      scene.add(floor);
+      extras.push(floor);
+      // reflexo no piso só para peças apoiadas no chão: o plasma flutua e o reflexo virava uma cópia
+      // escura inteira embaixo dele
+      if (item !== 'laser') {
+        const mirror = obj.clone();
+        mirror.position.y = 2 * groundY - mirror.position.y;
+        mirror.scale.y *= -1;
+        scene.add(mirror);
+        extras.push(mirror);
+      }
     }
     renderer.render(scene, camera);
     composeCanvas ??= document.createElement('canvas');

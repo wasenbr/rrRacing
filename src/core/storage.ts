@@ -1,4 +1,5 @@
-import { decodeSave, encodeSave, PLANETS, DIVISIONS, type CampaignState } from '../sim/campaign';
+import { decodeSave, difficultyOf, encodeSave, PLANETS, DIVISIONS, type CampaignState } from '../sim/campaign';
+import type { Difficulty } from '../sim/world';
 import { CHARACTERS } from '../sim/garage';
 
 /**
@@ -25,6 +26,8 @@ export interface SlotInfo {
   vehicleId: string;
   color: number;
   champion: boolean;
+  /** dificuldade da campanha (mostrada no card do slot) */
+  difficulty: Difficulty;
 }
 
 interface SlotRecord {
@@ -79,7 +82,7 @@ export function listSlots(): SlotInfo[] {
   migrateLegacy();
   return Array.from({ length: SLOT_COUNT }, (_, slot) => {
     const s = readSlot(slot);
-    if (!s) return { slot, empty: true, savedAt: 0, pilot: '', characterId: '', planet: '', division: '', money: 0, vehicleId: '', color: 0, champion: false };
+    if (!s) return { slot, empty: true, savedAt: 0, pilot: '', characterId: '', planet: '', division: '', money: 0, vehicleId: '', color: 0, champion: false, difficulty: 'normal' };
     const st = s.state;
     return {
       slot,
@@ -93,6 +96,7 @@ export function listSlots(): SlotInfo[] {
       vehicleId: st.car.vehicleId,
       color: st.color,
       champion: st.champion,
+      difficulty: difficultyOf(st),
     };
   });
 }

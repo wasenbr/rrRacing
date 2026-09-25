@@ -114,7 +114,9 @@ export function upgradeName(vehicleId: string, kind: UpgradeKind, level: number)
  * Classe de cada carro: quanto motor e blindagem rendem nele (um chassi melhor aguenta peças maiores).
  * Assim a volta de cada carro no máximo supera a do anterior (Dirt Devil < Marauder < Air Blade <
  * Battle Trak < Havac, ordem estrita), como no original. Os preços das peças são os do original para todos.
- * Com tudo no máximo (volta média, CPU 0,9 sozinha): 17,0 · 16,5 · 16,3 · 16,0 · 15,8 s.
+ * Com tudo no máximo (volta média, CPU 0,9 sozinha): 17,0 · 16,5 · 16,3 · 15,7 · 15,5 s; na volta solo do
+ * piloto simples das evidências (pista 1): 13,37 · 12,88 · 12,68 · 12,43 · 12,12 s. Os testes exigem
+ * pelo menos 0,15 s entre um degrau e o próximo nos dois cenários.
  */
 export interface CarPotential {
   /** quanto o motor rende em velocidade final */
@@ -130,10 +132,11 @@ export const CAR_POTENTIAL: Record<string, CarPotential> = {
   marauder: { speed: 0.85, accel: 0.85, armor: 0.85 },
   // o Air Blade já sai de fábrica com o melhor arranque: o motor rende mais em final que em arranque
   // (e a final no máximo passa a do Marauder: antes ele ficava mais lento que o Marauder no máximo)
-  airblade: { speed: 0.95, accel: 0.3, armor: 0.9 },
-  // o tanque arranca devagar e rola pesado de fábrica: o chassi aguenta motor grande
-  battletrak: { speed: 1.25, accel: 1.15, armor: 1.2 },
-  havac: { speed: 1.15, accel: 1.1, armor: 1.3 },
+  airblade: { speed: 0.9, accel: 0.3, armor: 0.9 },
+  // o tanque arranca devagar e rola pesado de fábrica: o chassi aguenta motor grande (no máximo ele
+  // precisa abrir folga clara sobre o Air Blade, que arranca muito melhor)
+  battletrak: { speed: 1.4, accel: 1.3, armor: 1.2 },
+  havac: { speed: 1.3, accel: 1.25, armor: 1.3 },
 };
 
 function carClass(vehicleId: string): CarPotential {
@@ -293,14 +296,22 @@ export const ATTRIBUTE_LABEL: Record<keyof CarAttributes, string> = {
   firepower: 'Poder de fogo',
 };
 
-/** Chance típica de acerto de cada arma frontal (o sundog persegue; o plasma vai reto). */
-const HIT_RATE: Record<string, number> = { laser: 0.55, missile: 0.8, sundog: 1 };
+/**
+ * Acerto médio por carga de cada arma (fração do dano que chega nos rivais numa volta típica): o plasma
+ * vai reto e erra muito, o míssil persegue num cone, o sundog só nos primeiros segundos. Minas: ~45% pegam
+ * alguém (armam 0,9 s depois). Scatter: das 4 bombas espalhadas, ~35% acertam. Óleo não tira blindagem
+ * (só faz rodar): não conta dano.
+ */
+const HIT_RATE: Record<string, number> = { laser: 0.55, missile: 0.8, sundog: 0.6, mine: 0.45, scatter: 0.35, oil: 0 };
 
-/** Dano esperado por volta das armas (cargas × dano × acerto), usado no poder de fogo. */
+/** Dano real esperado por volta das armas: dano × cargas × acerto médio (frente + traseira). */
 function firepowerRaw(s: VehicleSpec): number {
-  const front = WEAPONS[s.front].damage * s.frontCharges * (HIT_RATE[s.front] ?? 0.7);
-  const rear = s.rear === 'scatter' ? WEAPONS.scatter.damage * 2.2 * s.rearCharges : s.rear === 'mine' ? WEAPONS.mine.damage * s.rearCharges : 14 * s.rearCharges;
-  return front + rear;
+  const hit = (k: string) => HIT_RATE[k] ?? 0.5;
+  const dmg = (k: string) => {
+    const w = (WEAPONS as Record<string, { damage?: number; count?: number }>)[k];
+    return (w?.damage ?? 0) * (w?.count ?? 1);
+  };
+  return dmg(s.front) * s.frontCharges * hit(s.front) + dmg(s.rear) * s.rearCharges * hit(s.rear);
 }
 
 /** Parte do empurrão do turbo que conta no arranque (2 cargas de 1,3 s por volta, gastas nas saídas de curva). */
@@ -330,14 +341,14 @@ function rawAttributes(s: VehicleSpec): CarAttributes {
  * - aceleração: 20–56 m/s² (0–100 km/h de ≈ 1,4 s a ≈ 0,5 s)
  * - curvas: giro × aderência^0,15 de 2,2 a 7
  * - blindagem: 50–140 pontos
- * - poder de fogo: 30–170 de dano esperado por volta
+ * - poder de fogo: 35–95 de dano real esperado por volta (os carros de fábrica ficam entre 65 e 77)
  */
 const ATTRIBUTE_SCALE: Record<keyof CarAttributes, [number, number]> = {
   speed: [35, 51],
   accel: [20, 56],
   handling: [2.2, 7],
   armor: [50, 140],
-  firepower: [30, 170],
+  firepower: [35, 95],
 };
 
 export function carAttributes(spec: VehicleSpec): CarAttributes {
@@ -354,24 +365,30 @@ export function carAttributes(spec: VehicleSpec): CarAttributes {
  * Quanto um atributo precisa passar da média dos outros carros de fábrica para ganhar "forte"/"fraco"
  * (relativo). Diferenças menores que isso existem, mas não são marca do carro.
  */
-const STANDOUT: Record<keyof CarAttributes, number> = { speed: 0.05, accel: 0.08, handling: 0.1, armor: 0.07, firepower: 0.2 };
+const STANDOUT: Record<keyof CarAttributes, number> = { speed: 0.04, accel: 0.13, handling: 0.1, armor: 0.07, firepower: 0.2 };
 
 export type AttributeTag = 'good' | 'bad';
 
 /**
  * Marca "forte"/"fraco" só quando o carro se destaca de fato: compara o valor com a média dos outros
- * carros de fábrica. No máximo um "forte" (o maior destaque) e um "fraco" (a maior falta).
+ * carros de fábrica. No máximo um "forte" (o maior destaque) e um "fraco" (a maior falta). A barra
+ * manda: nunca "fraco" no atributo de barra mais cheia do carro (nem com barra de meio para cima) e
+ * nunca "forte" no de barra mais vazia (nem com barra abaixo do meio).
  */
 export function attributeTags(spec: VehicleSpec): Partial<Record<keyof CarAttributes, AttributeTag>> {
   const raw = rawAttributes(spec);
   const others = Object.values(VEHICLES).filter((v) => v.id !== spec.id).map(rawAttributes);
+  const bar = carAttributes(spec);
+  const keys = Object.keys(raw) as (keyof CarAttributes)[];
+  const top = keys.reduce((x, y) => (bar[y] > bar[x] ? y : x));
+  const low = keys.reduce((x, y) => (bar[y] < bar[x] ? y : x));
   let good: [keyof CarAttributes, number] | null = null;
   let bad: [keyof CarAttributes, number] | null = null;
   for (const k of Object.keys(raw) as (keyof CarAttributes)[]) {
     const mean = others.reduce((a, r) => a + r[k], 0) / Math.max(1, others.length);
     const d = mean > 0 ? (raw[k] - mean) / mean / STANDOUT[k] : 0;
-    if (d >= 1 && (!good || d > good[1])) good = [k, d];
-    if (d <= -1 && (!bad || d < bad[1])) bad = [k, d];
+    if (d >= 1 && k !== low && bar[k] >= 0.5 && (!good || d > good[1])) good = [k, d];
+    if (d <= -1 && k !== top && bar[k] < 0.5 && (!bad || d < bad[1])) bad = [k, d];
   }
   const out: Partial<Record<keyof CarAttributes, AttributeTag>> = {};
   if (good) out[good[0]] = 'good';

@@ -106,6 +106,16 @@ export class DynamicResolution {
   constructor(public min = 0.6) {}
 
   /**
+   * Piso efetivo (o jogo calcula pela tela: abaixo dele um degrau não mudaria nenhum pixel). Se o
+   * piso sobe, a escala e o teto sobem junto.
+   */
+  setMin(min: number): void {
+    this.min = min;
+    if (this.scale < min) this.scale = min;
+    if (this.ceiling < min) this.ceiling = min;
+  }
+
+  /**
    * Chamada a cada quadro DESENHADO. `frameDt` = tempo desde o último quadro desenhado (anda os
    * relógios); `cost` = custo do quadro já normalizado para o orçamento de 60 qps (trabalho do quadro
    * ou o intervalo, o maior). Retorna true quando a escala mudou (é hora de chamar setPixelRatio).
@@ -137,7 +147,7 @@ export class DynamicResolution {
 
 /**
  * Economia de bateria (item 52): "Automática" liga sozinha fora da tomada (navigator.getBattery, onde
- * existe: Chrome/Edge; Safari e Firefox não informam e a automática fica desligada), "Sempre" e "Nunca".
+ * existe: Chrome/Edge; Safari e Firefox não informam: a automática segura ~60 qps e liga a economia se a resolução ficar presa no piso), "Sempre" e "Nunca".
  * Na economia: corrida a 30 qps, teto de resolução ×0,75, sombra a cada 3 quadros e metade das
  * partículas — nada que mude os shaders (troca no meio da corrida sem recompilar).
  */
@@ -149,6 +159,16 @@ export const ECO_RES = 0.75;
 export const ECO_PARTICLES = 0.5;
 /** a sombra é redesenhada a cada N quadros desenhados na economia */
 export const ECO_SHADOW_EVERY = 3;
+/**
+ * "Automática" sem getBattery: segundos de corrida com a resolução dinâmica presa no piso até ligar a
+ * economia sozinha (o aparelho não dá conta; provavelmente um notebook fraco ou na bateria).
+ */
+export const ECO_AUTO_S = 20;
+
+/** O navegador informa a bateria (getBattery: Chrome/Edge; Safari e Firefox não). */
+export function batteryApiAvailable(): boolean {
+  return typeof (navigator as Navigator & { getBattery?: unknown }).getBattery === 'function';
+}
 
 /** Preferência salva (a antiga era booleana: ligada = "Sempre"; desligada vira a automática). */
 export function normalizeBatteryPref(v: unknown): BatteryPref {

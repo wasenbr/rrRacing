@@ -10,7 +10,9 @@ import { clamp, forwardX, forwardZ, leftX, leftZ, smoothstep, wrapAngle } from '
  *  J  salto (rampa de lançamento)  B  lombadas
  *  G  vão sem chão (voa-se por cima; quem cai é resgatado). `Gv`: o pouso fica um nível
  *     (RAMP_HEIGHT) abaixo da decolagem, como nos saltos do original que caem num patamar inferior
- *  X  cruzamento: reta que cruza outro trecho da mesma pista no mesmo nível
+ *  X  cruzamento: reta que cruza outro trecho da mesma pista. No mesmo nível, as duas passagens
+ *     dividem a placa; com pelo menos RAMP_HEIGHT de diferença vira viaduto (a de cima passa numa
+ *     ponte sobre a de baixo, como nas espirais de Bogmire). O nível sai das rampas U/D do traçado.
  *
  * Modificadores logo após a letra: `>` seta de warp (impulso para a frente),
  * `<` warp reverso (arremessa para trás, como em Inferno). Ex.: "S>".
@@ -89,6 +91,9 @@ export const TILE = 20;
 export const HALF_WIDTH = 5.5;
 export const RAMP_HEIGHT = 3;
 export const JUMP_HEIGHT = 2.5;
+/** Rampa J: começa a subir em 52% da casa e o lábio fica em 97% (0,6 m antes do vão). */
+export const JUMP_RAMP_START = 0.52;
+export const JUMP_LIP = 0.97;
 const ARC_RADIUS = TILE / 2;
 
 export interface Piece {
@@ -160,10 +165,11 @@ function profile(code: PieceCode, t: number): number {
     case 'D':
       return -RAMP_HEIGHT * smoothstep(t);
     case 'J':
-      // rampa de lançamento reta e depois uma queda abrupta: o carro decola
-      if (t < 0.3) return 0;
-      if (t < 0.75) return JUMP_HEIGHT * ((t - 0.3) / 0.45);
-      if (t < 0.8) return JUMP_HEIGHT * (1 - (t - 0.75) / 0.05);
+      // rampa de lançamento reta com o lábio colado na borda da casa (logo antes do vão, como no
+      // original) e uma queda abrupta: o carro decola e só precisa vencer o vão, não 5 m de chão
+      if (t < JUMP_RAMP_START) return 0;
+      if (t < JUMP_LIP) return JUMP_HEIGHT * ((t - JUMP_RAMP_START) / (JUMP_LIP - JUMP_RAMP_START));
+      if (t < JUMP_LIP + 0.02) return JUMP_HEIGHT * (1 - (t - JUMP_LIP) / 0.02);
       return 0;
     case 'B': {
       const b = Math.sin(Math.PI * t * 3);
@@ -180,6 +186,12 @@ export class Track {
   readonly totalLength: number;
   readonly halfWidth: number;
   readonly surface: Surface;
+  /**
+   * Par de cada cruzamento X (índice da outra passagem na mesma casa; -1 nas demais peças) e o
+   * papel da passagem: 'flat' mesmo nível, 'over' ponte do viaduto, 'under' passagem por baixo.
+   */
+  readonly crossPartner: number[];
+  readonly crossRole: ('none' | 'flat' | 'over' | 'under')[];
   /** erro de fechamento do circuito (posição, direção, altura) — deve ser ~0 */
   readonly closure: { dx: number; dz: number; dHeading: number; dh: number };
 
@@ -211,6 +223,17 @@ export class Track {
     });
     this.pieces = pieces;
     this.totalLength = dist;
+    this.crossPartner = pieces.map(() => -1);
+    this.crossRole = pieces.map(() => 'none');
+    for (const a of pieces) {
+      if (a.code !== 'X') continue;
+      const ma = this.pointOn(a, a.length / 2);
+      const b = pieces.find((o) => o !== a && o.code === 'X' && Math.hypot(this.pointOn(o, o.length / 2).x - ma.x, this.pointOn(o, o.length / 2).z - ma.z) < 1e-3);
+      if (!b) continue;
+      this.crossPartner[a.index] = b.index;
+      const dh = a.h0 - b.h0;
+      this.crossRole[a.index] = Math.abs(dh) < 1e-6 ? 'flat' : dh > 0 ? 'over' : 'under';
+    }
     this.closure = { dx: x, dz: z, dHeading: wrapAngle(heading), dh: h };
   }
 
@@ -286,9 +309,11 @@ export class Track {
 
   /**
    * Encontra o ponto da pista mais próximo. `hint` é a peça atual do carro:
-   * procurar só nas vizinhas mantém a consulta barata e permite pontes/cruzamentos no futuro.
+   * procurar só nas vizinhas mantém a consulta barata e mantém o carro na sua passagem de um
+   * cruzamento/viaduto. `y` (altura do carro), quando dada, desempata casas sobrepostas (viaduto):
+   * vence a passagem cujo piso está mais perto, por baixo, da altura do carro.
    */
-  query(x: number, z: number, hint = -1): TrackSample {
+  query(x: number, z: number, hint = -1, y = NaN): TrackSample {
     const n = this.pieces.length;
     let best = -1;
     let bestScore = Infinity;
@@ -296,7 +321,7 @@ export class Track {
     if (hint >= 0) {
       for (let d = -1; d <= 2; d++) {
         const i = (((hint + d) % n) + n) % n;
-        const score = this.score(this.pieces[i], x, z);
+        const score = this.score(this.pieces[i], x, z, y);
         if (score < bestScore) {
           bestScore = score;
           best = i;
@@ -306,7 +331,7 @@ export class Track {
     }
     if (best < 0 || bestScore > this.halfWidth + 3) {
       for (let i = 0; i < n; i++) {
-        const score = this.score(this.pieces[i], x, z);
+        const score = this.score(this.pieces[i], x, z, y);
         if (score < bestScore) {
           bestScore = score;
           best = i;
@@ -317,9 +342,13 @@ export class Track {
     return this.sampleFor(this.pieces[best], this.prBest);
   }
 
-  private score(p: Piece, x: number, z: number): number {
+  private score(p: Piece, x: number, z: number, y = NaN): number {
     const pr = this.project(p, x, z, this.prTmp);
-    return Math.hypot(pr.outside, pr.lateral);
+    const d = Math.hypot(pr.outside, pr.lateral);
+    if (y !== y || this.crossRole[p.index] === 'none' || this.crossRole[p.index] === 'flat') return d;
+    // viaduto: penaliza o piso acima do carro (ele está embaixo) e o piso muito abaixo (está em cima)
+    const dy = y - (p.h0 + 0.5);
+    return d + (dy < -1 ? 50 : dy > RAMP_HEIGHT - 0.5 ? 10 : 0);
   }
 
   /** Ponto da linha central a uma distância (em metros) da linha de chegada. */
@@ -353,10 +382,13 @@ export class Track {
     return out;
   }
 
-  /** Peça sem malha contínua própria: vão (G) ou cruzamento (X). */
+  /**
+   * Peça sem malha contínua própria: vão (G) ou cruzamento (X). A passagem de baixo de um viaduto
+   * é pista comum (muretas contínuas); a de cima vira ponte (ver render/trackFeatures.ts).
+   */
   isBreak(i: number): boolean {
     const c = this.pieces[i].code;
-    return c === 'G' || c === 'X';
+    return c === 'G' || (c === 'X' && this.crossRole[i] !== 'under');
   }
 
   /**

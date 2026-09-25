@@ -75,6 +75,9 @@ export class CameraRig {
   private zoom = 1;
   private readonly touch = isTouchDevice();
   private leadTmp = new THREE.Vector3();
+  /** perseguição: rival colado ao carro (0–1, vem do jogo); a câmera sobe até 1,8 m para ver por cima */
+  chaseLift = 0;
+  private lift = 0;
 
   constructor() {
     this.iso = new THREE.OrthographicCamera(-1, 1, 1, -1, 1, 400);
@@ -208,7 +211,11 @@ export class CameraRig {
         this.chasePos.z = car.position.z + flatOff.z;
       }
       if (this.chasePos.y < car.position.y + CHASE_MIN_HEIGHT) this.chasePos.y = car.position.y + CHASE_MIN_HEIGHT;
+      // rival encostado: sobe rápido para sair do volume dele e desce devagar
+      const want = Math.min(1, Math.max(0, this.chaseLift)) * 1.8;
+      this.lift += (want - this.lift) * (1 - Math.exp(-dt * (want > this.lift ? 6 : 1.5)));
       this.persp.position.copy(this.chasePos).add(shake);
+      this.persp.position.y += this.lift;
       this.persp.lookAt(car.position.clone().addScaledVector(fwd, 16).add(new THREE.Vector3(0, 2.6, 0)));
     }
 

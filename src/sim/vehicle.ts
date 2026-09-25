@@ -14,7 +14,7 @@ const DRIFT_START = 0.55;
 const DRIFT_GRIP_LOSS = 0.5;
 /** Curva fechada: multiplica o giro e freia (perde mais que a curva normal, menos que a mureta). */
 const SHARP_TURN = 1.9;
-const SHARP_DRAG = 0.7;
+const SHARP_DRAG = 0.4;
 /**
  * No botão derrapar a trajetória é sempre girada para o bico (mesmo de lado), com perda própria por
  * radiano: um grampo de 180° custa ~15% da velocidade (antes ~85%) e fecha a curva na metade do
@@ -52,8 +52,8 @@ const JUMP_VY_MAX = 6;
 /** Abaixo disto (m/s) a rampa J não lança: o carro só desce a borda. */
 const JUMP_LAUNCH_MIN_SPEED = 15;
 /** Folga de pouso depois do vão (m) e quanto ela cresce por m/s acima de GAP_MIN_SPEED. */
-const JUMP_LAND_MARGIN = 4;
-const JUMP_LAND_PER_SPEED = 0.2;
+const JUMP_LAND_MARGIN = 1;
+const JUMP_LAND_PER_SPEED = 0.25;
 /**
  * Pulo (Locust Jump Jets): o botão fica "guardado" por um instante, e vale também logo depois de
  * sair do chão (lombada, crista). Antes, apertar num quadro sem contato com o chão não fazia nada.
@@ -237,8 +237,10 @@ function jumpAssist(track: Track, at: TrackSample, y: number, vy: number, speed:
   const y0 = y - base;
   const target = end + JUMP_LAND_MARGIN + (speed - GAP_MIN_SPEED) * JUMP_LAND_PER_SPEED;
   const T = target / speed;
+  // (negativa quando o pouso fica bem abaixo, num Gv a toda: o carro sai "mergulhando" em vez de
+  // passar 20 m da reta de pouso)
   const w = (GRAVITY * T * T) / 2 - y0;
-  return w > 0 ? w / T : vy;
+  return w / T;
 }
 
 export function forwardSpeed(v: VehicleState): number {
@@ -413,9 +415,20 @@ export function stepVehicle(v: VehicleState, spec: VehicleSpec, input: ControlIn
   const outside = Math.abs(sample.lateral) > track.halfWidth + 0.3 || gap;
   const groundH = outside ? -Infinity : sample.height;
   v.landingImpact = 0;
+  // decolagem da rampa J: pelo degrau do lábio ou direto para o vão (a 50 m/s o carro anda 0,8 m
+  // por passo e pode pular o degrau de 0,4 m entre o lábio e o vão)
+  const launchFromJump = (): void => {
+    const from = v.pieceIndex >= 0 ? track.pieces[v.pieceIndex] : undefined;
+    const launch = forwardSpeed(v);
+    if (from?.code === 'J' && launch > JUMP_LAUNCH_MIN_SPEED) {
+      v.vy = Math.min(Math.max(v.vy, launch * JUMP_RAMP_SLOPE * JUMP_LAUNCH_KICK), JUMP_VY_MAX);
+      v.vy = jumpAssist(track, sample, v.y, v.vy, launch);
+    }
+  };
   if (outside && v.grounded) {
     v.grounded = false;
     v.airTime = 0;
+    if (gap) launchFromJump();
   }
   if (outside && v.y < sample.height - FALL_DEPTH) v.fell = true;
   if (v.grounded) {
@@ -429,12 +442,7 @@ export function stepVehicle(v: VehicleState, spec: VehicleSpec, input: ControlIn
     } else if (v.y - groundH > GROUND_SNAP) {
       v.grounded = false; // o chão sumiu: decolou mantendo a velocidade vertical
       v.airTime = 0;
-      const from = v.pieceIndex >= 0 ? track.pieces[v.pieceIndex] : undefined;
-      const launch = forwardSpeed(v);
-      if (from?.code === 'J' && launch > JUMP_LAUNCH_MIN_SPEED) {
-        v.vy = Math.min(Math.max(v.vy, launch * JUMP_RAMP_SLOPE * JUMP_LAUNCH_KICK), JUMP_VY_MAX);
-        v.vy = jumpAssist(track, sample, v.y, v.vy, launch);
-      }
+      launchFromJump();
     } else {
       v.vy = (groundH - v.y) / dt;
       v.y = groundH;

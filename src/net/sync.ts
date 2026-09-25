@@ -287,6 +287,10 @@ interface RacerSnap {
   alive: boolean;
   invuln: number;
   spinTime: number;
+  /** derrapagem/giro/proteção do óleo (a previsão do convidado parte deles; ausentes em host antigo) */
+  spinTotal?: number;
+  slipTime?: number;
+  oilGrace?: number;
   place: number;
   finishPlace: number;
   throttle: number;
@@ -333,6 +337,9 @@ export function takeSnapshot(world: World, events: WorldEvent[]): WorldSnap {
       alive: r.alive,
       invuln: r.invuln,
       spinTime: r.spinTime,
+      spinTotal: r.spinTotal,
+      slipTime: r.slipTime,
+      oilGrace: r.oilGrace,
       place: r.place,
       finishPlace: r.finishPlace,
       throttle: r.lastInput.throttle,
@@ -362,6 +369,9 @@ export function applySnapshot(world: World, s: WorldSnap): void {
     r.alive = rs.alive;
     r.invuln = rs.invuln;
     r.spinTime = rs.spinTime;
+    r.spinTotal = Math.max(0.05, fin(rs.spinTotal, r.spinTotal || 1)); // divisor do giro: nunca zero
+    r.slipTime = fin(rs.slipTime, 0);
+    r.oilGrace = fin(rs.oilGrace, 0);
     r.place = rs.place;
     r.finishPlace = rs.finishPlace;
     r.lastInput = { ...emptyInput(), throttle: rs.throttle };

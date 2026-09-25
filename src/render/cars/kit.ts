@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { VEHICLES } from '../../data/vehicles';
 
 /* ------------------------------------------------------------------ */
 /* Texturas compartilhadas (geradas uma vez)                             */
@@ -133,6 +134,42 @@ function decalTexture(color: number, number: number, style: DecalStyle, aspect: 
   return t;
 }
 
+/** Empuxo do turbo do carro (0..1, o Havac = 1): comprimento das chamas do nitro. */
+export const nitroThrust = (vehicleId: string): number => Math.min(1, (VEHICLES[vehicleId]?.nitroAccel ?? 0) / 32);
+
+/** Cor do jato em t (0 = boca, 1 = ponta): miolo azul-branco → laranja → apagado (aditivo). */
+function flameColor(t: number, core: boolean): THREE.Color {
+  const hot = core ? new THREE.Color(0.8, 0.9, 1).multiplyScalar(1.8) : new THREE.Color(0.55, 0.75, 1).multiplyScalar(1.4);
+  const mid = new THREE.Color(1, 0.5, 0.12).multiplyScalar(core ? 1.1 : 1);
+  const c = t < 0.4 ? hot.lerp(mid, t / 0.4) : mid.multiplyScalar(Math.pow(1 - (t - 0.4) / 0.6, 1.4));
+  return c;
+}
+
+/**
+ * Jato do nitro: cone externo (azul → laranja → transparente) e miolo mais curto e mais claro, com a
+ * base na origem e a ponta em −z. Cores por vértice ao longo do eixo (sem textura).
+ */
+function flameGeometry(r: number, len: number): THREE.BufferGeometry {
+  const cone = (radius: number, l: number, core: boolean) => {
+    const g = new THREE.ConeGeometry(radius, l, 14, 8, true);
+    const pos = g.getAttribute('position');
+    const col: number[] = [];
+    for (let i = 0; i < pos.count; i++) {
+      const c = flameColor(pos.getY(i) / l + 0.5, core);
+      col.push(c.r, c.g, c.b);
+    }
+    g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    // ponta (+y) para trás (−z), base na origem
+    return g.translate(0, l / 2, 0).rotateX(-Math.PI / 2);
+  };
+  const outer = cone(r, len, false);
+  const inner = cone(r * 0.5, len * 0.5, true);
+  const g = mergeGeometries([outer, inner]);
+  outer.dispose();
+  inner.dispose();
+  return g;
+}
+
 /** Materiais e utilitários compartilhados pelos modelos. */
 export class Kit {
   readonly paint: THREE.MeshPhysicalMaterial;
@@ -158,12 +195,17 @@ export class Kit {
   readonly sundogGlow = new THREE.MeshStandardMaterial({ color: 0xffd060, emissive: 0xffa020, emissiveIntensity: 4 });
   /** interior dos bocais de jato (Locust Jump Jets) */
   readonly jetGlow = new THREE.MeshStandardMaterial({ color: 0xff8030, emissive: 0xff5010, emissiveIntensity: 2.2 });
+  /**
+   * Chama do nitro: cor por vértice ao longo do jato (ver flameGeometry) somada à cena — o preto na
+   * ponta some. Opacidade abaixo de 0,7 e cor no máximo 1,8×: brilha sem virar um cone branco sólido.
+   */
   readonly flameMat = new THREE.MeshBasicMaterial({
-    color: new THREE.Color(0x5ac8ff).multiplyScalar(4),
+    vertexColors: true,
     transparent: true,
-    opacity: 0.85,
+    opacity: 0.6,
     blending: THREE.AdditiveBlending,
     depthWrite: false,
+    side: THREE.DoubleSide,
   });
   readonly number: number;
 
@@ -231,11 +273,19 @@ export class Kit {
   }
 
   /** Chamas de nitro apontando para trás. */
-  flames(points: [number, number, number][], scale = 1): THREE.Mesh[] {
+  /**
+   * Chamas do nitro saindo de bocais em `points` (centro da boca), para trás (−z). `nozzleR` é o raio
+   * da boca; `thrust` (0..1, o empuxo do turbo do carro) dá o comprimento: de ~2 a ~3,5 raios. A base
+   * fica em 75 % da boca: com a oscilação do jogo (até 1,3×) a chama nunca sai mais larga que a
+   * turbina, e o comprimento máximo fica abaixo de 2 diâmetros dela.
+   */
+  flames(points: [number, number, number][], nozzleR: number, thrust = 1): THREE.Mesh[] {
+    const t = Math.min(1, Math.max(0, thrust));
+    const geo = flameGeometry(nozzleR * 0.75, nozzleR * (2 + 1.5 * t));
     return points.map(([x, y, z]) => {
-      const f = this.add(new THREE.ConeGeometry(0.22 * scale, 1.4 * scale, 10, 1, true), this.flameMat, x, y, z);
-      f.rotation.x = -Math.PI / 2;
+      const f = this.add(geo, this.flameMat, x, y, z);
       f.castShadow = false;
+      f.receiveShadow = false;
       f.visible = false;
       return f;
     });

@@ -1,6 +1,7 @@
 import type { Track } from '../sim/track';
 
-export type MapTransform = (x: number, z: number) => [number, number];
+/** `out` (opcional) recebe o resultado: o minimapa reaproveita o mesmo par a cada desenho (sem lixo). */
+export type MapTransform = (x: number, z: number, out?: [number, number]) => [number, number];
 
 /** Transforma coordenadas do mundo em pixels, girado 45° para bater com a vista aérea. */
 export function trackTransform(track: Track, width: number, height: number, pad: number): MapTransform {
@@ -16,9 +17,13 @@ export function trackTransform(track: Track, width: number, height: number, pad:
   const scale = Math.min((width - pad * 2) / (maxU - minU), (height - pad * 2) / (maxV - minV));
   const offU = (width - (maxU - minU) * scale) / 2;
   const offV = (height - (maxV - minV) * scale) / 2;
-  return (x, z) => {
-    const [u, v] = rot(x, z);
-    return [offU + (u - minU) * scale, offV + (v - minV) * scale];
+  return (x, z, out) => {
+    const u = (z - x) * Math.SQRT1_2;
+    const v = -(x + z) * Math.SQRT1_2;
+    const r = out ?? [0, 0];
+    r[0] = offU + (u - minU) * scale;
+    r[1] = offV + (v - minV) * scale;
+    return r;
   };
 }
 

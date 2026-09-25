@@ -73,6 +73,47 @@ class Batch {
   }
 }
 
+/**
+ * Cratera no chão: malha polar com fundo rente ao solo, encosta interna subindo até uma borda baixa
+ * de raio e altura irregulares, e a borda externa morrendo no chão (sem degrau visível).
+ */
+function craterGeometry(r: number, rng: () => number): THREE.BufferGeometry {
+  const A = 28;
+  const R = 8;
+  const p1 = rng() * 6.28;
+  const p2 = rng() * 6.28;
+  const pos: number[] = [];
+  const uv: number[] = [];
+  const idx: number[] = [];
+  for (let j = 0; j <= R; j++) {
+    const f = 0.55 + (j / R) * 1.0; // de 0,55 r (fundo) a 1,55 r (chão)
+    for (let i = 0; i < A; i++) {
+      const a = (i / A) * Math.PI * 2;
+      const wob = 1 + 0.13 * Math.sin(3 * a + p1) + 0.07 * Math.sin(7 * a + p2);
+      const rho = f * r * wob;
+      // perfil: sobe do fundo até a crista (f = 1) e desce devagar para fora
+      const rise = f < 1 ? ((f - 0.55) / 0.45) ** 2 : 1 - ((f - 1) / 0.55) ** 1.5;
+      const h = Math.max(0, rise) * r * 0.17 * (0.75 + 0.25 * Math.sin(5 * a + p2)) + 0.02;
+      pos.push(Math.cos(a) * rho, h, Math.sin(a) * rho);
+      uv.push(Math.cos(a) * f * 0.3 + 0.5, Math.sin(a) * f * 0.3 + 0.5);
+    }
+  }
+  for (let j = 0; j < R; j++)
+    for (let i = 0; i < A; i++) {
+      const a = j * A + i;
+      const b = j * A + ((i + 1) % A);
+      const c = a + A;
+      const d = b + A;
+      idx.push(a, b, c, b, d, c);
+    }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
+}
+
 /** Semente do cenário a partir do id da pista (FNV-1a de 32 bits): cada pista tem o seu. */
 export function scenerySeed(id: string): number {
   let h = 0x811c9dc5;
@@ -125,6 +166,8 @@ export function buildScenery(track: Track, theme: Theme, themeId: ThemeId, shado
   const rockMat2 = new THREE.MeshStandardMaterial({ map: rockTexture(c2 ?? c1), roughness: 0.95 });
   const hellStone = std(0x4a1208, 0.6, 0.2, { emissive: 0x3a0800 });
   const dark = std(0x1a0808, 0.7);
+  const craterMat = new THREE.MeshStandardMaterial({ map: rockTexture(theme.ground), roughness: 1 });
+  const craterFloor = std(new THREE.Color(theme.ground).multiplyScalar(0.45).getHex(), 1);
   const glowMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(theme.glow).multiplyScalar(2.5) });
   const rockGeos = [0, 1, 2, 3].map((i) => rockGeometry(1, seed * 10 + i, 2));
 
@@ -289,9 +332,11 @@ export function buildScenery(track: Track, theme: Theme, themeId: ThemeId, shado
       }
       /* ---------------- New Mojave ---------------- */
       case 'crater': {
+        // cratera rebaixada: borda baixa e irregular na cor do solo descendo para um fundo mais
+        // escuro (antes, um toro de pedra que parecia boia)
         const r = 1.6 + rng() * 2.2;
-        batch.add(new THREE.TorusGeometry(r, r * 0.25, 8, 22), rockMat, x, G, z, 0, 1, 1, 0.45, Math.PI / 2);
-        batch.add(new THREE.CircleGeometry(r, 18), dark, x, G + 0.03, z, 0, 1, 1, 1, -Math.PI / 2);
+        batch.add(craterGeometry(r, rng), craterMat, x, G, z, rot);
+        batch.add(new THREE.CircleGeometry(r * 0.62, 18), craterFloor, x, G + 0.025, z, 0, 1, 1, 1, -Math.PI / 2);
         break;
       }
       case 'ribs': {

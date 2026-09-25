@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { bodySink, carFrame, chevronTread, cockpitRig, Kit, Linkage, wheelDrop, wheelTravel, type CarVisual } from './common';
+import { nitroThrust } from './kit';
 
 /*
  * Medidas (modelo em metros "reais"; o jogo reduz com CAR_SCALE e VISUAL_SCALE). Alvo:
@@ -25,7 +26,7 @@ const BASE = TRAY_TOP + 0.01; // fundo do casco (dentro da "banheira" da bandeja
 const NOSE = 2.45; // ponta do bico
 const TAILH = -2.2; // onde o casco termina e vira só barbatana
 const FIN_Z0 = -0.25; // raiz do bordo de ataque da barbatana (logo atrás da cabine)
-const FIN_TIP = -3.05; // ponta da barbatana, puxada para trás da cauda
+const FIN_TIP = -3.2; // ponta da barbatana, puxada para trás da cauda
 const FIN_H = 2.3; // altura da barbatana acima do dorso
 
 /* ------------------------------------------------------------------ */
@@ -112,11 +113,14 @@ function hullHalf(z: number): number {
 
 /** Posição (0 na raiz, 1 na ponta) ao longo da barbatana. */
 const finU = (z: number) => clamp01((FIN_Z0 - z) / (FIN_Z0 - FIN_TIP));
-/** Bordo de ataque (altura absoluta): sobe firme e curva para trás, quase deitado na ponta. */
+/**
+ * Bordo de ataque (altura absoluta): a raiz já sai inclinada para trás (~50°, não um leme em pé) e
+ * vai curvando até quase deitar na ponta — a foice do tubarão, legível também na vista de trás.
+ */
 function finLE(z: number): number {
   const u = finU(z);
   const root = BASE + dorsal(FIN_Z0);
-  return root + FIN_H * (1 - Math.pow(1 - u, 2.2)) * smooth(clamp01(u / 0.12));
+  return root + FIN_H * (1 - Math.pow(1 - u, 1.5)) * smooth(clamp01(u / 0.3));
 }
 /** Bordo de fuga atrás da cauda (altura absoluta): côncavo, em foice, até encontrar a ponta. */
 function finTE(z: number): number {
@@ -181,14 +185,16 @@ function finSurfaceX(z: number, y: number): number {
 /* Asas grossas saindo da base da barbatana                             */
 /* ------------------------------------------------------------------ */
 
-const WING_Y = BASE + dorsal(-1.6) + 0.14;
+const WING_Y = BASE + dorsal(-1.6) + 0.2;
 const WING_X0 = 0.08; // raiz enterrada na base da barbatana
 const WING_SPAN = 1.95; // pontas bem para fora da bandeja, como no modelo de referência
-const wingLE = (s: number) => -0.75 - 1.25 * s;
-const wingTE = (s: number) => -2.15 - 0.4 * s;
-const wingY = (s: number) => WING_Y + 0.5 * s * (0.6 + 0.4 * s);
-/** meia-espessura: grossa na raiz, afinando até a ponta */
-const wingTh = (s: number) => 0.11 + 0.2 * Math.pow(1 - s, 1.3);
+// enflechada e afinando: corda de 1,4 m na raiz, ~0,3 m na ponta
+const wingLE = (s: number) => -0.75 - 1.45 * s;
+const wingTE = (s: number) => -2.15 - 0.3 * s;
+/** diedro negativo: a ponta cai ~0,35 m abaixo da raiz (de trás não fica a asa reta de avião) */
+const wingY = (s: number) => WING_Y - 0.35 * Math.pow(s, 1.3);
+/** meia-espessura: grossa na raiz, lâmina fina na ponta */
+const wingTh = (s: number) => 0.045 + 0.26 * Math.pow(1 - s, 1.2);
 
 function wingGeo(side: number): THREE.BufferGeometry {
   const rings: THREE.Vector3[][] = [];
@@ -439,7 +445,7 @@ export function createAirBlade(color: number, shadows: boolean): CarVisual {
   for (const sx of [-1, 1]) k.decalOn(wings[sx < 0 ? 0 : 1], 0.44, 0.44, sx * (WING_X0 + WING_SPAN * 0.78), (wingLE(0.78) + wingTE(0.78)) / 2, 'number');
   k.decalOn(hull, 0.34, 0.6, 0, 1.55, 'stripes');
   for (const sx of [-1, 1]) k.decalSide(hull, 0.5, 0.34, sx, BASE + 0.3, -0.75, 'number');
-  const flames = k.flames([[0, turbY, turbZ - 1.0]], 1.2);
+  const flames = k.flames([[0, turbY, turbZ - 0.2]], 0.26, nitroThrust('airblade'));
 
   const wheels = [-1, 1].flatMap((sx) => [-1, 1].map((sz) => ({ sz, ...bigWheel(k, tireMat, rimMat, sx * WX, sz * WZ) })));
   // rodas e eixos no chassi: a carroceria balança por cima deles

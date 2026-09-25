@@ -1,6 +1,6 @@
 import { TRACKS } from '../data/tracks';
 import type { AiProfile } from './ai';
-import { buildSpec, CAR_PRICES, carSwapCost, CHARACTERS, CHARGE_KINDS, MAX_UPGRADE, maxExtraCharges, newCarSetup, UPGRADE_KINDS, upgradePrice, type CarSetup } from './garage';
+import { buildSpec, CAR_PRICES, carSwapCost, CHARACTERS, CHARGE_KINDS, chargePrice, MAX_UPGRADE, maxExtraCharges, newCarSetup, UPGRADE_KINDS, upgradePrice, type CarSetup, type ChargeKind } from './garage';
 import { VEHICLES } from '../data/vehicles';
 import { MAX_CHARGES } from './vehicle';
 import { clamp } from './math';
@@ -68,10 +68,10 @@ export const CAMPAIGN_RULES: Record<Difficulty, CampaignRules> = {
 
 /**
  * O dinheiro rende mais a cada planeta até Nho (onde chega o Havac): no começo cada compra pesa, no fim
- * o prêmio é grande. No Inferno a loja é a mesma de Nho, então o prêmio não sobe mais (com 2,3 o
- * jogador forte chegava ao Inferno A com ~$225 mil sem nada para comprar).
+ * o prêmio é grande. No Inferno a loja é a mesma de Nho: o prêmio fica igual ao de Nho (o último
+ * planeta nunca paga menos que o anterior) e a sobra é segurada pelo teto relativo à loja (hoardFactor).
  */
-export const PLANET_MONEY = [0.7, 1, 1.4, 1.9, 2.1, 1.8];
+export const PLANET_MONEY = [0.7, 1, 1.4, 1.9, 2.1, 2.1];
 
 /**
  * Teto relativo à loja: com mais dinheiro no bolso do que tudo o que a loja ainda pode vender (ver
@@ -153,6 +153,8 @@ export function planetForLevel(level: number): PlanetDef | undefined {
 
 export interface CampaignState {
   version: 1;
+  /** identidade da campanha (a mesma em todos os saves dela; saves antigos não têm) */
+  id?: string;
   characterId: string;
   color: number;
   money: number;
@@ -182,6 +184,7 @@ export interface CampaignState {
 export function newCampaign(characterId: string, color: number, difficulty: Difficulty = 'normal'): CampaignState {
   return {
     version: 1,
+    id: Math.random().toString(36).slice(2, 10),
     characterId,
     color,
     money: START_MONEY,
@@ -258,6 +261,8 @@ export function currentTrackId(s: CampaignState): string {
   return trackOfRace(s, s.race, raceKind(s));
 }
 
+const roundMoney = (n: number) => Math.round(n / 500) * 500;
+
 /** Custo para levar um carro do setup dado às peças no nível `level` (as que ele aceita). */
 function upgradesTo(setup: CarSetup, level: number): number {
   const probe = structuredClone(setup);
@@ -266,6 +271,40 @@ function upgradesTo(setup: CarSetup, level: number): number {
     for (let p = upgradePrice(probe, k); p !== null && probe.upgrades[k] < level; p = upgradePrice(probe, k)) {
       sum += p;
       probe.upgrades[k]++;
+    }
+  }
+  return sum;
+}
+
+/**
+ * Escala dos preços das cargas: o mesmo multiplicador do dinheiro (planeta × dificuldade), sem o teto
+ * (guardar dinheiro não barateia a loja). Assim uma carga pesa igual no começo e no fim da campanha.
+ */
+export function chargeScale(s: CampaignState): number {
+  return PLANET_MONEY[s.planet] * rulesOf(s).money;
+}
+
+/** Preço da próxima carga extra na loja da campanha (null = já no máximo). */
+export function campaignChargePrice(s: CampaignState, kind: ChargeKind, setup: CarSetup = s.car): number | null {
+  const base = VEHICLES[setup.vehicleId];
+  const p = chargePrice(setup, kind, base);
+  return p === null ? null : Math.max(500, roundMoney(p * chargeScale(s)));
+}
+
+/**
+ * Cargas extras por arma que contam no que a loja ainda vende (o jogador típico compra 1–2 por planeta;
+ * contar até o máximo de 7 afrouxava o teto demais).
+ */
+export const CHARGE_ROOM = 2;
+
+/** Custo das cargas que ainda faltam no carro (até CHARGE_ROOM extras por arma), com os preços deste planeta. */
+function chargesTo(s: CampaignState, setup: CarSetup): number {
+  const probe = structuredClone(setup);
+  let sum = 0;
+  for (const k of CHARGE_KINDS) {
+    for (let p = campaignChargePrice(s, k, probe); p !== null && probe.charges[k] < CHARGE_ROOM; p = campaignChargePrice(s, k, probe)) {
+      sum += p;
+      probe.charges[k]++;
     }
   }
   return sum;
@@ -284,11 +323,16 @@ export function shopHeadroom(s: CampaignState): number {
     level = Math.max(level, SHOP_LEVEL[p] ?? MAX_UPGRADE);
     for (const id of FOR_SALE[PLANETS[p].id] ?? []) ids.add(id);
   }
+  const here = new Set(FOR_SALE[currentPlanet(s).id] ?? []);
   // só carros acima do atual na escada (CAR_PRICES segue a ordem do original)
   const order = Object.keys(CAR_PRICES);
   const mine = order.indexOf(s.car.vehicleId);
-  let most = upgradesTo(s.car, level);
-  for (const id of ids) if (order.indexOf(id) > mine) most = Math.max(most, carSwapCost(s.car, id) + upgradesTo(newCarSetup(id), level));
+  // as cargas faltantes também contam (são compras de verdade na loja), mas só as dos carros deste
+  // planeta: ninguém junta dinheiro para as cargas de um carro que ainda nem está à venda
+  let most = upgradesTo(s.car, level) + chargesTo(s, s.car);
+  for (const id of ids)
+    if (order.indexOf(id) > mine)
+      most = Math.max(most, carSwapCost(s.car, id) + upgradesTo(newCarSetup(id), level) + (here.has(id) ? chargesTo(s, newCarSetup(id)) : 0));
   return most;
 }
 
@@ -315,7 +359,6 @@ export function moneyCapped(s: CampaignState): boolean {
   return hoardFactor(s) < 1;
 }
 
-const roundMoney = (n: number) => Math.round(n / 500) * 500;
 
 /** Prêmios da campanha: os do original ($10.000 / $7.000 / $4.000) × planeta × dificuldade. */
 export function prizesFor(s: CampaignState): number[] {
@@ -356,10 +399,12 @@ export const LOCAL_ENGINE = [0, 0, 1, 1, 0, 2, 2, 3, 2, 2, 3, 3];
  * que o nível inteiro das peças não dá. Calibrado para que um jogador mediano (ver o teste "degrau de
  * dificuldade") perca do local por uma diferença que cresce aos poucos ao longo da campanha, até
  * ~0,8 s por volta no fim do Difícil, sem picos (antes: 1,5 s em Bogmire no Normal, 2,4 s no Difícil).
+ * No Fácil o local anda colado no mediano (de 0 a ~0,3 s por volta, crescendo): antes ficava até 0,5 s
+ * mais lento e a campanha não tinha desafio.
  */
 export const LOCAL_PACE: Record<Difficulty, number[]> = {
-  easy: [1.018, 1.031, 1.03, 1.031, 1.062, 1.035],
-  normal: [1.023, 1.037, 0.989, 0.996, 1.035, 0.981, 1.032, 0.984, 1.015, 1.032],
+  easy: [1.05, 1.075, 1.053, 1.066, 1.065, 1.062],
+  normal: [1.023, 1.037, 0.989, 0.996, 1.039, 0.981, 1.032, 0.984, 1.015, 1.032],
   hard: [1.012, 1.036, 0.992, 0.994, 1.026, 0.974, 0.976, 0.978, 0.95, 0.957, 0.959, 1.012],
 };
 /** Na Divisão A do Inferno todos vêm com a preparação máxima (peças no 3 não bastam para evoluir). */
@@ -682,6 +727,7 @@ export function validSave(s: CampaignState): boolean {
   if (s.warpFrom !== undefined && !isInt(s.warpFrom, 0, s.planet - 1)) return false;
   if (s.finalePending !== undefined && (typeof s.finalePending !== 'boolean' || (s.finalePending && !s.champion))) return false;
   if (s.raceInProgress !== undefined && typeof s.raceInProgress !== 'boolean') return false;
+  if (s.id !== undefined && (typeof s.id !== 'string' || s.id.length > 32)) return false;
   // estatísticas faltando (save antigo) não invalidam: decodeSave completa com zeros
   const st = s.stats;
   return st === undefined || (!!st && typeof st === 'object' && ['races', 'wins', 'kills', 'earnings'].every((k) => Number.isFinite((st as Record<string, unknown>)[k])));

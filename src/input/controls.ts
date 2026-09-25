@@ -274,6 +274,39 @@ export function createTouchControls(root: HTMLElement, controls: Controls): HTML
     btn.addEventListener('lostpointercapture', up);
   });
 
+  // ACEL → TIRO sem soltar o gás (como o volante faz com o TIRO da esquerda): o ACEL captura o dedo,
+  // então o TIRO de cima nunca recebia o toque. Deslizando até 70% para dentro do TIRO, dispara; o gás
+  // continua apertado. Retângulo lido só no toque inicial (sem recálculo de layout a cada movimento).
+  const gasBtn = el.querySelector<HTMLElement>('.touch-right .gas')!;
+  const fire2Btn = el.querySelector<HTMLElement>('.touch-right .fire2')!;
+  let gasPointer = -1;
+  let gasFire = false;
+  let fireBox = { left: 0, right: 0, line: -Infinity };
+  const setGasFire = (on: boolean) => {
+    if (on === gasFire) return;
+    gasFire = on;
+    controls.setTouch('fire', on);
+    fire2Btn.classList.toggle('on', on);
+    if (on) navigator.vibrate?.(12);
+  };
+  gasBtn.addEventListener('pointerdown', (e) => {
+    gasPointer = e.pointerId;
+    const f = fire2Btn.getBoundingClientRect();
+    fireBox = f.height ? { left: f.left - 8, right: f.right + 8, line: f.bottom - f.height * 0.7 } : { left: 0, right: 0, line: -Infinity };
+  });
+  gasBtn.addEventListener('pointermove', (e) => {
+    if (e.pointerId !== gasPointer) return;
+    setGasFire(e.clientY < fireBox.line && e.clientX >= fireBox.left && e.clientX <= fireBox.right);
+  });
+  const gasUp = (e: PointerEvent) => {
+    if (e.pointerId !== gasPointer) return;
+    gasPointer = -1;
+    setGasFire(false);
+  };
+  gasBtn.addEventListener('pointerup', gasUp);
+  gasBtn.addEventListener('pointercancel', gasUp);
+  gasBtn.addEventListener('lostpointercapture', gasUp);
+
   // volante: o dedo pousa em qualquer ponto e arrasta; o lado em que está define a direção
   const steer = el.querySelector<HTMLElement>('.steer')!;
   const knob = steer.querySelector<HTMLElement>('.knob')!;

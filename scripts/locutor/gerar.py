@@ -85,6 +85,18 @@ LINES = {
 }
 
 
+# tratamento de arena: corpo, presença, compressão forte, saturação leve e um eco só, curto (28 ms;
+# rodada 11: os ecos de 45 e 110 ms borravam as sílabas do grito)
+ARENA_FILTER = ('silenceremove=start_periods=1:start_threshold=-45dB,areverse,silenceremove=start_periods=1:start_threshold=-45dB,areverse,'
+                'highpass=f=85,equalizer=f=220:t=q:w=0.8:g=2,equalizer=f=3000:t=q:w=0.9:g=4,'
+                'acompressor=threshold=-22dB:ratio=5:attack=3:release=120:makeup=4,'
+                'asoftclip=type=tanh:threshold=0.7,'
+                'aecho=0.8:0.5:28:0.08,apad=pad_dur=0.15,alimiter=limit=0.89')
+# grito (itens 32/53): taxa mínima de sílabas e F0 mediano máximo aceitável antes do tratar.py
+# (que baixa até 4 semitons o que passar de 225 Hz)
+TAXA_MIN, F0_TETO_REFAZER = 4.5, 265.0
+
+
 def slug(n):
     return re.sub(r'[^a-z0-9]+', '-', n.lower()).strip('-')
 
@@ -128,7 +140,15 @@ def gerar():
         part, parts = map(int, sys.argv[sys.argv.index('--parte') + 1].split('/'))
     only = set(sys.argv[sys.argv.index('--chave') + 1].split(',')) if '--chave' in sys.argv else None
     os.makedirs(TAKES, exist_ok=True)
-    todo = [j for k, j in enumerate(jobs_all()) if k % parts == part and (not only or j[1] in only or j[1].split(':')[-1] in only)]
+    # --exag 1.5,1.9 --takes 6: takes EXTRAS (ids novos, a partir do 10º) com mais exagero para as
+    # chaves de --chave (itens 32/53: largada e "hot fury" precisam soar gritados)
+    exag = tuple(map(float, sys.argv[sys.argv.index('--exag') + 1].split(','))) if '--exag' in sys.argv else EXAG
+    extra = int(sys.argv[sys.argv.index('--takes') + 1]) if '--takes' in sys.argv else 0
+    desde = int(sys.argv[sys.argv.index('--desde') + 1]) if '--desde' in sys.argv else 10
+    jobs = jobs_all()
+    if extra and only:
+        jobs = [(f"{key}__{t % len(LINES[key])}__{desde + t}", key, LINES[key][t % len(LINES[key])]) for key in sorted(only) for t in range(extra)]
+    todo = [j for k, j in enumerate(jobs) if k % parts == part and (not only or j[1] in only or j[1].split(':')[-1] in only)]
     todo = [j for j in todo if not os.path.exists(os.path.join(TAKES, j[0] + '.json'))]
     print(len(todo), 'takes nesta parte', flush=True)
     model = ChatterboxTTS.from_pretrained(device='cpu')
@@ -141,7 +161,7 @@ def gerar():
     for k, (jid, key, text) in enumerate(todo):
         seed = zlib.crc32(jid.encode()) % 100000
         rnd = random.Random(seed)
-        ex, cfg = round(rnd.uniform(*EXAG), 2), round(rnd.uniform(*CFG), 2)
+        ex, cfg = round(rnd.uniform(*exag), 2), round(rnd.uniform(*CFG), 2)
         torch.manual_seed(seed)
         cap['n'] = int(25 * (1.4 + 0.6 * len(text.split()))) + 15
         w = model.generate(text, exaggeration=ex, cfg_weight=cfg, temperature=0.8)
@@ -157,12 +177,7 @@ def escolher():
     from faster_whisper import WhisperModel
     whisper = WhisperModel('small.en', device='cpu', compute_type='int8')
     norm = lambda t: re.sub(r'[^a-z]', '', t.lower().replace('11', 'eleven'))
-    # tratamento de arena: corpo, presença, compressão forte, saturação leve, eco curto de estádio
-    FILTER = ('silenceremove=start_periods=1:start_threshold=-45dB,areverse,silenceremove=start_periods=1:start_threshold=-45dB,areverse,'
-              'highpass=f=85,equalizer=f=220:t=q:w=0.8:g=2,equalizer=f=3000:t=q:w=0.9:g=4,'
-              'acompressor=threshold=-22dB:ratio=5:attack=3:release=120:makeup=4,'
-              'asoftclip=type=tanh:threshold=0.7,'
-              'aecho=0.8:0.6:45|110:0.18|0.10,apad=pad_dur=0.15,alimiter=limit=0.89')
+    FILTER = ARENA_FILTER
     # análise (Whisper com tempo por palavra + F0) em cache: rodar de novo só analisa takes novos
     cpath = os.path.join(TAKES, 'analise.json')
     cache = json.load(open(cpath, encoding='utf8')) if os.path.exists(cpath) else {}
@@ -274,5 +289,73 @@ def escolher():
     print('pronto')
 
 
+def refazer():
+    """
+    Regrava só as chaves de --chave (ex.: start,hotFury) escolhendo os takes pelo GRITO: esforço vocal
+    (2–4 kHz vs 300–800 Hz) e taxa de sílabas comparados aos trechos gritados da referência de
+    ringue (voz-referencia-luta.wav), F0 mediano até F0_TETO_REFAZER (sem voz fina) e texto fiel.
+    Troca os mp3 e o manifest só dessas chaves; depois rode tratar.py --so <chaves>.
+    """
+    sys.path.insert(0, HERE)
+    from tratar import f0, emocao
+    from faster_whisper import WhisperModel
+    keys = sys.argv[sys.argv.index('--chave') + 1].split(',')
+    whisper = WhisperModel('small.en', device='cpu', compute_type='int8')
+    norm = lambda t: re.sub(r'[^a-z]', '', t.lower().replace('11', 'eleven'))
+    ref_esf, ref_taxa = map(float, emocao(REF, so_gritado=True))
+    print(f'referência gritada: esforço {ref_esf} dB, {ref_taxa} sílabas/s (mínimo exigido {TAXA_MIN})')
+    mpath = os.path.join(OUT, 'manifest.json')
+    man = json.load(open(mpath, encoding='utf8'))
+    rel = {'referencia': {'esforco': ref_esf, 'silabas': ref_taxa}, 'chaves': {}}
+    for key in keys:
+        takes = []
+        for meta in sorted(glob.glob(os.path.join(TAKES, f'{key}__*.json'))):
+            m = json.load(open(meta, encoding='utf8'))
+            wav = meta[:-5] + '.wav'
+            heard = ' '.join(x.text for x in whisper.transcribe(wav, beam_size=3)[0]).strip()
+            fid = difflib.SequenceMatcher(None, norm(heard), norm(m['text'])).ratio()
+            med, rng = f0(wav)
+            esf, taxa = emocao(wav)
+            t = {**m, 'wav': wav, 'heard': heard, 'fid': round(fid, 2), 'med': round(med), 'rng': round(rng, 1), 'esforco': esf, 'silabas': taxa}
+            t['grito'] = bool(esf >= ref_esf and taxa >= TAXA_MIN)
+            takes.append(t)
+            print(f"{os.path.basename(wav):24s} fid {fid:.2f} F0 {med:4.0f} esforço {esf:6.1f} sílabas {taxa:4.2f} {'GRITO' if t['grito'] else ''} {heard!r}", flush=True)
+        pool = [t for t in takes if t['fid'] >= FIDEL and 0 < t['med'] <= F0_TETO_REFAZER]
+        # grito primeiro; depois mais esforço e fala mais rápida; um take por texto antes de repetir
+        pool.sort(key=lambda t: (t['grito'], t['esforco'] + 2 * min(t['silabas'], 6)), reverse=True)
+        keep = len(man['lines'].get(key, [])) or MANTER_FRASE
+        chosen = []
+        for t in pool:
+            if len(chosen) < keep and t['text'] not in [c['text'] for c in chosen]:
+                chosen.append(t)
+        for t in pool:
+            if len(chosen) < keep and t not in chosen and t['grito']:
+                chosen.append(t)
+        if not chosen:
+            print(key, 'sem take aprovado: mantidas as falas atuais')
+            continue
+        for f in man['lines'].get(key, []):
+            try:
+                os.remove(os.path.join(OUT, f))
+            except FileNotFoundError:
+                pass
+        files = []
+        for i, t in enumerate(chosen):
+            f = f'{key}_{i}.mp3'
+            subprocess.run([FFMPEG, '-y', '-loglevel', 'error', '-i', t['wav'], '-af', ARENA_FILTER, '-ar', '44100', '-ac', '1',
+                            '-c:a', 'libmp3lame', '-b:a', '96k', os.path.join(OUT, f)], check=True)
+            files.append(f)
+        man['lines'][key] = files
+        rel['chaves'][key] = {f: {k: t[k] for k in ('text', 'exag', 'cfg', 'fid', 'med', 'rng', 'esforco', 'silabas', 'grito')} for f, t in zip(files, chosen)}
+        print(key, '->', files)
+    man['tratado'] = False
+    json.dump(man, open(mpath, 'w', encoding='utf8'), indent=2, ensure_ascii=False)
+    json.dump(rel, open(os.path.join(TAKES, 'refazer.json'), 'w', encoding='utf8'), indent=1, ensure_ascii=False)
+    print('pronto; agora: python scripts/locutor/tratar.py --so', ','.join(keys))
+
+
 if __name__ == '__main__':
-    escolher() if 'escolher' in sys.argv else gerar()
+    if 'refazer' in sys.argv:
+        refazer()
+    else:
+        escolher() if 'escolher' in sys.argv else gerar()

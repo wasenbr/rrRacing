@@ -39,7 +39,8 @@ describe('pistas do original', () => {
     }
   });
 
-  it('cruzamentos (X) ficam no mesmo ponto e na mesma altura nas duas passagens', () => {
+  it('cruzamentos (X): par no mesmo ponto, no mesmo nível ou em viaduto (um nível ou mais de diferença)', () => {
+    let viaducts = 0;
     for (const def of TRACKS) {
       const tr = new Track(def);
       const xs = tr.pieces.filter((p) => p.code === 'X');
@@ -48,8 +49,37 @@ describe('pistas do original', () => {
         const ma = tr.pointOn(a, a.length / 2);
         const b = xs.find((o) => o !== a && Math.hypot(tr.pointOn(o, o.length / 2).x - ma.x, tr.pointOn(o, o.length / 2).z - ma.z) < 1e-6);
         expect(b, `${def.id} X ${a.index} sem par`).toBeTruthy();
-        expect(Math.abs(tr.heightOn(a, 0) - tr.heightOn(b!, 0)), def.id).toBeLessThan(1e-6);
+        expect(tr.crossPartner[a.index], def.id).toBe(b!.index);
+        const dh = Math.abs(tr.heightOn(a, 0) - tr.heightOn(b!, 0));
+        expect(dh < 1e-6 || dh >= RAMP_HEIGHT - 1e-6, `${def.id} X ${a.index}: desnível ${dh}`).toBe(true);
+        // a passagem inteira é plana (rampa só fora da casa do cruzamento)
+        expect(a.dh, def.id).toBe(0);
+        if (dh > 1e-6) viaducts++;
       }
+    }
+    // Bogmire: espiral de Maré Alta (2 viadutos), Brejo Fundo e Atoleiro (1 cada)
+    expect(viaducts / 2).toBeGreaterThanOrEqual(4);
+  });
+
+  it('viaduto: cada carro fica na sua passagem; sem dica, a altura escolhe o piso', () => {
+    const tr = new Track(TRACKS.find((d) => d.id === 'bogmire-5')!);
+    const over = tr.pieces.filter((p) => tr.crossRole[p.index] === 'over');
+    expect(over.length).toBe(2);
+    for (const up of over) {
+      const low = tr.pieces[tr.crossPartner[up.index]];
+      expect(tr.crossRole[low.index]).toBe('under');
+      expect(up.h0 - low.h0).toBeGreaterThanOrEqual(RAMP_HEIGHT - 1e-6);
+      const c = tr.pointOn(up, up.length / 2);
+      // com a peça atual como dica, cada passagem mantém o seu piso
+      expect(tr.query(c.x, c.z, up.index).pieceIndex).toBe(up.index);
+      expect(tr.query(c.x, c.z, low.index).pieceIndex).toBe(low.index);
+      expect(tr.query(c.x, c.z, up.index).height).toBeCloseTo(up.h0);
+      // sem dica: a altura do carro decide
+      expect(tr.query(c.x, c.z, -1, up.h0 + 0.2).pieceIndex).toBe(up.index);
+      expect(tr.query(c.x, c.z, -1, low.h0 + 0.2).pieceIndex).toBe(low.index);
+      // malha: a passagem de baixo é pista contínua; a de cima, ponte
+      expect(tr.isBreak(low.index)).toBe(false);
+      expect(tr.isBreak(up.index)).toBe(true);
     }
   });
 

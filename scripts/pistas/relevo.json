@@ -9,7 +9,8 @@
     "Leitura das rampas: no mapa isométrico a faixa de piso mais clara é rampa que sobe para o fundo da tela;",
     "o sentido da corrida diz se é U ou D. Dinheiro/blindagem não aparecem nos mapas (continuam espalhados pela pista).",
     "Pistas sem entrada aqui ficam só com o traçado (sem relevo inventado). Leitura com scripts de apoio: rótulo de casa projetado no mapa isométrico (casa (i,j) -> x=1550+175*(i-j), y=70+44*(i+j+1)).",
-    "Onde o nosso modelo não comporta o original (salto que pousa mais baixo, degrau de meia altura), a rampa fica na casa certa e o sentido é o que fecha o circuito e deixa os cruzamentos (X) no mesmo nível."
+    "Cruzamentos (X) no mesmo nível dividem a placa; com um nível (RAMP_HEIGHT) ou mais de diferença viram viaduto: a passagem de cima é uma ponte.",
+    "Ainda fora do modelo: atalhos/bifurcações (inferno-4, entre 18 e 28) e o laço extra de bogmire-2 (não está no traçado extraído dos minimapas)."
   ],
   "chem6-1": {
     "pecas": {
@@ -151,22 +152,32 @@
   },
   "bogmire-4": {
     "pecas": {
+      "2": "U",
+      "12": "D",
       "24": "U",
       "30": "D"
     },
     "setas": {
       "9": ">"
     },
-    "nota": "Subida em 24 e descida em 30. As faixas perto de 2 e 12 ficaram planas: ficam entre cruzamentos (1/23 e 11/21) que precisam do mesmo nível. Seta em 9."
+    "nota": "Subidas em 2 e 24, descidas em 12 e 30. O trecho alto 3-11 passa em ponte sobre o cruzamento 21 (viaduto 11/21); o cruzamento 1/23 fica no mesmo nível, no térreo. Seta em 9."
   },
   "bogmire-5": {
-    "nota": "Não transcrita: espiral com viadutos (cruzamentos 4/20 e 8/16 passam em níveis diferentes no original); o nosso cruzamento X é no mesmo nível, então as rampas da subida em espiral não fecham. Fica só com o traçado."
+    "pecas": {
+      "3": "U",
+      "7": "U",
+      "15": "D",
+      "19": "D"
+    },
+    "nota": "Espiral em três andares com dois viadutos: sobe em 3 (passa por cima do cruzamento 20 na casa 4) e em 7 (ponte do cruzamento 8 sobre o 16) até o laço de cima (9-15); desce em 15 e 19 e volta ao térreo passando por baixo das pontes (16 e 20)."
   },
   "bogmire-6": {
     "pecas": {
       "3": "U",
+      "5": "U",
       "15": "D",
       "21": "U",
+      "28": "D",
       "31": "D"
     },
     "setas": {
@@ -176,7 +187,7 @@
       11,
       18
     ],
-    "nota": "Subidas em 3 e 21, descidas em 15 e 31 (cruzamento 16/32 no mesmo nível); a faixa de 5 ficou plana para fechar. Seta em 29, água em 11 e 18."
+    "nota": "Subidas em 3, 5 e 21; descidas em 15, 28 e 31 (o parapeito baixa entre 28 e 29). O cruzamento 16 passa em ponte sobre o 32 (viaduto). Seta em 29, água em 11 e 18."
   },
   "newmojave-1": {
     "pecas": {

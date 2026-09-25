@@ -129,3 +129,141 @@ export function canCloseRace(humansFinished: boolean[], firstFinishAt: number | 
   if (humansFinished.every(Boolean)) return true;
   return firstFinishAt !== null && now - firstFinishAt >= FINISH_GRACE_MS;
 }
+
+/* ------------------------------------------------------------------ */
+/* Ficha guardada (recarregar a página volta para a mesma sala)        */
+/* ------------------------------------------------------------------ */
+
+/** Sala, ficha e apresentação do convidado: recarregando a aba, entra de novo sem perguntar. */
+export interface SavedSession {
+  code: string;
+  token: string;
+  name: string;
+  color: number;
+  vehicleId: string;
+}
+
+export const SESSION_KEY = 'rnrr3d-rejoin';
+
+type Store = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
+
+/** Guarda (ou apaga, com null) a ficha. Sem armazenamento: não faz nada. */
+export function saveSession(store: Store | null | undefined, s: SavedSession | null): void {
+  try {
+    if (s) store?.setItem(SESSION_KEY, JSON.stringify(s));
+    else store?.removeItem(SESSION_KEY);
+  } catch {
+    /* sem armazenamento */
+  }
+}
+
+/** Ficha guardada, conferida (o armazenamento também não é confiável: pode ter sido editado). */
+export function loadSession(store: Store | null | undefined): SavedSession | null {
+  try {
+    const v = JSON.parse(store?.getItem(SESSION_KEY) ?? 'null') as Record<string, unknown> | null;
+    if (!v || typeof v !== 'object' || typeof v.code !== 'string' || !/^[A-Z0-9]{4}$/.test(v.code) || !isToken(v.token)) return null;
+    return {
+      code: v.code,
+      token: v.token,
+      name: typeof v.name === 'string' ? v.name.slice(0, 12) : 'Piloto',
+      color: Number.isInteger(v.color) ? (v.color as number) : 0,
+      vehicleId: typeof v.vehicleId === 'string' ? v.vehicleId.slice(0, 32) : '',
+    };
+  } catch {
+    return null;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Decisões da sessão (sem rede nem DOM: o jogo só executa)            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Esc/pausa no online (a corrida não para, o menu abre por cima). Com o placar na tela não abre:
+ * o "Continuar" do menu esconderia o placar (e o "Voltar à sala" do host) de vez.
+ */
+export function onlineMenuToggle(phase: string, resultsShown: boolean, menuOpen: boolean): 'open' | 'close' | 'ignore' {
+  if (menuOpen) return 'close';
+  if (phase === 'menu' || (phase === 'finished' && resultsShown)) return 'ignore';
+  return 'open';
+}
+
+/**
+ * Convidado: a conexão com o host acabou. `gone`: o host avisou que fechou a sala; `token`: tem
+ * ficha para voltar; `racing`: corrida na tela (sem placar); `resultsOpen`: placar na tela.
+ * - close: fecha a rede e deixa o placar final como está
+ * - giveUp: mostra o último placar conhecido com um aviso
+ * - lost: volta ao menu com um aviso
+ * - retry: tenta reconectar com a ficha (~30 s)
+ * - none: já está tentando
+ */
+export function guestDropPlan(s: { gone: boolean; token: boolean; racing: boolean; resultsOpen: boolean; reconnecting: boolean }): 'close' | 'giveUp' | 'lost' | 'retry' | 'none' {
+  if (s.gone) return s.resultsOpen ? 'close' : s.racing ? 'giveUp' : 'lost';
+  if (!s.token) return s.racing || s.resultsOpen ? 'giveUp' : 'lost';
+  return s.reconnecting ? 'none' : 'retry';
+}
+
+/** Sem estado do host por esse tempo: "Conexão instável…" e a previsão para de avançar sozinha. */
+export const STALL_MS = 500;
+/** Passos de previsão depois de travar (~250 ms à frente do último estado): depois disso o carro espera. */
+export const STALL_STEPS = 15;
+
+/** Convidado: limita a previsão do próprio carro quando os estados do host param de chegar. */
+export class StallGuard {
+  private extra = 0;
+  stalled = false;
+
+  /** `sinceSnapMs`: tempo desde o último estado. Devolve se a previsão pode andar mais um passo. */
+  step(sinceSnapMs: number): boolean {
+    this.stalled = sinceSnapMs > STALL_MS;
+    if (!this.stalled) {
+      this.extra = 0;
+      return true;
+    }
+    return this.extra++ < STALL_STEPS;
+  }
+}
+
+/** Host: sem comando do convidado por esse tempo (ou com a aba dele oculta), a CPU pilota o carro. */
+export const CPU_TAKEOVER_MS = 1500;
+
+export function cpuTakesOver(now: number, inputAt: number | undefined, away: boolean): boolean {
+  return away || now - (inputAt ?? -Infinity) > CPU_TAKEOVER_MS;
+}
+
+/** Quanto o convidado espera, depois de mandar o "saí", para fechar a conexão (a mensagem precisa sair). */
+export const LEAVE_FLUSH_MS = 400;
+
+/**
+ * Convidado: tiro, bomba e turbo soam e brilham na hora do toque; o mesmo evento vindo depois do
+ * host é engolido (um por toque, até 1,5 s depois). Índices: 0 tiro, 1 bomba, 2 turbo/pulo.
+ */
+export class LocalEcho {
+  private pending: number[][] = [[], [], []];
+
+  played(k: 0 | 1 | 2, now: number): void {
+    const q = this.pending[k];
+    q.push(now);
+    if (q.length > 4) q.shift();
+  }
+
+  /** O evento do host é o eco de um toque já mostrado? (consome o toque) */
+  echo(k: 0 | 1 | 2, now: number): boolean {
+    const q = this.pending[k];
+    while (q.length && now - q[0] > 1500) q.shift();
+    if (!q.length) return false;
+    q.shift();
+    return true;
+  }
+
+  /** Toques mostrados que o host ainda não confirmou. */
+  count(k: 0 | 1 | 2, now: number): number {
+    const q = this.pending[k];
+    while (q.length && now - q[0] > 1500) q.shift();
+    return q.length;
+  }
+
+  clear(): void {
+    this.pending = [[], [], []];
+  }
+}

@@ -18,7 +18,8 @@ export const wallMaps = memo(wallMapsRaw);
 
 /**
  * Elementos de pista do original que não são a faixa contínua (ver sim/track.ts):
- *  - cruzamentos (X): placa em cruz no mesmo nível, com o bloco por baixo e muretas nas quinas;
+ *  - cruzamentos (X): placa em cruz no mesmo nível, com o bloco por baixo e muretas nas quinas
+ *    (a passagem de cima com as faixas de borda contínuas); em viaduto, ponte sobre a de baixo;
  *  - vãos (G): tampa do bloco nas bordas do vão (a pista "acaba" no abismo) e faixa de perigo;
  *  - setas de warp (`>` impulso, `<` warp reverso de Inferno, só num lado da pista).
  */
@@ -55,21 +56,39 @@ function addCrossings(group: THREE.Group, track: Track, theme: Theme, shadows: b
     roadMat.emissive = new THREE.Color(0xffffff);
     roadMat.emissiveIntensity = theme.roadGlow;
   }
+  // passagem "de baixo" de um cruzamento no mesmo nível: piso mais escuro, para a de cima (com as
+  // faixas de borda contínuas) se destacar como a que atravessa (item 5 da rodada 10, Nho)
+  const lowMat = roadMat.clone();
+  lowMat.color = new THREE.Color(0.62, 0.62, 0.66);
+  if (rm.emissive) lowMat.emissiveIntensity = theme.roadGlow * 0.5;
+  const edgeMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(theme.roadEdge), emissive: new THREE.Color(theme.roadEdge), emissiveIntensity: 0.25, roughness: 0.6, polygonOffset: true, polygonOffsetFactor: -2 });
   const wm = wallMaps(theme);
   const wallMat = new THREE.MeshStandardMaterial({ map: wm.map, normalMap: wm.normal, roughness: wm.roughness, metalness: wm.metalness });
   const railMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(theme.curb), roughness: 0.78, metalness: 0 });
   const accentMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(theme.rail[1]), emissive: new THREE.Color(theme.rail[1]), emissiveIntensity: 0.4 });
-  const done: { x: number; z: number }[] = [];
+  const rail = (q: Piece, s: number, side: number, len: number, y = 0): void => {
+    const r = new THREE.Mesh(new THREE.BoxGeometry(WALL, 0.45, len), railMat);
+    place(r, q, s, side * (W + WALL / 2), y + 0.2);
+    r.castShadow = shadows;
+    group.add(r);
+    const cap = new THREE.Mesh(new THREE.BoxGeometry(WALL + 0.02, 0.08, len), accentMat);
+    place(cap, q, s, side * (W + WALL / 2), y + 0.46);
+    group.add(cap);
+  };
   for (const p of xs) {
-    const c = track.pointOn(p, L / 2);
-    if (done.some((d) => Math.hypot(d.x - c.x, d.z - c.z) < 1)) continue; // o par já foi feito
-    done.push(c);
-    const other = xs.find((o) => o !== p && Math.hypot(track.pointOn(o, L / 2).x - c.x, track.pointOn(o, L / 2).z - c.z) < 1)!;
-    for (const q of [p, other]) {
-      if (!q) continue;
+    const other = track.pieces[track.crossPartner[p.index]];
+    if (other && other.index < p.index) continue; // o par já foi feito
+    const role = track.crossRole[p.index];
+    if (other && role !== 'flat' && role !== 'none') {
+      addBridge(group, track, theme, role === 'over' ? p : other, roadMat, wallMat, shadows, rail);
+      continue;
+    }
+    const pair = other ? [p, other] : [p];
+    for (const q of pair) {
+      const top = q === pair[pair.length - 1];
       // piso da faixa desta passagem
-      const floor = new THREE.Mesh(new THREE.PlaneGeometry(W * 2 + 0.1, L).rotateX(-Math.PI / 2), roadMat);
-      place(floor, q, L / 2, 0, q === p ? 0.002 : 0.004);
+      const floor = new THREE.Mesh(new THREE.PlaneGeometry(W * 2 + 0.1, L).rotateX(-Math.PI / 2), top ? roadMat : lowMat);
+      place(floor, q, L / 2, 0, top ? 0.004 : 0.002);
       floor.receiveShadow = shadows;
       group.add(floor);
       // bloco por baixo (continua o paredão da pista)
@@ -78,24 +97,82 @@ function addCrossings(group: THREE.Group, track: Track, theme: Theme, shadows: b
       place(block, q, L / 2, 0, -depth / 2 - 0.05);
       block.receiveShadow = shadows;
       group.add(block);
+      if (top && pair.length > 1) {
+        // faixas de borda contínuas atravessando a outra passagem
+        for (const side of [1, -1]) {
+          const e = new THREE.Mesh(new THREE.PlaneGeometry(0.35, L).rotateX(-Math.PI / 2), edgeMat);
+          place(e, q, L / 2, side * (W - 0.35), 0.012);
+          group.add(e);
+        }
+      }
     }
     // muretas nas 4 quinas da cruz (entre a borda de uma faixa e a da outra)
     const seg = (L - W * 2) / 2;
     if (seg > 0.2) {
-      for (const q of [p, other]) {
+      for (const q of pair) {
         for (const side of [1, -1]) {
-          for (const end of [0, 1]) {
-            const s = end === 0 ? seg / 2 : L - seg / 2;
-            const rail = new THREE.Mesh(new THREE.BoxGeometry(WALL, 0.45, seg), railMat);
-            place(rail, q, s, side * (W + WALL / 2), 0.2);
-            rail.castShadow = shadows;
-            group.add(rail);
-            const cap = new THREE.Mesh(new THREE.BoxGeometry(WALL + 0.02, 0.08, seg), accentMat);
-            place(cap, q, s, side * (W + WALL / 2), 0.46);
-            group.add(cap);
-          }
+          for (const end of [0, 1]) rail(q, end === 0 ? seg / 2 : L - seg / 2, side, seg);
         }
       }
+    }
+  }
+}
+
+/**
+ * Viaduto: a passagem de baixo é pista comum (malha contínua, ver Track.isBreak); a de cima é
+ * uma ponte — laje com muretas contínuas, cabeceiras até o chão e pilares nas quinas da casa,
+ * fora da faixa de baixo.
+ */
+function addBridge(
+  group: THREE.Group,
+  track: Track,
+  theme: Theme,
+  up: Piece,
+  roadMat: THREE.Material,
+  wallMat: THREE.Material,
+  shadows: boolean,
+  rail: (q: Piece, s: number, side: number, len: number, y?: number) => void,
+): void {
+  const W = track.halfWidth;
+  const L = up.length;
+  const WALL = WALL_OFFSET;
+  const n = track.pieces.length;
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(W * 2 + 0.1, L).rotateX(-Math.PI / 2), roadMat);
+  place(floor, up, L / 2, 0, 0.004);
+  floor.receiveShadow = shadows;
+  group.add(floor);
+  // laje (0,6 m) com a textura do paredão por baixo e nas laterais
+  const T = 0.6;
+  const slab = new THREE.Mesh(new THREE.BoxGeometry(W * 2 + WALL * 2, T, L), wallMat);
+  place(slab, up, L / 2, 0, -T / 2 - 0.02);
+  slab.castShadow = shadows;
+  slab.receiveShadow = shadows;
+  group.add(slab);
+  for (const side of [1, -1]) rail(up, L / 2, side, L);
+  // cabeceiras: a pista de cima chega em paredão; a face que dá para o vão sob a ponte fecha o bloco
+  const prev = track.pieces[(up.index - 1 + n) % n];
+  const next = track.pieces[(up.index + 1) % n];
+  for (const [s, face, h] of [[0, 1, track.heightOn(prev, prev.length)], [L, -1, track.heightOn(next, 0)]] as const) {
+    const depth = h - theme.groundLevel + 0.5;
+    const cap = new THREE.Mesh(new THREE.PlaneGeometry(W * 2 + WALL * 2, depth), wallMat);
+    place(cap, up, s, 0, 0);
+    cap.position.y = h - depth / 2 - T;
+    if (face < 0) cap.rotation.y += Math.PI;
+    cap.receiveShadow = shadows;
+    group.add(cap);
+  }
+  // pilares nas quinas da casa (fora das duas faixas)
+  const off = W + WALL + (L / 2 - W - WALL) / 2;
+  const hTop = up.h0 - T;
+  const hBot = theme.groundLevel - 0.5;
+  const pillarGeo = new THREE.BoxGeometry(1.4, hTop - hBot, 1.4);
+  for (const a of [1, -1]) {
+    for (const b of [1, -1]) {
+      const pil = new THREE.Mesh(pillarGeo, wallMat);
+      place(pil, up, L / 2 + a * off, b * off, 0);
+      pil.position.y = (hTop + hBot) / 2;
+      pil.castShadow = shadows;
+      group.add(pil);
     }
   }
 }
@@ -192,9 +269,10 @@ function addWarps(group: THREE.Group, track: Track): void {
     const len = p.length * 0.4;
     if (p.warp > 0) {
       fwdMat ??= new THREE.MeshStandardMaterial({
-        map: arrowsTexture('#3cff6a', '#aaffc0'),
-        emissive: 0x2aff5a,
-        emissiveIntensity: 1.1,
+        // vermelhas como no original (o aviso de salto é amarelo e preto: não se confundem)
+        map: arrowsTexture('#ff2a1a', '#ffb0a0'),
+        emissive: 0xff2a10,
+        emissiveIntensity: 1.2,
         emissiveMap: null,
         transparent: true,
         depthWrite: false,

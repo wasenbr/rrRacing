@@ -384,4 +384,40 @@ describe('mundo da corrida', () => {
     expect(world.projectiles.find((p) => p.id === 91)!.heading).toBeCloseTo(aim, 9);
     expect(Math.abs(world.projectiles.find((p) => p.id === 92)!.heading - aim)).toBeGreaterThan(0.01);
   });
+  it('corridas mistas (um carro de cada, mesma CPU): nenhum modelo domina nem fica para trás', () => {
+    // versão rápida do cenário "mixed" das evidências: 2 pistas por planeta, 2 sementes, grid girando
+    const ids = Object.keys(VEHICLES);
+    const wins: Record<string, number> = {};
+    const place: Record<string, number> = {};
+    let races = 0;
+    const themes = [...new Set(TRACKS.map((t) => t.theme))];
+    for (const theme of themes)
+      for (const def of TRACKS.filter((t) => t.theme === theme).slice(0, 2))
+        for (const seed of [3, 9]) {
+          const order = ids.map((_, i) => ids[(i + seed) % ids.length]);
+          const entries: RacerEntry[] = order.map((id, i) => ({ name: id, color: 0, spec: VEHICLES[id], ai: { skill: 0.8, aggression: 0.6, lane: [-1.5, -0.5, 0.5, 1.5, 0][i] } }));
+          const w = createWorld(new Track(def), entries, 3, seed);
+          w.started = true;
+          for (let k = 0; k < 60 * 600 && w.finishedCount < entries.length; k++) stepWorld(w, {}, DT);
+          races++;
+          for (const r of w.racers) {
+            if (r.finishPlace === 1) wins[r.name] = (wins[r.name] ?? 0) + 1;
+            place[r.name] = (place[r.name] ?? 0) + (r.finishPlace || entries.length);
+          }
+        }
+    const fmt = ids.map((id) => `${id} ${wins[id] ?? 0}v ${(place[id] / races).toFixed(2)}`).join(' · ');
+    for (const id of ids) {
+      // amostra pequena: limites largos (nas 432 corridas das evidências: 15–27% de vitórias, média 2,6–3,3)
+      expect((wins[id] ?? 0) / races, fmt).toBeLessThan(0.45);
+      expect((wins[id] ?? 0) / races, fmt).toBeGreaterThan(0.04);
+      expect(place[id] / races, fmt).toBeGreaterThan(2.2);
+      expect(place[id] / races, fmt).toBeLessThan(3.8);
+    }
+  }, 60000);
+
+  it('mina e scatter: arma depois de um tempo; o leque some antes da volta seguinte', () => {
+    expect(WEAPONS.mine.armTime).toBeGreaterThanOrEqual(0.9);
+    expect(WEAPONS.scatter.radius).toBeLessThanOrEqual(0.9);
+    expect(WEAPONS.scatter.life).toBeLessThan(15);
+  });
 });

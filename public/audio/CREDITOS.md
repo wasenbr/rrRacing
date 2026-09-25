@@ -54,11 +54,13 @@ Pós-tratamento (`scripts/locutor/tratar.py`, ffmpeg + rubberband): takes sem em
 silêncio aparado, nomes graves afinados para cima, frases longas aceleradas e loudness igual (−18 LUFS).
 As frases seguem o estilo do locutor do original, sem usar gravações dele.
 
-Largada (`start_*.mp3`, "Let the carnage begin!", regravada na rodada 8): Chatterbox com exagero 1,45–1,55
-e cfg 0,25–0,3, dois takes clonando `scripts/locutor/voz-referencia-luta.wav` (recortada de **"Boxing
+Largada (`start_*.mp3`) e "hot fury" (`hotFury_*.mp3`), regravadas na rodada 11: Chatterbox com exagero
+1,3–2,0 e cfg 0,26–0,35, clonando `scripts/locutor/voz-referencia-luta.wav` (recortada de **"Boxing
 announcement Ladies and Gentleman"** de **klankbeeld**, Freesound https://freesound.org/people/klankbeeld/sounds/387839/,
-licença **CC-BY 4.0**) e um clonando a referência de Alba MacKenna acima. Escolhidos entre 24 takes por
-transcrição exata (faster-whisper), F0 mediano 207–223 Hz e faixa de F0 de 12,5–19,7 semitons (Praat).
+licença **CC-BY 4.0**). Escolhidas por `scripts/locutor/gerar.py refazer`: texto fiel (faster-whisper),
+esforço vocal (2–4 kHz vs 300–800 Hz) e sílabas/s comparados aos trechos gritados da referência, F0 mediano
+até 265 Hz antes do `tratar.py` (que baixa de tom o que passa de 225 Hz; nada é afinado para cima).
+Eco do tratamento de arena encurtado para uma repetição de 28 ms (os ecos de 45/110 ms borravam as sílabas).
 
 ## Música
 

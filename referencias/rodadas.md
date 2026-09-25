@@ -295,3 +295,40 @@ Feito na rodada 10 (9 agentes em paralelo):
   efeitos com sub; nitro com estalos; silêncio dos resultados também online.
 - Online: reconexão com ficha de sessão; host sai → placar com nota; placar ao vivo e final oficial;
   colisão na previsão; contadores de toque; canal sem ordem; ping no HUD e na sala.
+
+# Rodada 11 (2026-09-25) — todos os grupos, volta 2/3
+
+Notas: Visual 6,8 · Carros 6,2 · Jogabilidade 6,8 · Pistas 7 · Campanha 7,8 · Interface 7,4 ·
+Desempenho 7,2 · Som 6,6 · Online 7 · QA 6,4 (nenhum aprovado; nenhum bloqueante).
+
+Pendências altas: bola de fogo vira mancha vermelha; câmera chase atravessa rivais; nitro do Havac
+em cones sólidos; piso fora do alvo (Bogmire/Nho/Drakonis); corridas mistas: Battle Trak 51% e
+Havac 1/72; progressão no máximo BT≈AB; vitrine com explosão; minas/scatter certeiros; capturas de
+salto e chegada falharam (script); sem teste de salto curto; viadutos ausentes (bogmire-5/2,
+inferno-4); miniatura da pista vazia na garagem do chefe; engasgo de ~2 s após a largada; resolução
+dinâmica inócua no alto; queda de nível sem desligar bloom; sub-grave demais nos efeitos e pouco
+destaque na mixagem; motor sintético; emoção do locutor; placar online some após pausa; recarregar
+não reconecta; recarregar entre chegada e resultados conta como último; pausa não se refaz quando o
+WebGL cai/volta.
+
+Feito na rodada 11 (9 agentes em paralelo):
+- Visual: fogo laranja com brilho; câmera chase esconde rival colado e sobe; piso metálico em
+  Bogmire/Nho/Drakonis; destroços em chapa na cor do carro; faíscas em risco; anel de choque fino;
+  sol de New Mojave suave; crateras rebaixadas.
+- Carros: progressão com ≥0,19 s entre degraus; vitrine limpa em reta e capturas 21_carro_*;
+  Air Blade vermelho com barbatana em foice e asas com diedro; chamas em gradiente; VISUAL_SCALE medido.
+- Jogabilidade: corridas mistas 20/17/13/28/22 % (antes BT 51, Havac 1); mina 0,46 e scatter 0,51
+  acerto/carga; Sundog 22; vácuo real; trocas de liderança 6,6 → 9,8; IA usa DERRAPAR; captura 52 refeita.
+- Pistas: teste de salto curto (ápice ≤1,42 m); capturas de salto refeitas; viadutos (bogmire-4/5/6);
+  warp vermelho e zebra no J; cruzamento de nho-2 legível; Inferno mais escuro.
+- Campanha/QA: chegada aplicada na hora; pausa refeita quando o vídeo cai/volta; desistir leva à
+  garagem se a temporada muda; campaignFlow.ts e storage.test.ts; Inferno paga como Nho; cargas no
+  teto e preço escalado; selo de prêmios reduzidos; Fácil calibrado; id de campanha.
+- Interface: miniatura da pista na hora; garagem/loja/corrida rápida compactas no celular; TIRO a
+  16 px do ACEL com deslizar; barras pelo dano real; miniaturas de blindagem/plasma/slipsauce.
+- Desempenho: warmup de tudo; resolução dinâmica com piso efetivo; bloom na escada de queda;
+  EngineSound.stop(); menu/pausa sem quadros; buffer circular; bateria sem getBattery.
+- Som: golpes +6,6 a +11 dB sobre a cama; motor com grave e menos periódico; locutor regerado mais
+  gritado; rivais audíveis; hino no final; plasma seco.
+- Online: placar não some; recarregar reentra; previsão com poças/óleo; leave confiável; conexão
+  instável; retorno local do tiro; testes de fluxo e previsão.

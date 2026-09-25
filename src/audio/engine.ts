@@ -135,11 +135,12 @@ function cycleBuffer(ctx: BaseAudioContext, heavy: boolean, seed: number): Audio
   const rnd = rng(seed * 7919 + (heavy ? 13 : 1));
   // força e defasagem de cada cilindro (fixas) + jitter por explosão
   const cylAmp = [1, 0.78, 0.93, 0.7, 0.97, 0.74, 0.88, 0.8];
-  const cylLag = [0, 0.07, -0.04, 0.09, 0.02, -0.06, 0.05, -0.08];
+  // rodada 11: defasagem e jitter maiores (o giro de corrida soava como zumbido regular)
+  const cylLag = [0, 0.1, -0.06, 0.13, 0.03, -0.09, 0.07, -0.11];
   const pos: number[] = [];
   let acc = 0;
   for (let i = 0; i < n; i++) {
-    pos.push(acc + cylLag[i % 8] + (rnd() * 2 - 1) * 0.035);
+    pos.push(acc + cylLag[i % 8] + (rnd() * 2 - 1) * 0.07);
     acc += 1;
   }
   const tau1 = heavy ? 0.0035 : 0.005;
@@ -148,7 +149,7 @@ function cycleBuffer(ctx: BaseAudioContext, heavy: boolean, seed: number): Audio
   const tail = Math.floor(sr * 0.03);
   for (let i = 0; i < n; i++) {
     const start = Math.floor((pos[i] / n) * len + len) % len;
-    const amp = cylAmp[i % 8] * (0.85 + rnd() * 0.3);
+    const amp = cylAmp[i % 8] * (0.7 + rnd() * 0.6);
     const f1 = (heavy ? 240 : 200) * (0.94 + rnd() * 0.12);
     const f2 = (heavy ? 760 : 560) * (0.9 + rnd() * 0.2);
     const r2 = heavy ? 0.65 : 0.35;
@@ -196,6 +197,12 @@ function cycleBuffer(ctx: BaseAudioContext, heavy: boolean, seed: number): Audio
  */
 export class EngineSound {
   private started = false;
+  /** já ligado uma vez (depois do gesto do usuário): update() religa sozinho depois de um stop() */
+  private armed = false;
+  /** geração do grafo (um carregamento atrasado da gravação não entra num grafo já parado) */
+  private gen = 0;
+  /** fontes em execução (paradas em stop()) */
+  private srcs: AudioScheduledSourceNode[] = [];
   private cycLight!: AudioBufferSourceNode;
   private cycHeavy!: AudioBufferSourceNode;
   private lightGain!: GainNode;
@@ -203,6 +210,13 @@ export class EngineSound {
   private sub!: OscillatorNode;
   private subGain!: GainNode;
   private subTone!: BiquadFilterNode;
+  /** ordem de rotação do virabrequim (f/4): o "corpo" abaixo de 100 Hz no giro de corrida */
+  private crank!: OscillatorNode;
+  private crankGain!: GainNode;
+  /** peito do ronco (~110–170 Hz): +4 dB no nitro para ele não afinar */
+  private chest!: BiquadFilterNode;
+  /** AM de combustão: ruído lento acompanhando a rotação, explosões de força irregular */
+  private combLp!: BiquadFilterNode;
   /** ganho antes da saturação do ronco: o nitro "abre" o drive */
   private drive!: GainNode;
   private fire!: OscillatorNode;
@@ -245,6 +259,9 @@ export class EngineSound {
     const a = audio();
     if (!a || this.started) return;
     this.started = true;
+    this.armed = true;
+    const gen = ++this.gen;
+    this.srcs = [];
     const { ctx } = a;
     const t = ctx.currentTime;
     this.out = ctx.createGain();
@@ -261,7 +278,7 @@ export class EngineSound {
     this.recBus.connect(this.out);
     // os loops já vêm pré-carregados ao destravar o áudio (preloadSfx); se não, entram quando chegarem
     const attach = (bufs: (AudioBuffer | null)[]) => {
-      if (bufs.some((b) => !b) || this.rec.length) return; // sem gravação: fica só a síntese
+      if (gen !== this.gen || bufs.some((b) => !b) || this.rec.length) return; // sem gravação: fica só a síntese
       const t0 = ctx.currentTime;
       this.rec = bufs.map((b, i) => {
         const src = ctx.createBufferSource();
@@ -272,6 +289,7 @@ export class EngineSound {
         src.connect(gain);
         gain.connect(this.recTone);
         src.start(t0, Math.random() * (b as AudioBuffer).duration);
+        this.srcs.push(src);
         // mesma instabilidade lenta de rotação da síntese: as camadas andam juntas, sem batimento
         this.drift.connect(src.detune);
         return { src, gain, f: REC_LOOP_F[ENGINE_LOOPS[i]], gate: new LayerGate(gain, this.recTone) };
@@ -319,7 +337,8 @@ export class EngineSound {
     this.formant1 = biquad('peaking', 220, 1.2, 5);
     this.formant2 = biquad('peaking', 800, 1.6, 3);
     const tone2 = biquad('lowpass', 3200, 0.5);
-    const chest = biquad('peaking', 150, 0.9, 3);
+    this.chest = biquad('peaking', 150, 0.9, 3);
+    const chest = this.chest;
     const hp = biquad('highpass', 40, 0.7);
     this.drive = ctx.createGain();
     this.drive.gain.value = 1;
@@ -390,6 +409,24 @@ export class EngineSound {
     subIntoBody.gain.value = 0.25;
     this.subTone.connect(subIntoBody);
     subIntoBody.connect(this.body);
+    // virabrequim (f/4): senoide que cresce com a rotação; no giro de corrida cai em 50–90 Hz e
+    // devolve o corpo que faltava (graves 17–26 dB abaixo dos médios)
+    this.crank = ctx.createOscillator();
+    this.crank.type = 'sine';
+    this.crankGain = ctx.createGain();
+    this.crankGain.gain.value = 0;
+    const crankHp = biquad('highpass', 35, 0.7);
+    this.crank.connect(this.crankGain);
+    this.crankGain.connect(crankHp);
+    crankHp.connect(this.out);
+    // AM de combustão: ruído passa-baixa (~f/4) somado ao ganho do ronco (cada explosão com força
+    // diferente, sem a regularidade de um oscilador)
+    this.combLp = biquad('lowpass', 20, 0.7);
+    const combDepth = ctx.createGain();
+    combDepth.gain.value = isAudioLite() ? 0 : 7;
+    loopNoise().connect(this.combLp);
+    this.combLp.connect(combDepth);
+    combDepth.connect(this.body.gain);
 
     // admissão: sopro médio que cresce com a carga
     this.intake = biquad('bandpass', 500, 0.8);
@@ -429,14 +466,53 @@ export class EngineSound {
     wind.connect(this.windGain);
     this.windGain.connect(this.out);
 
-    for (const o of [this.lope, this.fire, this.sub]) {
+    for (const o of [this.lope, this.fire, this.sub, this.crank]) {
       this.drift.connect(o.detune);
       o.start(t);
     }
     for (const g of [this.intakeGain, this.blowGain, this.hissGain, this.squealGain, this.windGain]) this.gates.set(g, new LayerGate(g, this.out));
     this.cycLight.start(t, Math.random() * 2);
     this.cycHeavy.start(t, Math.random() * 2);
+    this.srcs.push(sharedNoise, this.cycLight, this.cycHeavy, this.lope, this.fire, this.sub);
+    this.srcs.push(this.crank);
     this.lastT = t;
+  }
+
+  /**
+   * Desliga o motor de verdade (menu, resultados, pausa): o volume cai em ~0,3 s, as fontes param
+   * depois da rampa e o grafo sai do barramento — a thread de áudio deixa de processar o motor
+   * (antes ele seguia rodando calado por trás dos menus). O próximo update() (corrida) religa.
+   */
+  stop(): void {
+    const a = audio();
+    if (!a || !this.started) return;
+    this.started = false;
+    this.gen++;
+    const t = a.ctx.currentTime;
+    const out = this.out;
+    out.gain.setTargetAtTime(0, t, 0.08);
+    const srcs = this.srcs;
+    this.srcs = [];
+    for (const s of srcs) {
+      try {
+        s.stop(t + 0.6);
+      } catch {
+        /* já parada */
+      }
+    }
+    const release = () => {
+      try {
+        out.disconnect();
+      } catch {
+        /* já desconectado */
+      }
+    };
+    if (srcs.length) srcs[0].onended = release;
+    else release();
+    this.rec = [];
+    this.gates.clear();
+    this.synthUnderRec = 1;
+    this.wasBoosting = false;
   }
 
   /** "Whoosh" de ignição do nitro: sopro subindo de grave para médio e um baque surdo. */
@@ -503,7 +579,12 @@ export class EngineSound {
    */
   update(speedRatio: number, throttle: number, boosting: boolean, slip = 0): void {
     const a = audio();
-    if (!a || !this.started) return;
+    if (!a) return;
+    if (!this.started) {
+      // parado por stop(): volta a soar ao retomar a corrida
+      if (!this.armed) return;
+      this.start();
+    }
     const t = a.ctx.currentTime;
     // ~30 atualizações por segundo bastam (as constantes de tempo são de 40 a 250 ms). Reagendar
     // dezenas de parâmetros a cada quadro (120 Hz no iPad) disputava com a thread de áudio e picotava o som
@@ -560,23 +641,32 @@ export class EngineSound {
     }
     this.sub.frequency.setTargetAtTime(f / 2, t, k);
     this.subTone.frequency.setTargetAtTime(f * 3.5, t, k);
-    // nitro: mais drive na saturação (o ronco rasga)
-    this.drive.gain.setTargetAtTime(boosting ? 1.9 : 1, t, boosting ? 0.06 : 0.25);
+    this.crank.frequency.setTargetAtTime(f / 4, t, k);
+    this.combLp.frequency.setTargetAtTime(Math.max(12, f / 4), t, k);
+    // nitro: mais drive na saturação (o ronco rasga), sem exagero (drive alto afinava o timbre)
+    this.drive.gain.setTargetAtTime(boosting ? 1.5 : 1, t, boosting ? 0.06 : 0.25);
+    // peito: acompanha a meia-ordem e ganha +4 dB no nitro (o nitro não pode "afinar")
+    this.chest.frequency.setTargetAtTime(Math.max(110, Math.min(170, f / 2)), t, k);
+    this.chest.gain.setTargetAtTime(3 + (boosting ? 4 : 0), t, 0.08);
     this.fire.frequency.setTargetAtTime(f, t, k);
     this.lope.frequency.setTargetAtTime(f / 8, t, k);
     this.lopeDepth.gain.setTargetAtTime(0.22 - rpm * 0.16, t, 0.1);
     // o timbre abre com rotação e carga: grave e redondo na lenta, rasgado no alto giro
-    this.tone.frequency.setTargetAtTime(380 + rpm * 1700 + load * 600 + (boosting ? 700 : 0), t, k);
+    this.tone.frequency.setTargetAtTime(380 + rpm * 1700 + load * 600 + (boosting ? 300 : 0), t, k);
     this.formant1.frequency.setTargetAtTime(190 + rpm * 260, t, k);
     this.formant1.gain.setTargetAtTime(4 + load * 3, t, 0.08);
     this.formant2.frequency.setTargetAtTime(650 + rpm * 950, t, k);
-    this.formant2.gain.setTargetAtTime(1 + load * 5 + rpm * 2 + (boosting ? 4 : 0), t, 0.08);
+    // formante alto limitado (no nitro subia +4 dB e o ronco virava chiado de médios)
+    this.formant2.gain.setTargetAtTime(Math.min(boosting ? 5 : 6, 1 + load * 4 + rpm * 2), t, 0.08);
     this.fireBand.frequency.setTargetAtTime(350 + rpm * 900, t, k);
     // queima: dominante na síntese pura; com a gravação vira só textura por cima
     this.fireGain.gain.setTargetAtTime((0.55 + load * 1.1) * (1 - recW * 0.55), t, 0.05);
     // sub: a gravação já tem o grave; outra fonte no mesmo tom por baixo só criaria batimento
     // o grave cresce com a rotação e a carga (antes caía: o giro alto ficava sem peso)
-    this.subGain.gain.setTargetAtTime((0.1 + Math.min(1, rpm) * 0.06 + load * 0.03) * (1 - recW * 0.8), t, 0.1);
+    // rodada 11: cresce bem mais com a rotação (o giro de corrida ficava sem corpo abaixo de 150 Hz)
+    const rr = Math.min(1, rpm);
+    this.subGain.gain.setTargetAtTime((0.1 + rr * 0.2 + load * 0.05) * (1 - recW * 0.8), t, 0.1);
+    this.crankGain.gain.setTargetAtTime(Math.max(0, rr - 0.2) * (0.35 + load * 0.15) * (1 - recW * 0.8), t, 0.1);
     this.intake.frequency.setTargetAtTime(350 + rpm * 900, t, k);
     const intakeLevel = load * (0.02 + rpm * 0.07);
     this.intakeGain.gain.setTargetAtTime(intakeLevel, t, 0.06);
@@ -648,6 +738,10 @@ export class RivalEngines {
     quietSince: number;
   }[] = [];
   private started = false;
+  private armed = false;
+  private gen = 0;
+  /** loop de ruído compartilhado pelas vozes (parado em stop()) */
+  private noiseSrc: AudioBufferSourceNode | null = null;
   private lastT = 0;
 
   constructor(private readonly count: number) {}
@@ -656,6 +750,8 @@ export class RivalEngines {
     const a = audio();
     if (!a || this.started) return;
     this.started = true;
+    this.armed = true;
+    const gen = ++this.gen;
     const { ctx } = a;
     const t = ctx.currentTime;
     const noise = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
@@ -667,6 +763,7 @@ export class RivalEngines {
     noiseSrc.buffer = noise;
     noiseSrc.loop = true;
     noiseSrc.start(t, Math.random());
+    this.noiseSrc = noiseSrc;
     // modo leve (toque / qualidade baixa): só o rival mais próximo tem motor
     const count = isAudioLite() ? Math.min(1, this.count) : this.count;
     for (let i = 0; i < count; i++) {
@@ -717,7 +814,7 @@ export class RivalEngines {
     // gravação: os mesmos loops do motor do jogador (timbre igual de perto), passando pelo mesmo
     // filtro de distância e pan de cada voz
     const attach = (bufs: (AudioBuffer | null)[]) => {
-      if (bufs.some((b) => !b) || this.voices.some((v) => v.rec.length)) return;
+      if (gen !== this.gen || bufs.some((b) => !b) || this.voices.some((v) => v.rec.length)) return;
       const t0 = ctx.currentTime;
       for (const v of this.voices) {
         v.rec = bufs.map((b, i) => {
@@ -739,10 +836,52 @@ export class RivalEngines {
     this.lastT = t;
   }
 
+  /**
+   * Desliga as vozes de verdade (menu, resultados, pausa): volume a zero, fontes paradas depois da
+   * rampa e fora do barramento. O próximo update() (corrida) religa.
+   */
+  stop(): void {
+    const a = audio();
+    if (!a || !this.started) return;
+    this.started = false;
+    this.gen++;
+    const t = a.ctx.currentTime;
+    const voices = this.voices;
+    this.voices = [];
+    const srcs: AudioScheduledSourceNode[] = this.noiseSrc ? [this.noiseSrc] : [];
+    this.noiseSrc = null;
+    for (const v of voices) {
+      v.gain.gain.setTargetAtTime(0, t, 0.08);
+      srcs.push(v.cyc, v.fire, ...v.rec.map((r) => r.src));
+    }
+    for (const s of srcs) {
+      try {
+        s.stop(t + 0.6);
+      } catch {
+        /* já parada */
+      }
+    }
+    const release = () => {
+      for (const v of voices) {
+        try {
+          v.pan.disconnect();
+        } catch {
+          /* já desconectado */
+        }
+      }
+    };
+    if (srcs.length) srcs[0].onended = release;
+    else release();
+  }
+
   /** `rivals` já ordenados do mais próximo ao mais distante (usa os primeiros). */
   update(rivals: RivalEngineInput[]): void {
     const a = audio();
-    if (!a || !this.started) return;
+    if (!a) return;
+    if (!this.started) {
+      if (!this.armed) return;
+      this.start();
+    }
     const t = a.ctx.currentTime;
     // ~30 atualizações por segundo bastam (as constantes de tempo são de 40 a 250 ms). Reagendar
     // dezenas de parâmetros a cada quadro (120 Hz no iPad) disputava com a thread de áudio e picotava o som
@@ -785,10 +924,13 @@ export class RivalEngines {
       // longe, abafado; perto, abre (distância também soa pelo timbre, não só pelo volume)
       const near = Math.max(0, 1 - r.dist / 45);
       v.tone.frequency.setTargetAtTime(300 + near * 500 + v.rpm * 1000 + r.throttle * 300, t, 0.06);
-      const level = near * near * (0.2 + r.throttle * 0.12);
+      // rodada 11: estava -20 dB a 3 m (inaudível); +13 dB (a voz do rival não tem o corpo nem os
+      // formantes do motor do jogador: x2 de compensação) e o acelerador pesa mais
+      const level = near * near * (0.45 + r.throttle * 0.25) * 2;
       v.gain.gain.setTargetAtTime(level, t, 0.08);
       this.park(v, t, a.engine, level);
-      v.pan.pan.setTargetAtTime(Math.max(-1, Math.min(1, r.pan)), t, 0.05);
+      // pan até ±0,8: em ±1 o outro canal ficava em silêncio (soava "furado" no fone)
+      v.pan.pan.setTargetAtTime(Math.max(-0.8, Math.min(0.8, r.pan)), t, 0.05);
     });
   }
 

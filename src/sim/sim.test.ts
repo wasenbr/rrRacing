@@ -3,7 +3,7 @@ import { TRACKS } from '../data/tracks';
 import { VEHICLES } from '../data/vehicles';
 import { emptyInput } from './input';
 import { createProgress, updateProgress } from './race';
-import { Track } from './track';
+import { JUMP_HEIGHT, TILE, Track } from './track';
 import { createVehicleState, forwardSpeed, stepVehicle } from './vehicle';
 import { createWorld, raceDistance } from './world';
 
@@ -176,6 +176,48 @@ describe('veículo', () => {
           expect(v.fell, `${layout.slice(0, 13)} ${sp} caiu`).toBe(false);
           expect(landings, `${sp}`).toBeGreaterThan(0);
         }
+      }
+    }
+  });
+
+  it('salto curto e baixo (itens 22/35): ápice até 1,5 m acima do lábio e pouso até 10 m depois do vão', () => {
+    for (const mid of ['J G', 'J Gv', 'J G J G']) {
+      const tr = new Track({ id: 'salto', name: 'salto', planet: 'x', theme: 'chem6', laps: 1, layout: `F S S S ${mid} S S S R S S S S S S S R S S S S S S S R S S S S S S S R` });
+      const jumps = mid.split(' ').filter((c) => c === 'J').length;
+      for (const sp of [25, 35, 45, 55]) {
+        const sSpec = { ...spec, maxSpeed: 70, accel: 0, drag: 0 };
+        const v = createVehicleState(sSpec, 0, 0, 0);
+        // 2 casas antes da primeira rampa J (casa 4)
+        const pt = tr.pointAtDist(2 * TILE);
+        Object.assign(v, { x: pt.x, z: pt.z, heading: pt.heading, pieceIndex: pt.pieceIndex, vx: Math.sin(pt.heading) * sp, vz: Math.cos(pt.heading) * sp });
+        let apex = -Infinity;
+        let lip = 0;
+        let flying = false;
+        let landed = 0;
+        for (let i = 0; i < 60 * 5 && landed < jumps && !v.fell; i++) {
+          const from = tr.pieces[v.pieceIndex];
+          stepVehicle(v, sSpec, { ...emptyInput(), throttle: 1 }, tr, DT);
+          if (!v.grounded && !flying) {
+            flying = true;
+            lip = from.h0 + JUMP_HEIGHT;
+            apex = v.y;
+          }
+          if (flying) apex = Math.max(apex, v.y);
+          if (flying && v.grounded) {
+            flying = false;
+            landed++;
+            const q = tr.query(v.x, v.z, v.pieceIndex);
+            let g = q.pieceIndex;
+            while (tr.pieces[g].code !== 'G') g--;
+            const after = q.dist - (tr.pieces[g].startDist + tr.pieces[g].length);
+            const tag = `${mid} ${sp} m/s salto ${landed}`;
+            expect(apex - lip, `${tag}: ápice`).toBeLessThanOrEqual(1.5);
+            expect(after, `${tag}: pouso antes do fim do vão`).toBeGreaterThan(0);
+            expect(after, `${tag}: pouso longe`).toBeLessThanOrEqual(10);
+          }
+        }
+        expect(v.fell, `${mid} ${sp} caiu`).toBe(false);
+        expect(landed, `${mid} ${sp}`).toBe(jumps);
       }
     }
   });

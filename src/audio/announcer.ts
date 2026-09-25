@@ -75,7 +75,7 @@ const arenaCache = new WeakMap<BaseAudioContext, AudioNode>();
  * Cadeia de "arena" do locutor (itens 32/53: as falas medidas tinham loudness de pico 2–4 dB abaixo
  * da referência de locutor de luta; ver som() em scripts/evidencias.mjs): saturação leve (voz
  * "estourando" o microfone), corte de grave, presença em 3 kHz e corpo em 1,2 kHz, compressão
- * (a fala inteira no mesmo nível de grito) e reverb curto de ginásio (~0,4 s; fora no modo leve).
+ * (a fala inteira no mesmo nível de grito) e reverb curto de ginásio (~0,2 s; fora no modo leve).
  */
 export function arenaChain(ctx: BaseAudioContext, dest: AudioNode): AudioNode {
   const have = arenaCache.get(ctx);
@@ -120,17 +120,18 @@ export function arenaChain(ctx: BaseAudioContext, dest: AudioNode): AudioNode {
   comp.connect(makeup);
   makeup.connect(dest);
   if (!isAudioLite()) {
-    // reverb curto de ginásio: ruído estéreo decaindo em ~0,4 s, bem baixo (não embola a fala)
-    const len = Math.floor(ctx.sampleRate * 0.4);
+    // reverb curto de ginásio: ruído estéreo decaindo em ~0,2 s, bem baixo (rodada 11: com ~0,4 s
+    // a cauda borrava as sílabas do grito e a taxa de sílabas medida caía)
+    const len = Math.floor(ctx.sampleRate * 0.2);
     const ir = ctx.createBuffer(2, len, ctx.sampleRate);
     for (let ch = 0; ch < 2; ch++) {
       const d = ir.getChannelData(ch);
-      for (let i = 1; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (ctx.sampleRate * 0.08));
+      for (let i = 1; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (ctx.sampleRate * 0.035));
     }
     const verb = ctx.createConvolver();
     verb.buffer = ir;
     const wet = ctx.createGain();
-    wet.gain.value = 0.12;
+    wet.gain.value = 0.1;
     makeup.connect(verb);
     verb.connect(wet);
     wet.connect(dest);

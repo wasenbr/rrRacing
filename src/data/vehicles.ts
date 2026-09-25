@@ -8,7 +8,11 @@ import { CAR_SCALE, type VehicleSpec } from '../sim/vehicle';
  * De fábrica cada um tem o seu jeito (final de 151 a 164 km/h, 0–100 de 0,67 a 0,92 s), com a volta
  * solo parecida dentro do mesmo degrau de preço; com todas as melhorias a volta de cada carro supera a
  * do anterior (Dirt Devil < Marauder < Air Blade < Battle Trak < Havac) — ver CAR_POTENTIAL em
- * sim/garage.ts e o teste "progressão dos carros".
+ * sim/garage.ts e o teste "progressão dos carros". No máximo, volta solo do piloto simples das
+ * evidências (1ª pista): 13,37 · 12,88 · 12,68 · 12,43 · 12,12 s (pelo menos 0,15 s por degrau).
+ * Tamanho na tela (VISUAL_SCALE em render/cars/index.ts, contra o Havac, mapa de alturas de 10 cm):
+ * Dirt Devil 0,797 · Marauder 0,777 · Air Blade 0,66 (modelo 4,06 x 5,82 m, vol 45,6 m³ → sA 0,668,
+ * sV 0,607) · Battle Trak 0,755 · Havac 1.
  * - Dirt Devil: buggy — o melhor nas curvas (giro e aderência altos); final baixa. Plasma, óleo, pulo.
  * - Marauder: muscle car — mais final que o Dirt Devil, pesado e solto nas curvas. Plasma, óleo, pulo.
  * - Air Blade: esportivo leve — de longe o melhor arranque e ágil, mas a blindagem é a mais baixa.
@@ -30,14 +34,19 @@ export const VEHICLES: Record<string, VehicleSpec> = {
     armor: 100, front: 'laser', frontCharges: 5, rear: 'oil', rearCharges: 2, assist: 'jump', nitroCharges: 2, mass: 1.1,
   },
   airblade: {
-    ...base, id: 'airblade', name: 'Air Blade', maxSpeed: 44, accel: 45, steerRate: 3.5, grip: 7.5, nitroAccel: 28,
-    armor: 78, front: 'missile', frontCharges: 2, rear: 'mine', rearCharges: 2, assist: 'nitro', nitroCharges: 2, mass: 0.75,
+    ...base, id: 'airblade', name: 'Air Blade', maxSpeed: 44, accel: 45, steerRate: 3.7, grip: 8.5, nitroAccel: 28,
+    // rodada 10: blindagem 78 → 84 (ainda a mais baixa, também no máximo; ele liderava e explodia 1,4 vez
+    // por corrida) e mais ágil (giro 3,5 → 3,7, aderência 7,5 → 8,5): vencia só 8% das corridas mistas
+    armor: 84, front: 'missile', frontCharges: 2, rear: 'mine', rearCharges: 2, assist: 'nitro', nitroCharges: 2, mass: 0.75,
   },
   battletrak: {
-    ...base, id: 'battletrak', name: 'Battle Trak', maxSpeed: 44, accel: 34.5, steerRate: 3.2, grip: 17, nitroAccel: 30,
-    armor: 108, front: 'missile', frontCharges: 2, rear: 'scatter', rearCharges: 1, assist: 'nitro', nitroCharges: 2, traction: 'treads',
+    ...base, id: 'battletrak', name: 'Battle Trak', maxSpeed: 44, accel: 33.5, steerRate: 3.2, grip: 15.5, nitroAccel: 27,
+    // (rodada 10: vencia 51% das corridas mistas; blindagem 108 → 104, aderência 17 → 15,5, arranque
+    // 34,5 → 33,5, turbo 30 → 27, massa 1,15 → 1,05 — continua o mais blindado, o mais aderente, o que
+    // arranca menos e pesado; no barro e no gelo as esteiras seguem com vantagem)
+    armor: 104, front: 'missile', frontCharges: 2, rear: 'scatter', rearCharges: 1, assist: 'nitro', nitroCharges: 2, traction: 'treads',
     // esteiras pesadas: mais resistência ao rolar (final efetiva um pouco abaixo da nominal)
-    halfWidth: 1.25 * CAR_SCALE, mass: 1.15, brake: 52, drag: 0.18,
+    halfWidth: 1.25 * CAR_SCALE, mass: 1.05, brake: 52, drag: 0.18,
   },
   havac: {
     ...base, id: 'havac', name: 'Havac', maxSpeed: 45.5, accel: 36, steerRate: 2.7, grip: 6.2, nitroAccel: 32,

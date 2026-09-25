@@ -53,9 +53,9 @@ export const TRACKS: TrackDef[] = [
   t('bogmire', 1, 'Lamaçal', 'F S S R S> U S S U S R S S R D D R L S L S S L S S S S R S R S> S S S D S R U> S S', 5, [6, 7, 8, 32, 33], 3),
   t('bogmire', 2, 'Costa Azul', 'F L S S S S R S S D R S D S R S L S S R S U S U R S R S', 1, [25]),
   t('bogmire', 3, 'Mangue', 'F S S L S D L S R S S S L S D S L R L S U S L U R S L S', 3, [11, 13, 25]),
-  t('bogmire', 4, 'Brejo Fundo', 'F X S S S R S R S S> S X S S L S L S S L S X S X U S L S S L D S L S'),
-  t('bogmire', 5, 'Maré Alta', 'F R S S X S L S X S R S R S R S X S L S X S S R S S R S'),
-  t('bogmire', 6, 'Atoleiro', 'F S R U S S S S R S R S S S L D X S S L S U S S L S S L S S> S D X S R S', 2, [11, 18]),
+  t('bogmire', 4, 'Brejo Fundo', 'F X U S S R S R S S> S X D S L S L S S L S X S X U S L S S L D S L S'),
+  t('bogmire', 5, 'Maré Alta', 'F R S U X S L U X S R S R S R D X S L D X S S R S S R S'),
+  t('bogmire', 6, 'Atoleiro', 'F S R U S U S S R S R S S S L D X S S L S U S S L S S L D S> S D X S R S', 2, [11, 18]),
   // New Mojave
   t('newmojave', 1, 'Rodovia do Deserto', 'F L S S R S R S U S S R S L S R S S D S R S R S S L S X S S L S L S S L S X', 1, [14], 3),
   t('newmojave', 2, 'Cânion', 'F L R S D L S S> S S S L U S S L S S R S L R L S S L S S', 3, [8, 9, 10]),

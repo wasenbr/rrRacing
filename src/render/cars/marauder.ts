@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { bodySink, carFrame, cockpitRig, Kit, Linkage, sideProfile, wheel, wheelDrop, wheelTravel, type CarVisual } from './common';
+import { nitroThrust } from './kit';
 
 const WR = 0.86; // rodas de monster truck, como nos sprites do original
 const WX = 0.98; // centro das rodas
@@ -453,7 +454,7 @@ export function createMarauder(color: number, shadows: boolean): CarVisual {
   // faróis de milha na barra do teto
   k.add(new THREE.BoxGeometry(0.8, 0.05, 0.07), k.trim, 0, cabTop(-0.3) + 0.06, -0.3);
   for (const sx of [-0.3, -0.1, 0.1, 0.3]) k.add(new THREE.CylinderGeometry(0.07, 0.07, 0.07, 12).rotateX(Math.PI / 2), k.head, sx, cabTop(-0.3) + 0.12, -0.27);
-  const flames = k.flames([[-0.4, 1.18, -2.85], [0.4, 1.18, -2.85]], 0.8);
+  const flames = k.flames([[-0.4, 1.18, -2.28], [0.4, 1.18, -2.28]], 0.08, nitroThrust('marauder'));
 
   const wheels = [-1, 1].flatMap((sx) => [-1, 1].map((sz) => ({ sz, ...wheel(k, { radius: WR, width: 0.52, spokes: 5, knobby: true }, sx * WX, WR, sz > 0 ? WZF : WZR) })));
   // rodas e eixos no chassi: a carroceria balança por cima deles

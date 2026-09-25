@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { createRng, forwardX, forwardZ, leftX, leftZ, wrapAngle } from '../sim/math';
-import { JUMP_HEIGHT, type CenterPoint, type Track } from '../sim/track';
+import { JUMP_HEIGHT, JUMP_LIP, JUMP_RAMP_START, TILE, type CenterPoint, type Track } from '../sim/track';
 import type { Theme } from './themes';
 import { addTrackFeatures, roadMaps, wallMaps } from './trackFeatures';
 import { concreteNormal, fbm } from './textures';
@@ -30,23 +30,48 @@ function checkerTexture(): THREE.CanvasTexture {
   return tex;
 }
 
-/** Setas vermelhas pintadas no piso antes dos saltos (como no original). */
-function arrowTexture(): THREE.CanvasTexture {
+/**
+ * Aviso de salto: divisas amarelas com contorno preto no piso antes da rampa (as setas vermelhas
+ * ficam só para o warp, como no original) e faixa zebrada amarela e preta na borda do lábio.
+ */
+function chevronTexture(): THREE.CanvasTexture {
   return canvasTexture(128, 128, (ctx) => {
     ctx.clearRect(0, 0, 128, 128);
-    ctx.fillStyle = '#e8201a';
-    for (const y of [10, 52]) {
+    ctx.lineJoin = 'miter';
+    for (const y of [14, 60]) {
       ctx.beginPath();
-      ctx.moveTo(14, y + 40);
+      ctx.moveTo(10, y + 44);
       ctx.lineTo(64, y);
-      ctx.lineTo(114, y + 40);
-      ctx.lineTo(96, y + 40);
-      ctx.lineTo(64, y + 16);
-      ctx.lineTo(32, y + 40);
+      ctx.lineTo(118, y + 44);
+      ctx.lineTo(94, y + 44);
+      ctx.lineTo(64, y + 20);
+      ctx.lineTo(34, y + 44);
+      ctx.closePath();
+      ctx.fillStyle = '#ffd21a';
+      ctx.fill();
+      ctx.lineWidth = 5;
+      ctx.strokeStyle = '#111';
+      ctx.stroke();
+    }
+  });
+}
+
+function hazardStripeTexture(): THREE.CanvasTexture {
+  const t = canvasTexture(128, 32, (ctx) => {
+    ctx.fillStyle = '#111';
+    ctx.fillRect(0, 0, 128, 32);
+    ctx.fillStyle = '#ffd21a';
+    for (let x = -32; x < 160; x += 32) {
+      ctx.beginPath();
+      ctx.moveTo(x, 32);
+      ctx.lineTo(x + 16, 32);
+      ctx.lineTo(x + 32, 0);
+      ctx.lineTo(x + 16, 0);
       ctx.closePath();
       ctx.fill();
     }
   });
+  return t;
 }
 
 /**
@@ -478,25 +503,32 @@ function addStartLine(group: THREE.Group, track: Track): void {
   group.add(line);
 }
 
-/** Setas vermelhas antes dos saltos e faixa amarela na borda da rampa. */
+/** Aviso de salto: divisas amarelas e pretas antes da rampa e faixa zebrada no lábio (borda do J). */
 function addJumpMarks(group: THREE.Group, track: Track): void {
   const W = track.halfWidth;
-  const arrowMat = new THREE.MeshStandardMaterial({ map: arrowTexture(), transparent: true, roughness: 0.6, polygonOffset: true, polygonOffsetFactor: -2 });
-  const arrowGeo = new THREE.PlaneGeometry(3.2, 3.2).rotateX(-Math.PI / 2);
+  const chevMat = new THREE.MeshStandardMaterial({ map: chevronTexture(), transparent: true, roughness: 0.6, polygonOffset: true, polygonOffsetFactor: -2 });
+  const chevGeo = new THREE.PlaneGeometry(3.2, 3.2).rotateX(-Math.PI / 2);
+  const zebra = hazardStripeTexture();
+  zebra.repeat.set((W * 2) / 2.2, 1);
+  const zebraMat = new THREE.MeshStandardMaterial({ map: zebra, roughness: 0.6, polygonOffset: true, polygonOffsetFactor: -2 });
+  const slope = Math.atan2(JUMP_HEIGHT, (JUMP_LIP - JUMP_RAMP_START) * TILE);
   for (const p of track.pieces) {
     if (p.code !== 'J') continue;
     for (const lat of [-W * 0.45, W * 0.45]) {
-      const m = new THREE.Mesh(arrowGeo, arrowMat);
+      const m = new THREE.Mesh(chevGeo, chevMat);
       const s = p.length * 0.25;
       m.position.set(p.x0 + forwardX(p.heading0) * s + leftX(p.heading0) * lat, p.h0 + 0.03, p.z0 + forwardZ(p.heading0) * s + leftZ(p.heading0) * lat);
       m.rotation.y = p.heading0 + Math.PI;
       group.add(m);
     }
-    const s = p.length * 0.74;
-    const edge = new THREE.Mesh(new THREE.PlaneGeometry(W * 2, 0.45), new THREE.MeshStandardMaterial({ color: 0xffd21a, roughness: 0.6 }));
-    edge.rotation.set(-Math.PI / 2, 0, 0);
-    edge.rotateZ(p.heading0);
-    edge.position.set(p.x0 + forwardX(p.heading0) * s, p.h0 + JUMP_HEIGHT * (0.44 / 0.45) + 0.03, p.z0 + forwardZ(p.heading0) * s);
+    // faixa zebrada de 1 m no alto da rampa, rente ao lábio, inclinada como o piso
+    const len = 1;
+    const s = p.length * JUMP_LIP - len / 2;
+    const h = JUMP_HEIGHT * ((s / p.length - JUMP_RAMP_START) / (JUMP_LIP - JUMP_RAMP_START));
+    const edge = new THREE.Mesh(new THREE.PlaneGeometry(W * 2, len), zebraMat);
+    edge.rotation.set(0, p.heading0, 0, 'YXZ');
+    edge.rotateX(-Math.PI / 2 - slope);
+    edge.position.set(p.x0 + forwardX(p.heading0) * s, p.h0 + h + 0.03, p.z0 + forwardZ(p.heading0) * s);
     group.add(edge);
   }
 }
