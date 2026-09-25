@@ -4,8 +4,8 @@ import { carThumbnail, itemThumbnail, SHOWROOM_COLOR, type CarThumbStyle, type S
 import { planetThumbnail } from '../render/planetThumbs';
 import type { ThemeId } from '../sim/track';
 import {
-  canAdvanceEarly, CAMPAIGN_PRIZES, carsForSale, DIVISIONS, PLANETS, POINTS, seasonInfo, START_MONEY, type CampaignState, type OpponentSetup, type PlanetDef,
-  type RaceOutcome, RIVALS, CHAMPION_BONUS, seasonSchedule,
+  bossBonus, CAMPAIGN_RULES, canAdvanceEarly, carsForSale, DIVISIONS, planetCount, planetForLevel, PLANETS, POINTS, raceKind, seasonInfo, shopLevel, START_MONEY,
+  type CampaignState, type OpponentSetup, type PlanetDef, type RaceKind, type RaceOutcome, RIVALS, CHAMPION_BONUS, seasonSchedule,
 } from '../sim/campaign';
 import {
   armamentText, ATTRIBUTE_LABEL, buildSpec, CAR_PRICES, carAttributes, CHARACTERS, CHARGE_KINDS, chargePrice, chargeWeapon, MAX_UPGRADE, maxExtraCharges,
@@ -40,6 +40,16 @@ const DIFF_HELP: Record<Difficulty, string> = {
 };
 
 const money = (n: number) => `$${n.toLocaleString('pt-BR')}`;
+
+/** Resumo das regras da campanha numa dificuldade (tela de nova campanha). */
+function campaignRulesText(d: Difficulty): string {
+  const r = CAMPAIGN_RULES[d];
+  const last = PLANETS[r.planets - 1].name;
+  const races = `${Math.min(...r.races)}–${Math.max(...r.races)}`;
+  const cash = r.money === 1 ? 'dinheiro normal' : r.money > 1 ? `+${Math.round((r.money - 1) * 100)}% de dinheiro` : `${Math.round((r.money - 1) * 100)}% de dinheiro`;
+  const tries = r.playoffTries === 1 ? '1 repescagem' : `${r.playoffTries} repescagens`;
+  return `${r.planets} planetas (até ${esc(last)}) · ${races} corridas por divisão · meta ${Math.round(r.goal * 100)}% dos pontos · ${tries} · ${cash}`;
+}
 const hex = (c: number) => `#${c.toString(16).padStart(6, '0')}`;
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 
@@ -178,6 +188,15 @@ export interface CampaignReport {
   /** pontos necessários para subir na divisão em que a corrida foi disputada */
   promote: number;
   label: string;
+  /** tipo da corrida disputada (normal, duelo do chefe ou repescagem) e o chefe do planeta */
+  kind: RaceKind;
+  boss: string;
+  /** bônus por derrotar o chefe */
+  bonus: number;
+  /** repescagem: duelos que ainda restam */
+  playoffLeft: number;
+  /** planetas da campanha nesta dificuldade */
+  planets: number;
 }
 
 /* ------------------------------------------------------------------ */
@@ -321,8 +340,15 @@ function planetImg(theme: ThemeId | undefined, size = 64, cls = ''): string {
 }
 
 /** Rota da campanha: os 6 planetas em ordem, com o atual em destaque e os vencidos marcados. */
-function planetRoute(current: number, champion = false): string {
-  return `<div class="planet-route">${PLANETS.map((p, i) => {
+/** "Chem VI, Drakonis e Bogmire" (os planetas da campanha). */
+function planetList(count: number): string {
+  const names = PLANETS.slice(0, count).map((p) => p.name);
+  return names.length > 1 ? `${names.slice(0, -1).join(', ')} e ${names[names.length - 1]}` : names[0];
+}
+
+/** Rota dos planetas da campanha (só os da dificuldade: Fácil 3, Normal 5, Difícil 6). */
+function planetRoute(current: number, champion = false, count = PLANETS.length): string {
+  return `<div class="planet-route">${PLANETS.slice(0, count).map((p, i) => {
     const st = champion || i < current ? 'done' : i === current ? 'now' : 'next';
     return `<div class="pr-step ${st}" title="${esc(p.name)}">${planetImg(p.theme, i === current && !champion ? 72 : 48)}<small>${esc(p.name)}</small></div>`;
   }).join('<i class="pr-link"></i>')}</div>`;
@@ -517,7 +543,8 @@ export class Menus {
   }
 
   private difficultyPicker(group: string): string {
-    return `<div class="diffs">${DIFFICULTIES.map((d) => `<button class="diff d-${d}" data-diff="${d}" data-group="${group}"><b>${DIFFICULTY_LABEL[d]}</b><small>${DIFF_HELP[d]}</small></button>`).join('')}</div>`;
+    const help = (d: Difficulty) => (group === 'new' ? `${DIFF_HELP[d]}<br>${campaignRulesText(d)}` : DIFF_HELP[d]);
+    return `<div class="diffs">${DIFFICULTIES.map((d) => `<button class="diff d-${d}" data-diff="${d}" data-group="${group}"><b>${DIFFICULTY_LABEL[d]}</b><small>${help(d)}</small></button>`).join('')}</div>`;
   }
 
   private get allCars(): VehicleSpec[] {
@@ -752,8 +779,9 @@ export class Menus {
       <div class="card wide">
         <h2>NOVA CAMPANHA</h2>
         ${planetRoute(0)}
-        <p class="sub center">Comece em ${esc(PLANETS[0].name)}, Divisão B, com ${money(START_MONEY)}. Some ${PLANETS[0].promote} pontos em ${PLANETS[0].races} corridas para subir
-          (1º: ${POINTS[0]} pts e ${money(CAMPAIGN_PRIZES[0])} · 2º: ${POINTS[1]} · 3º: ${POINTS[2]}).</p>
+        <p class="sub center">Comece em ${esc(PLANETS[0].name)}, Divisão B, com ${money(START_MONEY)}. Some pontos para subir de divisão
+          (1º: ${POINTS[0]} pts · 2º: ${POINTS[1]} · 3º: ${POINTS[2]}). A Divisão A de cada planeta fecha com um duelo contra o chefe local;
+          se faltar ponto, a repescagem é um duelo contra ele. A dificuldade decide até onde vai a galáxia.</p>
         <h3>Escolha seu piloto</h3>
         ${this.charPick('new')}
         <p class="pw-msg secret-msg"></p>
@@ -811,25 +839,43 @@ export class Menus {
     const u = s.car.upgrades;
     const base = this.vehicles[s.car.vehicleId];
     const early = canAdvanceEarly(s);
+    const kind = raceKind(s);
+    const boss = d.planet.local;
+    const raceCell = kind === 'playoff' ? 'REPESCAGEM' : kind === 'boss' ? 'CHEFE' : `${s.race + 1}/${season.races}`;
+    const triesText = (n: number) => (n === 1 ? '<b>Última chance</b> — se perder, a divisão recomeça' : `Restam <b>${n}</b> tentativas`);
+    const duel =
+      kind === 'boss'
+        ? `<div class="notice boss"><b>DUELO CONTRA O CHEFE:</b> só você e ${esc(boss)}, com o carro turbinado e armado até os dentes.
+            ${s.points >= season.promote ? 'Você já tem os pontos: vença e deixe o planeta!' : `Vença para somar ${POINTS[0]} pontos (faltam ${season.promote - s.points}).`}
+            Prêmio extra: <b class="gold">${money(bossBonus(s))}</b>.</div>`
+        : kind === 'playoff'
+          ? `<div class="notice boss"><b>REPESCAGEM:</b> ainda dá! Vença ${esc(boss)} no duelo e ${s.division === 0 ? 'suba de divisão' : 'deixe o planeta'}.
+              ${triesText(s.playoff ?? 1)}. Prêmio extra: <b class="gold">${money(bossBonus(s))}</b>.</div>`
+          : '';
+    const earlyText =
+      s.division === 1
+        ? `Você já tem os pontos! Continue correndo para ganhar dinheiro ou <button class="inline-go" data-act="advance">desafiar ${esc(boss)} agora ${icon('arrowRight')}</button>`
+        : `Você já tem os pontos! Continue correndo aqui para ganhar dinheiro ou <button class="inline-go" data-act="advance">subir agora ${icon('arrowRight')}</button>`;
     this.show(`
       <div class="card wide">
         <div class="hub-head">
           <div class="hub-planet">${planetImg(d.planet.theme, 72)}<span><small>PLANETA</small><b>${esc(d.planet.name)}</b></span></div>
           <div><small>DIVISÃO</small><b>${div}</b></div>
-          <div><small>CORRIDA</small><b>${s.race + 1}/${season.races}</b></div>
+          <div><small>CORRIDA</small><b>${raceCell}</b></div>
           <div><small>DINHEIRO</small><b class="gold">${money(s.money)}</b></div>
         </div>
-        ${planetRoute(s.planet, s.champion)}
-        <div class="points"><span>Pontos: <b>${s.points}</b> / ${season.promote} para subir</span><div class="bar"><i style="width:${pct}%"></i></div></div>
+        ${planetRoute(s.planet, s.champion, planetCount(s))}
+        <div class="points"><span>Pontos: <b>${s.points}</b> / ${season.promote} para subir${s.division === 1 && !s.champion ? ` e vencer ${esc(boss)}` : ''}</span><div class="bar"><i style="width:${pct}%"></i></div></div>
         ${this.seasonCalendar(s)}
         ${notice ? `<div class="notice">${iconizeHtml(notice)}</div>` : ''}
-        ${early ? `<div class="notice promoted">Você já tem os pontos! Continue correndo aqui para ganhar dinheiro ou <button class="inline-go" data-act="advance">subir agora ${icon('arrowRight')}</button></div>` : ''}
+        ${duel}
+        ${early ? `<div class="notice promoted">${earlyText}</div>` : ''}
         <div class="hub-grid">
           <div class="panel">
             <h3>Próxima pista</h3>
             ${trackImg(d.track.def, 320, 200)}
             <p class="trk-name"><b>${esc(d.track.def.name)}</b> · ${d.track.def.laps} voltas${d.track.def.slime ? ' · poças de gosma' : ''}</p>
-            <h3>Rivais</h3>
+            <h3>${kind === 'normal' ? 'Rivais' : 'Chefe do planeta'}</h3>
             <ul class="rivals">${d.opponents
               .map(
                 (o) => `<li><div class="rv-portrait">${portraitSvg(o.name, 76)}<span class="nameplate mini"><span>${esc(o.name)}</span></span></div><div><b style="color:${hex(o.color)}">${esc(o.spec.name)}</b><small>carro rival</small></div>${carImg(o.spec.id, o.color, 96, 'transparent')}</li>`,
@@ -869,7 +915,7 @@ export class Menus {
         }
         const mark = r.done ? '✓ ' : r.current ? '▶ ' : '';
         const style = r.done ? 'opacity:.55' : r.current ? 'color:var(--accent);font-weight:800' : '';
-        return `<li style="${style}">${mark}${i + 1}. ${esc(name)}</li>`;
+        return `<li style="${style}">${mark}${i + 1}. ${esc(name)}${r.boss ? ` · <b>chefe: ${esc(PLANETS[s.planet].local)}</b>` : ''}</li>`;
       })
       .join('');
     return `<details class="season-cal small-note"><summary>Calendário — ${esc(PLANETS[s.planet].name)}, Divisão ${DIVISIONS[s.division]} (${seasonSchedule(s).length} corridas)</summary><ol style="list-style:none;padding:0;margin:6px 0;columns:2;font-size:12px">${races}</ol></details>`;
@@ -894,9 +940,11 @@ export class Menus {
           }
           const price = upgradePrice(s.car, k);
           const vid = s.car.vehicleId;
+          // a loja só vende até o nível liberado neste planeta (acompanha os rivais)
+          const lockedAt = price !== null && lvl >= shopLevel(s) ? planetForLevel(lvl + 1) : undefined;
           const next = upgradeName(vid, k, lvl + 1);
           return `<div class="shop-row"><div class="upg-icon">${itemImg(k)}</div><div class="grow"><b>${upgradeLabel(vid, k)}: ${upgradeName(vid, k, lvl)}</b> ${pips(lvl, MAX_UPGRADE)}<small>${upgradeHelp(vid, k)}${next ? ` · próximo: <b class="upg-next">${next}</b>` : ''}</small>${vbase ? upgradePreview(vbase, s.car, k) : ''}</div>
-            ${price === null ? '<span class="maxed">MÁXIMO</span>' : `<button class="buy" data-upgrade="${k}" ${price > s.money ? 'disabled' : ''}>${money(price)}</button>`}</div>`;
+            ${price === null ? '<span class="maxed">MÁXIMO</span>' : lockedAt ? `<span class="maxed">${icon('lock')} CHEGA EM ${esc(lockedAt.name.toUpperCase())}</span>` : `<button class="buy" data-upgrade="${k}" ${price > s.money ? 'disabled' : ''}>${money(price)}</button>`}</div>`;
         }).join('');
     } else if (this.shopTab === 'weapons') {
       const baseCar = d.vehicles[s.car.vehicleId];
@@ -1119,16 +1167,16 @@ export class Menus {
     this.show(`
       <div class="card wide champion-card">
         <h2>${icon('trophy')} CAMPEÃO DA GALÁXIA!</h2>
-        ${planetRoute(PLANETS.length, true)}
+        ${planetRoute(planetCount(s), true, planetCount(s))}
         <div class="me-row">${portraitSvg(d.character.id, 96)}<div><b>${esc(d.character.name)}</b><small>${esc(d.character.homeworld)} · ${esc(DIFFICULTY_LABEL[diff])}</small></div>${carImg(s.car.vehicleId, s.color, 160, 'transparent')}</div>
-        <div class="notice champion"><b>Loudmouth Larry:</b> “${esc(d.character.name)} passou por Chem VI, Drakonis, Bogmire, New Mojave, Nho e Inferno e não sobrou ninguém de pé! Temos um novo campeão — e que venha o rock!”</div>
+        <div class="notice champion"><b>Loudmouth Larry:</b> “${esc(d.character.name)} passou por ${esc(planetList(planetCount(s)))} e não sobrou ninguém de pé! Temos um novo campeão — e que venha o rock!”</div>
         <div class="hub-head">
           ${stat('CORRIDAS', String(st.races))}
           ${stat('VITÓRIAS', `${st.wins} (${winPct}%)`)}
           ${stat('ABATES', String(st.kills))}
           ${stat('GANHOS', money(st.earnings))}
         </div>
-        <div class="notice promoted">Recompensa: troféu da galáxia e <b class="gold">${money(CHAMPION_BONUS)}</b> de prêmio (saldo: ${money(s.money)}). A garagem continua aberta: corra no Inferno para gastar o prêmio.</div>
+        <div class="notice promoted">Recompensa: troféu da galáxia e <b class="gold">${money(CHAMPION_BONUS)}</b> de prêmio (saldo: ${money(s.money)}). A garagem continua aberta: corra em ${esc(PLANETS[planetCount(s) - 1].name)} para gastar o prêmio.</div>
         <button class="go" data-act="hub">Voltar à garagem ${icon('arrowRight')}</button>
         <button data-act="main">Menu principal</button>
       </div>`);
@@ -1138,12 +1186,31 @@ export class Menus {
     const best = lapTimes.length ? Math.min(...lapTimes) : 0;
     const me = rows.find((r) => r.me);
     const title =
-      report?.outcome === 'champion' ? 'CAMPEÃO!' : report?.outcome === 'promoted' ? 'PROMOVIDO!' : me && me.place === 1 ? 'VITÓRIA!' : 'RESULTADO';
+      report?.outcome === 'champion'
+        ? 'CAMPEÃO!'
+        : report?.outcome === 'promoted'
+          ? 'PROMOVIDO!'
+          : report && report.kind !== 'normal' && me?.place === 1
+            ? 'CHEFE DERROTADO!'
+            : me && me.place === 1
+              ? 'VITÓRIA!'
+              : 'RESULTADO';
+    const tries = (n: number) => (n === 1 ? '<b>última chance</b>' : `restam <b>${n}</b> tentativas`);
     const campaignBlock = report
       ? `<div class="notice ${report.outcome}">
-          ${report.outcome === 'champion' ? `${planetRoute(PLANETS.length, true)}Você venceu a galáxia inteira! Lenda do rock.` : ''}
+          ${report.bonus ? `Você derrotou ${esc(report.boss)}! Bônus de chefe: <b class="gold">${money(report.bonus)}</b><br>` : ''}
+          ${report.outcome === 'champion' ? `${planetRoute(report.planets, true, report.planets)}Você venceu a galáxia inteira! Lenda do rock.` : ''}
           ${report.outcome === 'promoted' ? `${planetImg(PLANETS.find((p) => report.label.startsWith(p.name))?.theme, 112, 'promo')}Subiu para: <b>${report.label}</b>` : ''}
-          ${report.outcome === 'retry' ? `Não somou ${report.promote} pontos. A temporada recomeça — melhore o carro na loja!` : ''}
+          ${report.outcome === 'retry' ? (report.kind === 'playoff' ? `${esc(report.boss)} venceu a repescagem. A divisão recomeça — melhore o carro na loja!` : `Não somou ${report.promote} pontos. A divisão recomeça — melhore o carro na loja!`) : ''}
+          ${
+            report.outcome !== 'playoff'
+              ? ''
+              : report.kind === 'playoff'
+                ? `${esc(report.boss)} levou essa. Nova repescagem: ${tries(report.playoffLeft)}.`
+                : report.kind === 'boss' && report.points >= report.promote
+                  ? `${esc(report.boss)} venceu o duelo. Repescagem: vença-o para deixar o planeta (${tries(report.playoffLeft)}).`
+                  : `Faltaram pontos (${report.points}/${report.promote}). Repescagem: vença ${esc(report.boss)} no duelo (${tries(report.playoffLeft)}).`
+          }
           ${report.outcome === 'continue' ? `+${report.pointsEarned} pontos · total ${report.points}/${report.promote}` : ''}
         </div>`
       : '';

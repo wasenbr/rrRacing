@@ -16,6 +16,8 @@ const queued = new Set<string>();
 let scheduled = false;
 let scrollingUntil = 0;
 let listening = false;
+/** corrida na tela: a fila espera (sem requestIdleCallback, o Safari rodava um trabalho a cada 40 ms) */
+let paused = false;
 
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
@@ -39,14 +41,21 @@ function listenScroll(): void {
   document.addEventListener('wheel', mark, { capture: true, passive: true });
 }
 
+/** Pausa a fila durante a corrida; ao soltar, volta de onde parou. */
+export function setIdlePaused(on: boolean): void {
+  paused = on;
+  if (!on) schedule();
+}
+
 function schedule(): void {
-  if (scheduled || !queue.length) return;
+  if (paused || scheduled || !queue.length) return;
   scheduled = true;
   requestIdle(tick);
 }
 
 function tick(deadline: Deadline): void {
   scheduled = false;
+  if (paused) return;
   const wait = scrollingUntil - now();
   if (wait > 0) {
     // rolando: espera a rolagem parar (150 ms sem eventos) antes de voltar a gerar

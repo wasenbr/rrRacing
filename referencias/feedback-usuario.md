@@ -121,3 +121,12 @@ Cada item precisa ser atendido e verificado pelos avaliadores.
     colados. O polegar do volante escorrega para cima dos botões de arma e o carro não responde
     direito. Botões maiores, mais espaço entre o volante e as armas, e o volante não pode disparar
     arma por engano.
+
+# Retorno do usuário (2026-09-24, campanha)
+
+56. Campanha divertida e desafiadora de acordo com a dificuldade escolhida. Inspirada no original
+    (planetas, divisões B/A, Rip/Shred/piloto local, pontos, loja), mas com inovações que melhorem
+    a experiência.
+57. Economia equilibrada com as compras: o dinheiro ganho tem que casar com o que a loja oferece
+    em cada planeta (nem sobrar cedo, nem faltar para acompanhar os rivais).
+58. Um final marcante ao "zerar" a campanha.

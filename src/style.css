@@ -355,6 +355,7 @@ tr.total td { font-weight: 800; color: var(--accent); border-bottom: none; }
 .notice { margin: 10px 0; padding: 10px 12px; border-radius: 10px; background: rgba(242, 195, 24, 0.12); border: 1px solid rgba(242, 195, 24, 0.4); text-align: center; }
 .notice.retry { background: rgba(224, 52, 42, 0.15); border-color: rgba(224, 52, 42, 0.5); }
 .notice.promoted, .notice.champion { background: rgba(92, 255, 92, 0.12); border-color: rgba(92, 255, 92, 0.5); }
+.notice.boss, .notice.playoff { background: rgba(160, 60, 230, 0.16); border-color: rgba(190, 90, 255, 0.6); }
 .hub-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .panel { background: rgba(0, 0, 0, 0.25); border-radius: 12px; padding: 4px 12px 12px; }
 .hub-map { width: 100%; max-width: 240px; display: block; margin: 0 auto; }

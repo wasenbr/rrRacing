@@ -63,6 +63,11 @@ export const KILL_BOUNTY = 1000;
 /** "lapping bonus": abrir uma volta sobre um rival */
 export const LAP_BONUS = 5000;
 const RESPAWN_TIME = 2.5;
+
+/** Valor em dinheiro com o multiplicador da corrida (arredondado a $100). */
+export function scaledMoney(world: World, base: number): number {
+  return Math.round((base * world.moneyScale) / 100) * 100;
+}
 const FALL_RESPAWN = 1.6;
 const INVULN_TIME = 2;
 const CAR_RADIUS = 1.25 * CAR_SCALE;
@@ -174,6 +179,8 @@ export interface World {
   /** prêmio em dinheiro por colocação */
   prizes: number[];
   difficulty: Difficulty;
+  /** multiplicador do dinheiro da pista, dos abates e do bônus de volta (campanha: planeta × dificuldade) */
+  moneyScale: number;
 }
 
 /** Posições do grid: duas filas logo antes da linha, os primeiros da lista largam na frente. */
@@ -185,7 +192,7 @@ function gridSlot(track: Track, slot: number): { x: number; z: number; heading: 
   return { x: p.x + leftX(p.heading) * side * lat, z: p.z + leftZ(p.heading) * side * lat, heading: p.heading, h: p.h, pieceIndex: p.pieceIndex };
 }
 
-export function createWorld(track: Track, entries: RacerEntry[], laps: number, seed = 1, prizes: number[] = PRIZES, difficulty: Difficulty = 'normal'): World {
+export function createWorld(track: Track, entries: RacerEntry[], laps: number, seed = 1, prizes: number[] = PRIZES, difficulty: Difficulty = 'normal', moneyScale = 1): World {
   const racers: Racer[] = entries.map((e, i) => {
     const g = gridSlot(track, i);
     const car = createVehicleState(e.spec, g.x, g.z, g.heading, g.h);
@@ -268,6 +275,7 @@ export function createWorld(track: Track, entries: RacerEntry[], laps: number, s
     nextId: 1,
     prizes,
     difficulty,
+    moneyScale,
   };
   updatePlaces(world);
   return world;
@@ -302,7 +310,7 @@ function damage(world: World, target: Racer, by: number, amount: number, bountyO
     if (killer && by !== target.id) {
       killer.kills++;
       // pelo FAQ do original, matar com Bear Claw Mines não dá "attack bonus"
-      bounty = bountyOk ? KILL_BOUNTY : 0;
+      bounty = bountyOk ? scaledMoney(world, KILL_BOUNTY) : 0;
       killer.money += bounty;
     }
     world.events.push({ type: 'explode', racer: target.id, by, x: target.car.x, y: target.car.y, z: target.car.z, bounty });
@@ -525,7 +533,7 @@ function stepPickups(world: World, dt: number): void {
     for (const r of world.racers) {
       if (!r.alive) continue;
       if (Math.hypot(r.car.x - p.x, r.car.z - p.z) < 1.9 && Math.abs(r.car.y - p.y) < 2) {
-        if (p.kind === 'money') r.money += PICKUP_MONEY;
+        if (p.kind === 'money') r.money += scaledMoney(world, PICKUP_MONEY);
         else r.armor = Math.min(r.spec.armor, r.armor + PICKUP_ARMOR);
         p.active = false;
         p.respawn = 15;
@@ -663,7 +671,7 @@ export function stepWorld(world: World, humanInputs: Record<number, ControlInput
       } else if (ev?.type === 'finish') {
         r.finishPlace = ++world.finishedCount;
         r.money += world.prizes[r.finishPlace - 1] ?? 0;
-        if (r.finishPlace === 1) r.money += LAP_BONUS * Object.values(r.lapsOver).reduce((a, b) => a + b, 0);
+        if (r.finishPlace === 1) r.money += scaledMoney(world, LAP_BONUS) * Object.values(r.lapsOver).reduce((a, b) => a + b, 0);
         world.events.push({ type: 'finish', racer: r.id, place: r.finishPlace });
       }
     }
@@ -695,7 +703,7 @@ function checkLapping(world: World): void {
       if (laps > (a.lapsOver[b.id] ?? 0)) {
         // o dinheiro só entra se ele vencer a corrida (ver 'finish')
         a.lapsOver[b.id] = laps;
-        world.events.push({ type: 'lapped', racer: a.id, victim: b.id, bonus: LAP_BONUS });
+        world.events.push({ type: 'lapped', racer: a.id, victim: b.id, bonus: scaledMoney(world, LAP_BONUS) });
       }
     }
   }

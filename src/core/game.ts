@@ -8,7 +8,7 @@ import { sfxAssist, sfxBump, sfxBurn, sfxCountdown, sfxDrop, sfxExplosion, sfxFa
 import { trackById, TRACKS } from '../data/tracks';
 import { VEHICLES } from '../data/vehicles';
 import {
-  advanceEarly, applyRaceResult, currentPlanet, difficultyOf, currentTrackId, decodeSave, DIVISIONS, encodeSave, newCampaign, opponentsFor, PLANETS, playerSpec, prizesFor,
+  advanceEarly, applyRaceResult, currentPlanet, moneyScale, planetCount, seasonInfo, shopLevel, difficultyOf, currentTrackId, decodeSave, DIVISIONS, encodeSave, newCampaign, opponentsFor, PLANETS, playerSpec, prizesFor,
   type CampaignState,
 } from '../sim/campaign';
 import { buildSpec, carSwapCost, CHARACTERS, chargePrice, newCarSetup, upgradePrice } from '../sim/garage';
@@ -35,6 +35,7 @@ import { createWorld, PRIZES, stepWorld, type Difficulty, type Racer, type Racer
 import type { AiProfile } from '../sim/ai';
 import { Hud, ICONS, formatTime, type HudCar, type HudData } from '../ui/hud';
 import { icon } from '../ui/icons';
+import { setIdlePaused } from '../ui/idleQueue';
 import { COLORS, Menus, WEAPON_LABEL, type CampaignReport, type HubData, type LobbyView, type NewCampaignOptions, type OnlineOptions, type QuickOptions, type ResultRow } from '../ui/menus';
 import { NetClient, NetHost, netErrorText, normalizeCode } from '../net/peer';
 import { applySnapshot, MAX_PLAYERS, parseHello, parseLobbyPlayers, parseStart, pickColor, sanitizeInput, takeSnapshot, validateSnap, cleanName, type ClientMsg, type HostMsg, type LobbyPlayer, type OnlineRace, type WorldSnap } from '../net/sync';
@@ -165,6 +166,8 @@ interface RaceSetup {
   playerSpec: VehicleSpec;
   prizes: number[];
   difficulty: Difficulty;
+  /** multiplicador do dinheiro da pista e dos abates (campanha) */
+  moneyScale?: number;
   /** piloto do jogador (retrato nos resultados) */
   pilot: string;
   /** corrida online: grid montado pelo host e o carro deste jogador */
@@ -230,6 +233,8 @@ export class Game {
   private redraw = true;
   /** a resolução atual é a dos menus (reduzida) */
   private menuRes = false;
+  /** fila de miniaturas/retratos dos menus parada (corrida na tela) */
+  private idlePaused = false;
   /** corrida limitada a 30 qps (nível baixo em aparelho lento) e média do tempo de quadro que decide */
   private cap30 = false;
   private slowAvg = 1 / 60;
@@ -543,6 +548,7 @@ export class Game {
       playerSpec: playerSpec(c, VEHICLES),
       prizes: prizesFor(c),
       difficulty: difficultyOf(c),
+      moneyScale: moneyScale(c),
       pilot: c.characterId,
     };
   }
@@ -624,7 +630,7 @@ export class Game {
       this.playerId = entries.length - 1;
       // ?laps=N na URL muda o número de voltas (útil para testar)
       const laps = Number(new URLSearchParams(location.search).get('laps')) || this.track.def.laps;
-      this.world = createWorld(this.track, entries, laps, (Date.now() & 0xffff) + 1, setup.prizes, setup.difficulty);
+      this.world = createWorld(this.track, entries, laps, (Date.now() & 0xffff) + 1, setup.prizes, setup.difficulty, setup.moneyScale);
     }
 
     const old = this.views;
@@ -792,6 +798,12 @@ export class Game {
     if (menuRes !== this.menuRes) {
       this.menuRes = menuRes;
       this.resize();
+    }
+    // pré-geração de miniaturas e retratos só fora da corrida (no iPhone ela disputava CPU e GPU)
+    const racingView = this.phase === 'countdown' || this.phase === 'racing' || (this.phase === 'finished' && !this.resultsShown);
+    if (racingView !== this.idlePaused) {
+      this.idlePaused = racingView;
+      setIdlePaused(racingView);
     }
     if (this.preparing && this.phase === 'countdown') return;
     // sem contexto WebGL não há o que desenhar (volta no webglcontextrestored)
@@ -1212,11 +1224,23 @@ export class Game {
     let report: CampaignReport | null = null;
     if (this.setup.mode === 'campaign' && this.campaign) {
       const p = this.player;
-      const promote = currentPlanet(this.campaign).promote;
+      const promote = seasonInfo(this.campaign).promote;
+      const boss = currentPlanet(this.campaign).local;
       const res = applyRaceResult(this.campaign, p.place, p.money, p.kills);
       this.championPending = res.outcome === 'champion';
       saveCampaign(this.campaign);
-      report = { outcome: res.outcome, pointsEarned: res.pointsEarned, points: this.campaign.points, promote, label: this.campaignLabel() };
+      report = {
+        outcome: res.outcome,
+        kind: res.kind,
+        pointsEarned: res.pointsEarned,
+        points: this.campaign.points,
+        promote,
+        label: this.campaignLabel(),
+        boss,
+        bonus: res.bonus,
+        playoffLeft: res.playoffLeft,
+        planets: planetCount(this.campaign),
+      };
     }
     this.hud.clearMessage();
     this.music.setMood('menu');
@@ -1345,7 +1369,8 @@ export class Game {
       },
       buyUpgrade: (kind: 'engine' | 'tires' | 'shocks' | 'armor') => {
         const c = this.campaign!;
-        this.buy(upgradePrice(c.car, kind), () => c.car.upgrades[kind]++, 'Melhoria');
+        // a loja só vende peças até o nível liberado neste planeta
+        this.buy(c.car.upgrades[kind] < shopLevel(c) ? upgradePrice(c.car, kind) : null, () => c.car.upgrades[kind]++, 'Melhoria');
       },
       buyCharge: (kind: 'front' | 'rear' | 'nitro') => {
         const c = this.campaign!;
@@ -1359,6 +1384,7 @@ export class Game {
         const out = advanceEarly(c);
         saveCampaign(c);
         if (out === 'champion') this.showChampion();
+        else if (out === 'continue') this.toHub(`Hora do chefe! Vença ${currentPlanet(c).local} no duelo para deixar ${currentPlanet(c).name}.`);
         else this.toHub(`Promovido! Agora em ${this.campaignLabel()}.`);
       },
       loadSlot: (slot: number) => {
