@@ -4,7 +4,7 @@ import { VEHICLES } from '../data/vehicles';
 import {
   advanceEarly, applyRaceResult, bossBonus, bossOf, campaignChargePrice, CAMPAIGN_RULES, CHARGE_ROOM, chargeScale, canAdvanceEarly, carComingSoon, carsForSale, CHAMPION_BONUS, currentPlanet, currentTrackId, decodeSave, encodeSave,
   forfeitCosts, forfeitRace, HOARD_CAP, HOARD_MONEY, hoardFactor, BOSS_BONUS, buyPaint, CAMPAIGN_PRIZES, CHAMPION_PAINT, paintPrice, prizeScale, racesIn, markRaceStarted, moneyScale, resolveAbandonedRace, shopHeadroom, newCampaign, opponentsFor, PLANET_MONEY, planetCount, planetForLevel, PLANETS, planetTracks, playerSpec, POINTS, prizesFor, raceKind, RIVAL_LEVEL,
-  coopOwner, coopView, rivalAggression, rivalEngine, rivalExtraCharges, rivalLevel, rivalPace, RIVALS, seasonInfo, seasonSchedule, shopLevel, START_MONEY, tier, type CampaignState,
+  COOP_RIVALS, coopOwner, coopView, rivalAggression, rivalEngine, rivalExtraCharges, rivalLevel, rivalPace, RIVALS, seasonInfo, seasonSchedule, shopLevel, START_MONEY, tier, type CampaignState,
 } from './campaign';
 import {
   attributeTags, buildSpec, CAR_PRICES, carAttributes, carSwapCost, CHARGE_KINDS, chargePrice, maxedSetup, maxExtraCharges, newCarSetup, tradeInFor, tradeInValue, UPGRADE_KINDS, upgradeAvailable, upgradeLabel, upgradeName,
@@ -1096,6 +1096,28 @@ describe('campanha cooperativa', () => {
     applyRaceResult(c, 1, 0, 0, 0);
     expect(c.money).toBe(START_MONEY + bonus);
     expect(c.coop!.money).toBe(START_MONEY + bonus);
+  });
+
+  it('rivais mais fortes para a dupla em cada dificuldade; a campanha de 1 jogador não muda', () => {
+    for (const d of ['easy', 'normal', 'hard'] as const) {
+      for (const [planet, division, race] of [[0, 0, 0], [2, 1, 0], [2, 1, 99]]) {
+        const solo = newCampaign('jake', 0, d);
+        const duo = newCampaign('jake', 0, d, { characterId: 'tarquinn', color: 0x2f7bff });
+        for (const c of [solo, duo]) Object.assign(c, { planet, division, race: Math.min(race, racesIn(c) - 1), points: 10000 });
+        const a = opponentsFor(solo, VEHICLES);
+        const b = opponentsFor(duo, VEHICLES);
+        expect(b.length).toBe(a.length);
+        a.forEach((o, i) => {
+          expect(b[i].spec.maxSpeed).toBeGreaterThanOrEqual(o.spec.maxSpeed);
+          expect(b[i].ai.skill).toBeGreaterThan(o.ai.skill);
+        });
+      }
+      // o ajuste só existe na dupla: sem jogador 2, os rivais são os de sempre
+      expect(opponentsFor(newCampaign('jake', 0, d), VEHICLES)).toEqual(opponentsFor({ ...newCampaign('jake', 0, d), coop: undefined }, VEHICLES));
+    }
+    // Fácil ≤ Normal ≤ Difícil também no ajuste da dupla
+    expect(COOP_RIVALS.easy.pace).toBeLessThanOrEqual(COOP_RIVALS.normal.pace);
+    expect(COOP_RIVALS.normal.pace).toBeLessThanOrEqual(COOP_RIVALS.hard.pace);
   });
 
   it('a senha leva o jogador 2 e recusa um jogador 2 inválido', () => {

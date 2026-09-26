@@ -728,7 +728,7 @@ export class Menus {
     const install = this.app.installed ? '' : `<button class="install" data-act="install">${icon('install')} Instalar o jogo</button>`;
     // no celular deitado os botões secundários vão em duas colunas; com número ímpar, o primeiro
     // deles ocupa a linha toda para que Instalar e Sair fiquem lado a lado no fim
-    const secondary = 4 + (hasSave ? 1 : 0) + (this.fsButtonHtml() ? 1 : 0) + (install ? 1 : 0) + 1;
+    const secondary = 5 + (hasSave ? 1 : 0) + (this.fsButtonHtml() ? 1 : 0) + (install ? 1 : 0) + 1;
     const quickWide = secondary % 2 ? ' class="wide"' : '';
     this.show(`
       <div class="card title-card">
@@ -739,9 +739,10 @@ export class Menus {
         <p class="sub">6 planetas · 5 carros · armas, pancadaria e muito rock</p>
         <div class="main-buttons">
           ${hasSave ? `<button class="go" data-act="continue">CONTINUAR</button>` : ''}
-          <button class="${hasSave ? (quickWide ? 'wide' : '') : 'go'}" data-act="new">Nova campanha</button>
-          <button data-act="quick"${hasSave ? '' : quickWide}>Corrida rápida</button>
-          <button data-act="split">${icon('gamepad')} 2 jogadores (tela dividida)</button>
+          <button class="${hasSave ? (quickWide ? 'wide' : '') : 'go'}" data-act="new">Campanha · 1 jogador</button>
+          <button data-act="new-coop"${hasSave ? '' : quickWide}>${icon('gamepad')} Campanha · 2 jogadores</button>
+          <button data-act="quick">Corrida rápida</button>
+          <button data-act="split">${icon('gamepad')} Corrida rápida · 2 jogadores</button>
           <button data-act="online">${icon('globe')} Online com amigos</button>
           <button data-act="load">${icon('folder')} Carregar jogo</button>
           <button data-act="settings">${icon('gear')} Som e opções</button>
@@ -985,7 +986,7 @@ export class Menus {
     if (!slots.some((s) => s.slot === this.newChar.slot && s.empty)) this.newChar.slot = slots.find((s) => s.empty)?.slot ?? this.newChar.slot;
     this.show(`
       <div class="card wide">
-        <h2>NOVA CAMPANHA</h2>
+        <h2>NOVA CAMPANHA · ${this.newCoopOn ? '2 JOGADORES' : '1 JOGADOR'}</h2>
         <div class="new-route">${planetRoute(0, false, CAMPAIGN_RULES[this.newChar.difficulty].planets)}</div>
         <p class="sub center">Comece em ${esc(PLANETS[0].name)}, Divisão B, com ${money(START_MONEY)}. Some pontos para subir de divisão
           (1º: ${POINTS[0]} pts · 2º: ${POINTS[1]} · 3º: ${POINTS[2]}). A Divisão A de cada planeta fecha com um duelo contra o chefe local;
@@ -993,7 +994,7 @@ export class Menus {
         <h3>Jogadores</h3>
         <div class="diffs coop-pick">
           <button class="diff coopsel" data-coopsel="0"><b>1 jogador</b><small>A campanha clássica.</small></button>
-          <button class="diff coopsel" data-coopsel="1"><b>${icon('gamepad')} 2 jogadores</b><small>Cooperativa em tela dividida, um controle cada. Os pontos são da dupla (vale a melhor colocação); cada um tem carro e dinheiro próprios.</small></button>
+          <button class="diff coopsel" data-coopsel="1"><b>${icon('gamepad')} 2 jogadores</b><small>Cooperativa em tela dividida, um controle cada. Os pontos são da dupla (vale a melhor colocação); cada um tem carro e dinheiro próprios. Os rivais vêm mais fortes para a dupla.</small></button>
         </div>
         <h3>${this.newCoopOn ? 'Piloto do jogador 1' : 'Escolha seu piloto'}</h3>
         ${this.charPick('new')}
@@ -1740,7 +1741,7 @@ export class Menus {
     sel('.color[data-color]', (b) => Number(b.dataset.color) === (b.dataset.group === 'new' ? this.newChar.color : b.dataset.group === 'coop' ? this.newCoop.color : this.quick.color));
     sel('.coopsel', (b) => (b.dataset.coopsel === '1') === this.newCoopOn);
     sel('.tab[data-shopp]', (b) => Number(b.dataset.shopp) === (this.lastHub?.coop?.player ?? 0));
-    sel('.diff', (b) => b.dataset.diff === (b.dataset.group === 'new' ? this.newChar.difficulty : b.dataset.group === 'split' ? this.split.difficulty : this.quick.difficulty));
+    sel('.diff:not(.coopsel)', (b) => b.dataset.diff === (b.dataset.group === 'new' ? this.newChar.difficulty : b.dataset.group === 'split' ? this.split.difficulty : this.quick.difficulty));
     sel('.car[data-svehicle]', (b) => b.dataset.svehicle === this.split.players[Number(b.dataset.sp)].vehicleId);
     sel('.color[data-scolor]', (b) => Number(b.dataset.scolor) === this.split.players[Number(b.dataset.sp)].color);
     // tela de corrida rápida na frente: o grid da escolha atual já vai sendo montado na fila ociosa
@@ -1919,6 +1920,8 @@ export class Menus {
       case 'continue':
         return this.actions.continueCampaign();
       case 'new':
+      case 'new-coop':
+        this.newCoopOn = d.act === 'new-coop';
         return this.showNewCampaign();
       case 'new-start': {
         const slot = this.newChar.slot;

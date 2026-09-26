@@ -198,3 +198,10 @@ Cada item precisa ser atendido e verificado pelos avaliadores.
 77. Locutor em pt-BR sempre do Brasil (nunca de Portugal), adaptado e descolado, meio radical, jovem, rock and roll; pode mudar palavras em relação ao original.
 78. Menus com o controle: som de retorno ao mover o cursor/trocar opção (bipe) e ao confirmar/voltar
     (dois bipes subindo/descendo), inclusive ao clicar "correr".
+
+# Retorno do usuário (2026-09-26, campanha de 1 e de 2 jogadores)
+
+79. Dois modos de campanha, os dois à vista no menu principal: "Campanha · 1 jogador" (a clássica) e
+    "Campanha · 2 jogadores" (cooperativa, item 70). Cada modo equilibrado por conta própria, mantendo a
+    dificuldade e o avanço de cada nível: na dupla (vale a melhor colocação) os rivais vêm mais fortes,
+    calibrados para a dupla somar quase os mesmos pontos que um jogador sozinho em cada dificuldade.

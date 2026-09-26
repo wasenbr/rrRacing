@@ -528,6 +528,21 @@ export function rivalAggression(base: number, t: number): number {
   return clamp(base * (0.7 + 0.06 * t), 0, 1);
 }
 
+/**
+ * Campanha em dupla (tela dividida): vale a melhor colocação dos dois, então com os mesmos rivais a
+ * dupla venceria bem mais que um jogador sozinho (e o duelo do chefe viraria dois contra um). Os rivais
+ * da dupla correm com este ritmo e habilidade a mais (o chefe, com a habilidade e bossPace), calibrados
+ * com dois pilotos de referência (`referenceInput`) contra um sozinho, com o carro do jogador mediano,
+ * em todas as pistas de cada divisão: a dupla soma quase os mesmos pontos que o jogador sozinho.
+ */
+export const COOP_RIVALS: Record<Difficulty, { pace: number; skill: number; bossPace: number }> = {
+  // pontos médios por corrida, dupla x sozinho: Fácil 373 x 368, Normal 212 x 214, Difícil 120 x 120
+  easy: { pace: 1.03, skill: 0.03, bossPace: 1 },
+  normal: { pace: 1.05, skill: 0.04, bossPace: 1 },
+  // no duelo a dupla são dois contra um: no Difícil o chefe acelera um pouco mais
+  hard: { pace: 1.055, skill: 0.04, bossPace: 1.02 },
+};
+
 /** Aplica o ritmo à ficha (velocidade final, arranque e turbo). */
 function withPace(spec: VehicleSpec, pace: number): VehicleSpec {
   return pace === 1 ? spec : { ...spec, maxSpeed: spec.maxSpeed * pace, accel: spec.accel * pace, nitroAccel: spec.nitroAccel * pace };
@@ -543,6 +558,7 @@ export function opponentsFor(s: CampaignState, vehicles: Record<string, VehicleS
   const t = tier(s);
   const p = currentPlanet(s);
   const names = ['Rip', 'Shred', p.local];
+  const co = s.coop ? COOP_RIVALS[difficulty] : null;
   return names.map((name, i) => {
     const r = RIVALS[name];
     // na Divisão A, Rip troca o "modelo do ano passado" pelo carro atual do planeta
@@ -555,8 +571,8 @@ export function opponentsFor(s: CampaignState, vehicles: Record<string, VehicleS
     return {
       name,
       color: r.color,
-      spec: withPace(buildSpec(base, setup), rivalPace(t, i, difficulty)),
-      ai: { skill: clamp(SKILL_BASE + t * SKILL_STEP + (i === 2 ? 0.05 : i * 0.02), 0, 0.97), aggression: rivalAggression(r.aggression, t), lane: r.lane },
+      spec: withPace(buildSpec(base, setup), rivalPace(t, i, difficulty) * (co?.pace ?? 1)),
+      ai: { skill: clamp(SKILL_BASE + t * SKILL_STEP + (i === 2 ? 0.05 : i * 0.02) + (co?.skill ?? 0), 0, 0.97), aggression: rivalAggression(r.aggression, t), lane: r.lane },
     };
   });
 }
@@ -576,13 +592,14 @@ export function bossOf(s: CampaignState, vehicles: Record<string, VehicleSpec>, 
   for (const k of CHARGE_KINDS) setup.charges[k] = Math.min(rivalExtraCharges(t, 2) + 2, maxExtraCharges(base, k));
   const r = RIVALS[p.local];
   const final = p === PLANETS[PLANETS.length - 1];
-  let spec = withPace(buildSpec(base, setup), rivalPace(t, 2, difficulty) * (final ? FINAL_BOSS.pace : 1));
+  const co = s.coop ? COOP_RIVALS[difficulty] : null;
+  let spec = withPace(buildSpec(base, setup), rivalPace(t, 2, difficulty) * (final ? FINAL_BOSS.pace : 1) * (co?.bossPace ?? 1));
   if (final) spec = { ...spec, armor: Math.round(spec.armor * FINAL_BOSS.armor) };
   return {
     name: p.local,
     color: r.color,
     spec,
-    ai: { skill: final ? FINAL_BOSS.skill : clamp(SKILL_BASE + t * SKILL_STEP + 0.1, 0, 0.98), aggression: 1, lane: r.lane },
+    ai: { skill: final ? FINAL_BOSS.skill : clamp(SKILL_BASE + t * SKILL_STEP + 0.1 + (co?.skill ?? 0), 0, 0.98), aggression: 1, lane: r.lane },
   };
 }
 
