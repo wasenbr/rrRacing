@@ -434,6 +434,9 @@ export class Game {
   private idlePaused = false;
   /** corrida limitada a 30 qps (nível baixo em aparelho lento) e média do tempo de quadro que decide */
   private cap30 = false;
+  private readonly sunRight = new THREE.Vector3();
+  private readonly sunUp = new THREE.Vector3();
+  private readonly sunAt = new THREE.Vector3();
   /** economia de bateria em uso (opção "Sempre", ou "Automática" fora da tomada): 30 qps, resolução
    * ×0,75, sombra a cada 3 quadros e metade das partículas */
   private onBattery = false;
@@ -4194,8 +4197,18 @@ export class Game {
 
     // na vitrine a sombra acompanha os carros expostos (fora do grid)
     const lit = this.showcase?.center ?? pose;
-    this.sun.position.set(lit.x, lit.y, lit.z).addScaledVector(SUN_DIR, 90);
-    this.sun.target.position.set(lit.x, lit.y, lit.z);
+    // centro alinhado aos texels do mapa (nos eixos da câmera do sol): andando fração de texel a cada
+    // quadro, as bordas das sombras do cenário tremiam e piscavam com o carro em movimento
+    const right = this.sunRight.set(0, 1, 0).cross(SUN_DIR).normalize();
+    const up = this.sunUp.copy(SUN_DIR).cross(right).normalize();
+    const sc = this.sun.shadow.camera;
+    const texel = (sc.right - sc.left) / this.sun.shadow.mapSize.x;
+    const c = this.sunAt.set(lit.x, lit.y, lit.z);
+    const u = c.dot(right);
+    const v = c.dot(up);
+    c.addScaledVector(right, Math.round(u / texel) * texel - u).addScaledVector(up, Math.round(v / texel) * texel - v);
+    this.sun.position.copy(c).addScaledVector(SUN_DIR, 90);
+    this.sun.target.position.copy(c);
     this.sky?.position.copy(this.rig.active.position);
 
     const r = this.player;
