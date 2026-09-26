@@ -51,7 +51,6 @@ import { HiddenTicker } from '../net/ticker';
 const DT = 1 / 60;
 const COUNTDOWN = 3;
 /** tela dividida: o mapa de sombra (só cenário) é refeito quando o centro anda isto (m); cobre ±50 m */
-const SPLIT_SHADOW_STEP = 6;
 /** ?semlimite: sem a trava de 30 qps do nível baixo (medição comparativa) */
 const NO_CAP30 = typeof location !== 'undefined' && new URLSearchParams(location.search).has('semlimite');
 /** online: o host manda o estado a cada 3 passos (20x por segundo) */
@@ -435,17 +434,6 @@ export class Game {
   private idlePaused = false;
   /** corrida limitada a 30 qps (nível baixo em aparelho lento) e média do tempo de quadro que decide */
   private cap30 = false;
-  /** relógio da última atualização do mapa de sombras */
-  private shadowAt = -Infinity;
-  /** Sombra própria do sol; a segunda serve à metade do jogador 2 quando os carros se afastam. */
-  private sunShadow!: THREE.DirectionalLightShadow;
-  private sunShadow2: THREE.DirectionalLightShadow | null = null;
-  private sunShadow2Type: THREE.ShadowMapType = THREE.PCFShadowMap;
-  /** onde cada mapa da tela dividida foi desenhado (ponto pedido e centro alinhado aos texels) */
-  private splitShadowAt = new Map<THREE.DirectionalLightShadow, { x: number; y: number; z: number; px: number; py: number; pz: number }>();
-  private readonly tmpV1 = new THREE.Vector3();
-  private readonly tmpV2 = new THREE.Vector3();
-  private readonly tmpV3 = new THREE.Vector3();
   /** economia de bateria em uso (opção "Sempre", ou "Automática" fora da tomada): 30 qps, resolução
    * ×0,75, sombra a cada 3 quadros e metade das partículas */
   private onBattery = false;
@@ -463,6 +451,8 @@ export class Game {
   /** degraus que trocariam shaders (luzes dos clarões, sombra): aplicados na próxima largada */
   private pendingNoFlash = false;
   private pendingNoShadow = false;
+  /** a queda automática tirou a sombra (vale até recarregar) */
+  private shadowCut = false;
   /** entradas reaproveitadas por passo (sem alocar) */
   /** tela dividida: carro do jogador 2 (-1 = fora dela) */
   private p2 = -1;
@@ -660,7 +650,6 @@ export class Game {
     sc.right = sc.top = 50;
     sc.near = 1;
     sc.far = 220;
-    this.sunShadow = this.sun.shadow;
     this.scene.add(this.hemi, this.sun, this.sun.target, this.effects.group);
     // bloom só na qualidade alta do PC: no celular e em placas simples pesa demais
     if (this.quality.bloom) this.postfx = new PostFx(this.renderer, this.scene);
@@ -1184,12 +1173,8 @@ export class Game {
 
     this.setSplit(!setup.online && setup.second ? this.playerId + 1 : -1);
     const old = this.views;
-    // pista nova: os mapas de sombra da tela dividida são refeitos no primeiro desenho
-    this.splitShadowAt.clear();
     this.views = this.world.racers.map((r, i) => {
       const visual = createCarMesh(r.spec.id, r.color, this.shadows);
-      // tela dividida: o mapa de sombra é só do cenário (ver aimSplitShadow); o carro fica com a de contato
-      if (this.p2 >= 0) visual.root.traverse((o) => { o.castShadow = false; });
       this.scene.add(visual.root);
       const label = i !== this.playerId && i !== this.p2 ? new RivalTag(r.name, r.color) : null;
       if (label) this.scene.add(label.sprite);
@@ -1332,6 +1317,10 @@ export class Game {
     this.announcer.prepare();
     // degraus da queda automática que trocam shaders entram agora (o warmup compila os novos)
     this.applyPendingDegrade();
+    // tela dividida sem mapa de sombra: um mapa para as duas metades não acompanha os dois carros sem
+    // custo dobrado, e as tentativas (sombra atrasada, sombra só do cenário) ficaram estranhas — o
+    // usuário prefere nenhuma (feedback 77). Os carros ficam com a sombra de contato
+    this.sun.castShadow = this.shadows && !this.shadowCut && this.p2 < 0;
     // resolução da corrida já no preparo: a primeira corrida retoma a escala em que a anterior
     // terminou (salva por nível) e a troca da resolução do menu para a da corrida (canvas e alvos do
     // bloom) acontece aqui, antes do desenho do preparo — antes ela ficava para o primeiro quadro e os
@@ -1378,6 +1367,8 @@ export class Game {
   private toMenu(): void {
     this.endShowroom();
     this.phase = 'menu';
+    // a vitrine do menu volta a ter sombra depois de uma corrida em tela dividida
+    this.sun.castShadow = this.shadows && !this.shadowCut;
     this.engine.stop();
     this.engine2?.stop();
     this.rivalEngines.stop();
@@ -1724,6 +1715,7 @@ export class Game {
     }
     if (this.pendingNoShadow) {
       this.pendingNoShadow = false;
+      this.shadowCut = true;
       this.sun.castShadow = false;
       this.sun.shadow.intensity = 1;
     }
@@ -4268,17 +4260,11 @@ export class Game {
       this.showcase.cam.aspect = w / h;
       this.showcase.cam.updateProjectionMatrix();
     }
-    // sombras a cada ~25 ms: a 60 qps, um quadro sim e outro não (a passada de sombra é ~1/3 das
-    // chamadas de desenho e 40% dos triângulos); a 30 qps, todo quadro. A sombra do carro atrasa no
-    // máximo 1/60 s, imperceptível; a do cenário não muda (o mapa guarda a matriz com que foi feito)
+    // sombra redesenhada a cada quadro: um quadro sim e outro não deixava a sombra do carro até
+    // ~0,7 m atrás dele, e o usuário prefere nenhuma sombra a uma sombra errada (feedback 77).
     // Economia de bateria: a cada 3 quadros desenhados. Sombra apagada pela queda automática
     // (intensidade 0 até a próxima largada): o mapa não é mais redesenhado
-    if (this.sun.castShadow && this.sun.shadow.intensity > 0) {
-      if (this.onBattery ? this.drawn % ECO_SHADOW_EVERY === 0 : this.clock - this.shadowAt >= 0.024 || this.clock < this.shadowAt) {
-        this.renderer.shadowMap.needsUpdate = true;
-        this.shadowAt = this.clock;
-      }
-    }
+    if (this.sun.castShadow && this.sun.shadow.intensity > 0 && (!this.onBattery || this.drawn % ECO_SHADOW_EVERY === 0)) this.renderer.shadowMap.needsUpdate = true;
     if (this.postfx) this.postfx.render(cam);
     else this.renderer.render(this.scene, cam);
 
@@ -4294,17 +4280,14 @@ export class Game {
 
   /**
    * Tela dividida: cada jogador na sua metade (lado a lado), com a câmera, o cockpit, o anel sob o
-   * carro, as etiquetas dos rivais e o sol dele. Sem bloom (o pós-processamento é da tela inteira).
+   * carro e as etiquetas dos rivais. Sem bloom (o pós-processamento é da tela inteira) e sem mapa de
+   * sombra (ver startRace): os carros ficam com a sombra de contato.
    */
   private renderSplit(w: number, h: number, pose1: { x: number; y: number; z: number; heading: number }): void {
     const half = Math.floor(w / 2);
     const pose2 = this.playerPoseTmp2;
     const r1 = this.world.racers[this.playerId];
     const r2 = this.world.racers[this.p2];
-    // perto um do outro, uma sombra só (centrada entre os dois) serve para as duas metades
-    const shared = Math.hypot(pose1.x - pose2.x, pose1.z - pose2.z) < 40;
-    const shadowsOn = this.sun.castShadow && this.sun.shadow.intensity > 0;
-    if (shared && shadowsOn) this.aimSplitShadow(this.sunShadow, (pose1.x + pose2.x) / 2, (pose1.y + pose2.y) / 2, (pose1.z + pose2.z) / 2);
     this.renderer.setScissorTest(true);
     for (let k = 0; k < 2; k++) {
       const rig = k ? this.rig2 : this.rig;
@@ -4318,61 +4301,12 @@ export class Game {
       const ground = this.track.query(pose.x, pose.z, me.car.pieceIndex).height;
       this.effects.markPlayer(pose.x, ground, pose.z, pose.heading, me.alive && rig.mode !== 'cockpit', rig.mode !== 'iso');
       this.splitTags(rig, me);
-      // longe um do outro: cada metade com o seu mapa (a sombra troca, o shader é o mesmo)
-      if (!shared && shadowsOn) this.aimSplitShadow(k ? this.splitShadow() : this.sunShadow, pose.x, pose.y, pose.z);
       this.sky?.position.copy(rig.active.position);
       this.viewport(x0, 0, vw, h, true);
       this.renderer.render(this.scene, rig.active);
     }
-    this.sun.shadow = this.sunShadow;
     this.renderer.setScissorTest(false);
     this.viewport(0, 0, w, h);
-  }
-
-  /**
-   * Tela dividida: os carros não entram no mapa de sombra (ficam com a sombra de contato) e o mapa,
-   * só com o cenário parado, vale onde foi feito (guarda a própria matriz). Redesenhado só quando o
-   * centro se afasta SPLIT_SHADOW_STEP do último desenho: sem sombra de carro atrasada (um mapa
-   * redesenhado a cada 2 quadros deixava a sombra 1–2 m atrás do carro) e sem uma passada de sombra
-   * por metade a cada quadro. Centro alinhado aos texels: o redesenho não faz as bordas tremerem.
-   */
-  private aimSplitShadow(sh: THREE.DirectionalLightShadow, x: number, y: number, z: number): void {
-    this.sun.shadow = sh;
-    const c = this.splitShadowAt.get(sh);
-    if (sh.map === null || !c || Math.hypot(x - c.x, y - c.y, z - c.z) > SPLIT_SHADOW_STEP) {
-      // eixos da câmera do sol (olha ao longo de -SUN_DIR, "para cima" = +Y), passo de um texel
-      const right = this.tmpV1.set(0, 1, 0).cross(SUN_DIR).normalize();
-      const up = this.tmpV2.copy(SUN_DIR).cross(right).normalize();
-      const texel = (sh.camera.right - sh.camera.left) / sh.mapSize.x;
-      const p = this.tmpV3.set(x, y, z);
-      const u = p.dot(right);
-      const v = p.dot(up);
-      p.addScaledVector(right, Math.round(u / texel) * texel - u).addScaledVector(up, Math.round(v / texel) * texel - v);
-      this.splitShadowAt.set(sh, { x, y, z, px: p.x, py: p.y, pz: p.z });
-      this.renderer.shadowMap.needsUpdate = true;
-    }
-    const at = this.splitShadowAt.get(sh)!;
-    this.sun.target.position.set(at.px, at.py, at.pz);
-    this.sun.position.set(at.px, at.py, at.pz).addScaledVector(SUN_DIR, 90);
-    this.sun.target.updateMatrixWorld();
-    this.sun.updateMatrixWorld();
-  }
-
-  /** Sombra da metade do jogador 2 (tela dividida, carros longe): cópia da do sol, refeita se o tipo muda. */
-  private splitShadow(): THREE.DirectionalLightShadow {
-    const type = this.renderer.shadowMap.type;
-    let sh = this.sunShadow2;
-    if (sh && this.sunShadow2Type !== type) {
-      sh.dispose();
-      sh = null;
-    }
-    if (!sh) {
-      sh = this.sunShadow.clone();
-      this.sunShadow2 = sh;
-      this.sunShadow2Type = type;
-    }
-    sh.intensity = this.sunShadow.intensity;
-    return sh;
   }
 
   /** Mostra o painel (cockpit) ou a cabine de um carro. */
