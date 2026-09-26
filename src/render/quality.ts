@@ -101,6 +101,19 @@ export class DynamicResolution {
   private ceiling = 1;
   private clock = 0;
   private lastUp = -Infinity;
+  private lastDown = -Infinity;
+  /**
+   * Espera mínima (s) depois de uma descida para tentar subir de novo. Dobra a cada subida que não
+   * se segura por 30 s (até 72 s): perto do limite a escala ficava indo e voltando entre dois
+   * degraus, com um engasgo a cada troca
+   */
+  private upWait = 9;
+  /**
+   * Tamanho dos degraus (1 = 0,1/0,2 para descer e 0,05 para subir). Numa tela bem maior que 1080p
+   * a escala útil fica perto de 0,4 e um degrau de 0,1 mudaria metade dos pixels: o jogo encolhe
+   * os degraus na mesma proporção do piso (ver Game.resize)
+   */
+  unit = 1;
   /** desligada com ?q= (as evidências ligam de volta para medir) */
   enabled = typeof location === 'undefined' || !new URLSearchParams(location.search).has('q');
   /** trocas de escala [relógio da resolução (s), escala] — as últimas 32, para as evidências */
@@ -151,13 +164,15 @@ export class DynamicResolution {
     if (this.avg > 1 / 50 || this.slow > 0.05) {
       // cada troca recria o buffer da tela (30–70 ms de engasgo): bem atrás do orçamento, desce dois
       // degraus de uma vez em vez de engasgar de novo 1,2 s depois
-      next = Math.max(this.min, this.scale - (this.avg > 1 / 40 ? 0.2 : 0.1));
+      next = Math.max(this.min, this.scale - (this.avg > 1 / 40 ? 0.2 : 0.1) * this.unit);
       // a última subida não se sustentou: não tenta mais aquele degrau
-      if (this.clock - this.lastUp < 8) this.ceiling = Math.max(this.min, this.scale - 0.05);
-    } else if (this.avg < 1 / 58 && this.slow < 0.005 && this.scale < this.ceiling) {
+      if (this.clock - this.lastUp < 8) this.ceiling = Math.max(this.min, this.scale - 0.05 * this.unit);
+      if (this.clock - this.lastUp < 30) this.upWait = Math.min(this.upWait * 2, 72);
+      this.lastDown = this.clock;
+    } else if (this.avg < 1 / 58 && this.slow < 0.005 && this.scale < this.ceiling && this.clock - this.lastDown >= this.upWait) {
       // subir é o degrau que costuma voltar atrás (dois engasgos por nada): só com folga clara e
       // depois de bastante tempo estável
-      next = Math.min(this.ceiling, this.scale + 0.05);
+      next = Math.min(this.ceiling, this.scale + 0.05 * this.unit);
       this.lastUp = this.clock;
     }
     if (Math.abs(next - this.scale) < 1e-6) return false;
@@ -171,19 +186,23 @@ export class DynamicResolution {
   }
 }
 
-/** Escala da resolução dinâmica em que a última corrida terminou, por nível (sobrevive à recarga). */
+/**
+ * Escala da resolução dinâmica em que a última corrida terminou, por nível e tamanho da tela em
+ * pixels (sobrevive à recarga). Sem o tamanho, a escala de uma tela 1080p virava ponto de partida
+ * numa TV 4K a 100% (o quádruplo de pixels) e a largada descia degrau por degrau, com um engasgo cada.
+ */
 const SCALE_KEY = 'rr.dynScale.';
-export function loadDynScale(level: QualityLevel): number | null {
+export function loadDynScale(level: QualityLevel, screen: string): number | null {
   try {
-    const v = parseFloat(localStorage.getItem(SCALE_KEY + level) ?? '');
+    const v = parseFloat(localStorage.getItem(SCALE_KEY + level + '.' + screen) ?? '');
     return Number.isFinite(v) && v > 0 && v <= 1 ? v : null;
   } catch {
     return null;
   }
 }
-export function saveDynScale(level: QualityLevel, scale: number): void {
+export function saveDynScale(level: QualityLevel, screen: string, scale: number): void {
   try {
-    localStorage.setItem(SCALE_KEY + level, scale.toFixed(3));
+    localStorage.setItem(SCALE_KEY + level + '.' + screen, scale.toFixed(3));
   } catch {
     /* sem armazenamento: começa do padrão */
   }
@@ -210,6 +229,16 @@ export class AutoDegrade {
   level = 0;
   private slowAvg = 1 / 60;
   private cd = 0;
+
+  /**
+   * Não julga por `secs` segundos e zera a média. Na largada, os primeiros tiros, batidas e o
+   * locutor custam quadros de 50–150 ms: numa GPU integrada no piso (TV 4K), a média passava de
+   * 1/42 s só por eles e a queda descia sombra, partículas e a trava de 30 qps em 9 s
+   */
+  hold(secs: number): void {
+    this.cd = Math.max(this.cd, secs);
+    this.slowAvg = 1 / 60;
+  }
 
   /** Chamado a cada quadro desenhado na corrida. Retorna as ações do degrau (ou null). */
   update(dt: number, cost: number, atFloor: boolean, caps: DegradeCaps): DegradeAction[] | null {

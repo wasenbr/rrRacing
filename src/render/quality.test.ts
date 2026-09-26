@@ -43,6 +43,31 @@ describe('DynamicResolution.update', () => {
     expect(d.scale).toBeLessThan(up);
   });
 
+  it('perto do limite, cada subida que volta atrás dobra a espera pela próxima', () => {
+    const d = new DynamicResolution(0.3);
+    d.scale = 0.5;
+    // sobe com folga, e 10 s depois (fora da trava do teto) o custo estoura e desce
+    run(d, 3, 1 / 90);
+    expect(d.scale).toBeCloseTo(0.55, 5);
+    run(d, 10, 1 / 55);
+    run(d, 0.1, 1 / 30);
+    const down = d.scale;
+    expect(down).toBeLessThan(0.55);
+    // a espera dobrou (9 → 18 s): com folga de novo, 15 s ainda não bastam para subir
+    run(d, 15, 1 / 90);
+    expect(d.scale).toBe(down);
+    run(d, 5, 1 / 90);
+    expect(d.scale).toBeGreaterThan(down);
+  });
+
+  it('degraus proporcionais à unidade (tela grande)', () => {
+    const d = new DynamicResolution(0.2);
+    d.unit = 0.5;
+    d.scale = 0.5;
+    run(d, 4, 1 / 45);
+    expect(d.history[0][1]).toBeCloseTo(0.45, 5);
+  });
+
   it('ignora quadros com intervalo absurdo e respeita enabled', () => {
     const d = new DynamicResolution(0.6);
     expect(d.update(0.5, 0.5)).toBe(false);

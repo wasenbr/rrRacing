@@ -493,6 +493,8 @@ export class Game {
   private sizeW = 0;
   private sizeH = 0;
   private sizePr = 0;
+  /** fator de tela grande aplicado por último (ver resize) */
+  private bigScreen = 1;
   /** degrau "bloom desligado" da queda automática: próxima largada usa sombra PCF (mais barata) */
   private pendingPcf = false;
   /** getBattery existe (Chrome/Edge); sem ele a "Automática" decide pela folga do aparelho */
@@ -1309,7 +1311,7 @@ export class Game {
     // bloom) acontece aqui, antes do desenho do preparo — antes ela ficava para o primeiro quadro e os
     // degraus da resolução dinâmica realocavam tudo logo depois da largada
     if (this.races++ === 0 && this.dynRes.enabled) {
-      const saved = loadDynScale(this.quality.level);
+      const saved = loadDynScale(this.quality.level, this.screenKey());
       if (saved !== null) this.dynRes.restore(saved);
     }
     // os primeiros segundos de corrida ainda pagam upload de malhas e link de shaders: a resolução
@@ -1425,7 +1427,7 @@ export class Game {
     const byUrl = new URLSearchParams(location.search).has('q');
     this.dynRes.enabled = !this.prefs.sharp && !byUrl;
     if (this.prefs.sharp) this.dynRes.scale = 1;
-    else this.dynRes.scale = Math.min(this.dynRes.scale, this.quality.startScale);
+    else this.dynRes.scale = Math.min(this.dynRes.scale, this.quality.startScale * this.bigScreen);
   }
 
   private resize(): void {
@@ -1438,12 +1440,22 @@ export class Game {
     // densa (antes caía a 0,5 px CSS numa tela 3x: tudo borrado). Economia de bateria: teto ×0,75
     const dpr = window.devicePixelRatio || 1;
     const lvl = this.quality.level;
-    const floor = lvl === 'baixo' ? (this.touch && dpr >= 2 ? 0.75 : 0) : Math.min(dpr, 1) * (lvl === 'alto' ? 0.85 : this.touch ? 0.75 : 0.6);
     // resolução máxima (opção): a densidade da tela inteira (até 2x), inclusive nos menus
     const top = (this.prefs.sharp ? Math.min(dpr, 2) : Math.min(dpr, this.quality.maxPixelRatio)) * (this.onBattery ? ECO_RES : 1);
+    // tela grande em densidade baixa (TV 4K com zoom de 100%): o piso por pixel CSS pedia no mínimo
+    // 2304x1296 e a GPU integrada, presa no piso, descia a queda automática até a trava de 30 qps.
+    // No PC, piso, escala mínima e degraus valem para ~1080p no teto e encolhem na proporção dos
+    // pixels acima disso (4K a 100%: metade; 4K a 300%, com teto 1,5x = 1080p, nada muda)
+    const big = this.touch ? 1 : Math.min(1, Math.sqrt((1920 * 1080) / (w * h * top * top)));
+    const floor = (lvl === 'baixo' ? (this.touch && dpr >= 2 ? 0.75 : 0) : Math.min(dpr, 1) * (lvl === 'alto' ? 0.85 : this.touch ? 0.75 : 0.6)) * big;
+    this.dynRes.unit = big;
+    // tela ficou maior (ou a primeira medida já é grande): começa na escala inicial proporcional em
+    // vez de descer degrau por degrau na largada (cada degrau recria o buffer: um engasgo)
+    if (big < this.bigScreen - 1e-3 && this.dynRes.enabled) this.dynRes.scale = Math.min(this.dynRes.scale, this.quality.startScale * big);
+    this.bigScreen = big;
     // o mínimo da escala é o piso efetivo: abaixo dele cada degrau não mudaria a imagem (e a queda
     // automática esperava a escala chegar a um piso que não fazia efeito)
-    this.dynRes.setMin(Math.max(this.quality.minScale, Math.min(1, floor / top)));
+    this.dynRes.setMin(Math.max(this.quality.minScale * big, Math.min(1, floor / top)));
     const scale = this.phase === 'menu' && !this.prefs.sharp ? Math.min(this.dynRes.scale, 0.75) : this.dynRes.scale;
     const pr = Math.max(floor, top * scale);
     this.redraw = true;
@@ -1470,6 +1482,12 @@ export class Game {
     this.hud.setMirror(this.rig.mode === 'cockpit' && this.phase !== 'menu' && !split, mirror);
     this.rig.mirror.aspect = mirror.w / mirror.h;
     this.rig.mirror.updateProjectionMatrix();
+  }
+
+  /** Tamanho da tela em pixels (chave da escala salva da resolução dinâmica). */
+  private screenKey(): string {
+    const dpr = window.devicePixelRatio || 1;
+    return `${Math.round(this.width * dpr)}x${Math.round(this.height * dpr)}`;
   }
 
   private mirrorRect() {
@@ -1586,7 +1604,7 @@ export class Game {
       if (this.dynRes.update(frameDt, cost)) {
         this.perfEvent('dynRes', this.dynRes.scale.toFixed(2));
         // a próxima corrida (mesmo depois de recarregar) já começa nesta escala
-        saveDynScale(this.quality.level, this.dynRes.scale);
+        saveDynScale(this.quality.level, this.screenKey(), this.dynRes.scale);
         this.resize();
       }
       if (this.phase === 'racing') {
@@ -1905,6 +1923,8 @@ export class Game {
         if (this.setup.mode === 'campaign' && this.campaign && markRaceStarted(this.campaign)) saveCampaign(this.campaign);
         this.messageAll('VAI!', 1, 'go');
         this.commentary.start();
+        // os primeiros segundos de prova não contam para a queda automática (ver AutoDegrade.hold)
+        this.autoDeg.hold(8);
       } else {
         this.messageAll(String(Math.ceil(this.countdown)), 0, 'count');
       }
