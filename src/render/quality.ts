@@ -77,9 +77,11 @@ export function resolveQuality(pref: QualityPref, touch: boolean): QualitySettin
   // médio: sem as luzes pontuais dos clarões (entram no shader de todo material iluminado: ~18% da
   // GPU mesmo apagadas). No toque (tablet com tela grande e densa), começa em 1,0x e só sobe para
   // 1,5x se o aparelho aguentar: a resolução era metade do custo de GPU medido. No PC (GPU integrada)
-  // começa em 0,8x: em 1,0x engasgava 1 quadro em 10; sobe sozinha se houver folga
+  // começa em 0,8x: em 1,0x engasgava 1 quadro em 10; sobe sozinha se houver folga. Sem mapa de
+  // sombra: na GPU integrada a sombra ficava atrasada ou piscando, e o usuário prefere nenhuma a uma
+  // sombra estranha (feedback 77); os carros ficam com a sombra de contato
   if (level === 'medio')
-    return { level, antialias: !touch, shadows: !touch, shadowMapSize: 1024, bloom: false, maxPixelRatio: touch && /apple/.test(gpuName()) ? 2 : 1.5, dense: false, particles: 0.75, anisotropy: 4, flashLights: false, minScale: 0.5, startScale: touch ? 0.67 : 0.8 };
+    return { level, antialias: !touch, shadows: false, shadowMapSize: 1024, bloom: false, maxPixelRatio: touch && /apple/.test(gpuName()) ? 2 : 1.5, dense: false, particles: 0.75, anisotropy: 4, flashLights: false, minScale: 0.5, startScale: touch ? 0.67 : 0.8 };
   return { level, antialias: false, shadows: false, shadowMapSize: 512, bloom: false, maxPixelRatio: 1, dense: false, particles: 0.4, anisotropy: 2, flashLights: false, minScale: 0.5, startScale: 1 };
 }
 
