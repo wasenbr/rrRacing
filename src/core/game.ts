@@ -1491,11 +1491,14 @@ export class Game {
     // o jogo desenha num canto menor do mesmo buffer (viewport × vpK) e o CSS amplia esse canto para
     // a tela inteira. Com bloom o pós-processamento desenha a tela toda: recria como antes
     const realloc = exact || w !== this.sizeW || h !== this.sizeH || pr > this.sizePr || pr < this.sizePr * 0.6 || !!this.postfx;
-    if (realloc && (pr !== this.sizePr || w !== this.sizeW || h !== this.sizeH)) {
-      this.sizePr = pr;
+    // o buffer já nasce com folga para quatro degraus de subida (0,2 da escala): cada subida realocava
+    // (~30 ms na TV 4K simulada, a cada 9 s de corrida estável)
+    const alloc = this.postfx ? pr : Math.max(pr, Math.min(top, pr + 0.2 * big * top));
+    if (realloc && (alloc !== this.sizePr || w !== this.sizeW || h !== this.sizeH)) {
+      this.sizePr = alloc;
       this.sizeW = w;
       this.sizeH = h;
-      this.renderer.setPixelRatio(pr);
+      this.renderer.setPixelRatio(alloc);
       this.renderer.setSize(w, h);
       const fx = this.postfx?.setSize(w, h, pr) ?? false;
       this.perfEvent('resize', `${w}x${h}@${pr.toFixed(2)}${fx ? ' +bloom' : ''} ${this.phase}${this.preparing ? ':preparando' : ''}`);
