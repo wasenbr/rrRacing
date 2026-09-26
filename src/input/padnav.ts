@@ -1,4 +1,5 @@
-import { sfxMenuMove } from '../audio/sfx';
+import { unlockAudio } from '../audio/context';
+import { sfxMenuMove, sfxMenuSelect } from '../audio/sfx';
 import { connectedPads, padSetupActive, readPadMenu, splitAssignment, type PadMenuState } from './gamepad';
 
 /**
@@ -142,7 +143,9 @@ export function startPadNav(root: HTMLElement, hooks: { onSecret: () => void; sw
     }
   };
 
-  const press = (el: HTMLElement) => {
+  const press = (el: HTMLElement, isBack = false) => {
+    // som antes do clique: o clique pode trocar de tela ou começar a corrida
+    sfxMenuSelect(isBack);
     // a tela pode ser redesenhada: guarda onde estava cada cursor para devolvê-lo ao mesmo botão
     const at = [p1, p2].map((c) => {
       const cur = c.get();
@@ -162,7 +165,11 @@ export function startPadNav(root: HTMLElement, hooks: { onSecret: () => void; sw
     const list = candidates(root);
     if (list.length) return c.set(initial(list));
     // telas sem botões (viagem entre planetas, final): um toque avança
-    (root.firstElementChild as HTMLElement | null)?.click();
+    const screen = root.firstElementChild as HTMLElement | null;
+    if (screen) {
+      sfxMenuSelect();
+      screen.click();
+    }
   };
 
   const back = () => {
@@ -170,11 +177,13 @@ export function startPadNav(root: HTMLElement, hooks: { onSecret: () => void; sw
     const resume = root.querySelector<HTMLElement>('[data-act="resume"]');
     const btn =
       resume && visible(resume) ? resume : Array.from(root.querySelectorAll<HTMLElement>('button')).find((b) => b.textContent?.trim().startsWith('←') && visible(b));
-    if (btn) press(btn);
+    if (btn) press(btn, true);
   };
 
   /** Direção, confirmar, voltar e pausa de um cursor; `s` é o estado do controle dele. */
   const drive = (c: Cursor, s: PadMenuState, dt: number) => {
+    // só com o controle (sem mouse/teclado) o áudio ainda não existe: cria no primeiro botão
+    if ((s.confirm && !c.prev.confirm) || (s.back && !c.prev.back) || (s.pause && !c.prev.pause)) unlockAudio();
     const dir = s.x || s.y ? `${s.x},${s.y}` : '';
     // diagonal: vale o eixo vertical (listas são verticais)
     const step = () => (s.y ? move(c, 0, s.y) : move(c, s.x, 0));
@@ -198,7 +207,7 @@ export function startPadNav(root: HTMLElement, hooks: { onSecret: () => void; sw
     else if (s.back && !c.prev.back) back();
     else if (s.pause && !c.prev.pause) {
       const resume = root.querySelector<HTMLElement>('[data-act="resume"]');
-      if (resume && visible(resume)) press(resume);
+      if (resume && visible(resume)) press(resume, true);
     }
     if (s.secret && !c.prev.secret) hooks.onSecret();
     c.prev = s;

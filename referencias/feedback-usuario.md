@@ -185,7 +185,16 @@ Cada item precisa ser atendido e verificado pelos avaliadores.
 74. Surround confirmado de ouvido (2026-09-25) no soundbar LG ligado ao PC pelo HDMI, com o Windows
     em 7.1: frente, traseiras e lados certos. A matriz Dolby Surround em estéreo não funcionou nesse
     soundbar (sem Pro Logic II); fica como opção para receivers que decodificam.
+75. Narrador com o timbre, o ritmo e a entonação do Larry Huffman original: referência tirada do áudio do
+    jogo no vídeo "O que falam em Rock n' Roll Racing?" (Rene Oque). Primeiro cortar as falas originais
+    para o usuário conferir de ouvido; depois gerar poucas amostras e só gerar o resto após aprovação.
 76. Largada fluida (2026-09-25, TV 4K): "se melhorar a largada, o jogo todo fica melhor". Sem engasgos de troca
     de resolução nem quedas logo depois do "VAI!".
 77. Sombra (2026-09-25): otimizar sem perder desempenho; se não der, é melhor não ter sombra do que uma sombra
     feia (ex.: sombra do carro atrasada, atrás dele, por mapa redesenhado a cada 2 quadros).
+76. Amostras clonando o Larry (scripts/locutor/amostra-larry.py): exagero 1,3 com CFG 0,2 foi a melhor
+    de ouvido, mesmo com o tom mais agudo que o original (F0 ~380 Hz contra ~250 Hz). Baixar o tom depois
+    (Praat, baixar-tom.py) ficou pior: não usar. Exagero 1,6 com CFG 0,3 soou agudo demais.
+77. Locutor em pt-BR sempre do Brasil (nunca de Portugal), adaptado e descolado, meio radical, jovem, rock and roll; pode mudar palavras em relação ao original.
+78. Menus com o controle: som de retorno ao mover o cursor/trocar opção (bipe) e ao confirmar/voltar
+    (dois bipes subindo/descendo), inclusive ao clicar "correr".

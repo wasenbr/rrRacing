@@ -770,6 +770,24 @@ export function sfxMenuMove(): void {
 }
 
 /**
+ * Menu: confirmar (dois bipes subindo) ou voltar (dois bipes descendo) com o controle, no mesmo
+ * timbre do bipe de mover.
+ */
+export function sfxMenuSelect(back = false): void {
+  const a = audio();
+  if (!a) return;
+  const { ctx } = a;
+  const out = voice(a, 0.5, 0);
+  const t = ctx.currentTime;
+  const notes = back ? [1320, 880] : [1320, 1760];
+  notes.forEach((f, i) => {
+    const at = t + i * 0.05;
+    osc(ctx, 'square', f, f, 0.07, filter(ctx, 'lowpass', 4000, 0.7, env(ctx, out, 0.5, 0.002, 0.06, at)), at);
+    osc(ctx, 'square', f * 1.5, f * 1.5, 0.04, filter(ctx, 'lowpass', 4000, 0.7, env(ctx, out, 0.15, 0.002, 0.03, at)), at);
+  });
+}
+
+/**
  * Bipe da contagem (3-2-1) e largada ("VAI!"): sirene de largada suja, com "clunk" do semáforo
  * acendendo; no VAI, acorde distorcido mais longo com pancada grave e prato.
  */
