@@ -185,3 +185,7 @@ Cada item precisa ser atendido e verificado pelos avaliadores.
 74. Surround confirmado de ouvido (2026-09-25) no soundbar LG ligado ao PC pelo HDMI, com o Windows
     em 7.1: frente, traseiras e lados certos. A matriz Dolby Surround em estéreo não funcionou nesse
     soundbar (sem Pro Logic II); fica como opção para receivers que decodificam.
+76. Largada fluida (2026-09-25, TV 4K): "se melhorar a largada, o jogo todo fica melhor". Sem engasgos de troca
+    de resolução nem quedas logo depois do "VAI!".
+77. Sombra (2026-09-25): otimizar sem perder desempenho; se não der, é melhor não ter sombra do que uma sombra
+    feia (ex.: sombra do carro atrasada, atrás dele, por mapa redesenhado a cada 2 quadros).
