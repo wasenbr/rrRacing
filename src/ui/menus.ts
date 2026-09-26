@@ -1349,6 +1349,12 @@ export class Menus {
     const toggle = (key: string, label: string, on: boolean, help = '') =>
       `<div class="shop-row"><div class="grow"><b>${label}</b>${help ? `<small>${help}</small>` : ''}</div><button class="toggle ${on ? 'on' : ''}" data-toggle="${key}" data-on="${on ? 1 : 0}">${on ? 'LIGADO' : 'DESLIGADO'}</button></div>`;
     const total = a.bundled + a.user;
+    // redesenho da própria tela (trocou uma opção): mantém a rolagem e o botão em foco
+    const again = this.isShowingSettings();
+    const scroll = this.el.scrollTop;
+    const key = (b: HTMLElement) => (b.dataset.toggle ? `toggle=${b.dataset.toggle}` : b.dataset.act ? `act=${b.dataset.act}` : Object.keys(b.dataset).join());
+    const focused = document.activeElement as HTMLElement | null;
+    const focusKey = again && focused && this.el.contains(focused) ? key(focused) : '';
     this.show(`
       <div class="card small">
         <h2>SOM E OPÇÕES</h2>
@@ -1380,6 +1386,10 @@ export class Menus {
         <p class="pw-msg"></p>
         <button data-act="close-settings">← Voltar</button>
       </div>`);
+    if (again) {
+      this.el.scrollTop = scroll;
+      if (focusKey) Array.from(this.el.querySelectorAll<HTMLElement>('button, input')).find((b) => key(b) === focusKey)?.focus({ preventScroll: true });
+    }
     const vol = this.el.querySelector<HTMLInputElement>('.vol')!;
     vol.addEventListener('input', () => this.actions.setMusicVolume(Number(vol.value) / 100));
     const files = this.el.querySelector<HTMLInputElement>('.music-files')!;
